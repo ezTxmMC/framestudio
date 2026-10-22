@@ -245,7 +245,7 @@ func (in *inspector) loadPoster(m model.MediaItem) {
 	gen := in.skimGen
 	in.p.spawn(func() {
 		img, err := cache.Thumbnail(m, previewW, previewH)
-		fyne.Do(func() { in.setPreview(gen, img, err) })
+		kit.Do(func() { in.setPreview(gen, img, err) })
 	})
 }
 
@@ -266,7 +266,7 @@ func (in *inspector) skimTo(n int) {
 	m, gen := in.shown, in.skimGen
 	in.p.spawn(func() {
 		img, err := cache.VideoFrame(m, n, fps, previewW, previewH)
-		fyne.Do(func() {
+		kit.Do(func() {
 			in.skimBusy = false
 			in.setPreview(gen, img, err)
 			if next := in.skimPending; next >= 0 && gen == in.skimGen {

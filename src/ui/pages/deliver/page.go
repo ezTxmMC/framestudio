@@ -45,7 +45,7 @@ func New(ctx *page.Context) page.Page { return newPage(ctx) }
 func newPage(ctx *page.Context) *Page {
 	return &Page{
 		ctx: ctx,
-		do:  fyne.Do,
+		do:  kit.Do,
 		openFolder: func(dir string) error {
 			return exec.Command("xdg-open", dir).Start()
 		},

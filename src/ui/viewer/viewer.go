@@ -74,7 +74,7 @@ func (q request) same(o request) bool {
 }
 
 func New(s *session.Session, r *render.Renderer) *Viewer {
-	v := &Viewer{s: s, r: r, active: true, post: fyne.Do,
+	v := &Viewer{s: s, r: r, active: true, post: kit.Do,
 		wake: make(chan struct{}, 1), quit: make(chan struct{})}
 	v.img = canvas.NewImageFromImage(nil)
 	v.img.FillMode = canvas.ImageFillContain
@@ -97,7 +97,7 @@ func New(s *session.Session, r *render.Renderer) *Viewer {
 	return v
 }
 
-// SetDeliver replaces how rendered frames reach the UI thread (default fyne.Do).
+// SetDeliver replaces how rendered frames reach the UI thread (default kit.Do).
 // Tests pass a queue they drain on their own goroutine.
 func (v *Viewer) SetDeliver(post func(func())) { v.post = post }
 

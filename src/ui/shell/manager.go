@@ -241,7 +241,7 @@ func (m *manager) loadThumbnails() {
 				h, w = 216, 216*p.Settings.Width/p.Settings.Height
 			}
 			img := r.Frame(p, p.Duration()/3, max(w, 1), max(h, 1))
-			fyne.Do(func() {
+			kit.Do(func() {
 				if m.thumbsGen == gen {
 					c.thumb.Image = image.Image(img)
 					c.thumb.Refresh()

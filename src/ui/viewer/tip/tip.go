@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
@@ -63,7 +64,7 @@ func (l *Layer) schedule(b *Button) {
 	l.gen++
 	gen := l.gen
 	time.AfterFunc(Delay, func() {
-		fyne.Do(func() {
+		kit.Do(func() {
 			if gen == l.gen {
 				l.ShowTip(b)
 			}

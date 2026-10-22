@@ -326,7 +326,7 @@ func (p *Page) thumbFor(m model.MediaItem) image.Image {
 		if err != nil {
 			img = nil
 		}
-		fyne.Do(func() {
+		kit.Do(func() {
 			delete(p.loading, key)
 			if p.closed {
 				return
@@ -527,9 +527,9 @@ func (p *Page) importPaths(paths []string) {
 		for i, f := range plan.files {
 			items[i], errs[i] = media.Probe(f)
 			done := i + 1
-			fyne.Do(func() { p.importProgress(done, len(plan.files)) })
+			kit.Do(func() { p.importProgress(done, len(plan.files)) })
 		}
-		fyne.Do(func() { p.finishImport(plan, items, errs) })
+		kit.Do(func() { p.finishImport(plan, items, errs) })
 	})
 }
 
@@ -626,7 +626,7 @@ func (p *Page) showRelinkDialog(m model.MediaItem) {
 func (p *Page) relinkTo(id, path string) {
 	p.spawn(func() {
 		probed, err := media.Probe(path)
-		fyne.Do(func() {
+		kit.Do(func() {
 			if p.closed {
 				return
 			}

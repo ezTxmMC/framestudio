@@ -6,9 +6,8 @@ import (
 	"math"
 	"sync"
 
-	"fyne.io/fyne/v2"
-
 	"framestudio-proto/src/render"
+	"framestudio-proto/src/ui/kit"
 )
 
 // scopeKind selects which scope the scopes panel shows.
@@ -346,7 +345,7 @@ func (s *scopeRunner) loop() {
 		s.mu.Unlock()
 
 		out := computeScope(k, f)
-		fyne.Do(func() {
+		kit.Do(func() {
 			s.mu.Lock()
 			ok := !s.closed && s.kind == k
 			s.mu.Unlock()

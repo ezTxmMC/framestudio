@@ -19,7 +19,7 @@ const (
 )
 
 // Context is what every page of one open project gets. Session notifications arrive on the
-// UI thread; pages must call fyne.Do for updates from their own goroutines.
+// UI thread; pages must call kit.Do (or fyne.Do) for updates from their own goroutines.
 type Context struct {
 	Window   fyne.Window
 	Session  *session.Session

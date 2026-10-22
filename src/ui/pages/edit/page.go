@@ -45,7 +45,7 @@ type Page struct {
 }
 
 func New(ctx *page.Context) page.Page {
-	return &Page{ctx: ctx, post: fyne.Do, snapping: true, zoom: 1}
+	return &Page{ctx: ctx, post: kit.Do, snapping: true, zoom: 1}
 }
 
 func (p *Page) Content() fyne.CanvasObject {

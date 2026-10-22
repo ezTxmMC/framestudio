@@ -15,6 +15,7 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/store"
+	"framestudio-proto/src/ui/kit"
 )
 
 // choice is the answer to "Änderungen speichern?".
@@ -232,12 +233,12 @@ func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 				return
 			case <-t.C:
 				var jobs []*autosaveJob
-				fyne.DoAndWait(func() { jobs = sh.autosaveJobs() })
+				kit.DoAndWait(func() { jobs = sh.autosaveJobs() })
 				if len(jobs) == 0 {
 					continue
 				}
 				runAutosave(jobs)
-				fyne.Do(func() { sh.finishAutosave(jobs) })
+				kit.Do(func() { sh.finishAutosave(jobs) })
 			}
 		}
 	}()

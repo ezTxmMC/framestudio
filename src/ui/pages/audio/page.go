@@ -253,7 +253,7 @@ func (p *Page) waveFor(c model.Clip) (*waveEntry, *model.MediaItem) {
 	buckets := min(max(int(item.Duration.Seconds()*100), 512), 40000)
 	p.spawn(func() {
 		peaks, err := src.Waveform(item, buckets)
-		fyne.Do(func() {
+		kit.Do(func() {
 			e.peaks, e.err, e.loading = peaks, err, false
 			if !p.closed && p.tracks != nil {
 				p.tracks.refreshLanes()

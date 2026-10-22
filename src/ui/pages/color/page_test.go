@@ -13,6 +13,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -29,6 +30,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	app := test.NewTempApp(t)
+	kit.UseUIQueue(t)
 	app.Settings().SetTheme(studiotheme.New())
 
 	pr := model.NewProject("Test")
@@ -201,6 +203,7 @@ func TestStripListsVisualClipsInTimeOrder(t *testing.T) {
 
 func TestEmptyProject(t *testing.T) {
 	app := test.NewTempApp(t)
+	kit.UseUIQueue(t)
 	app.Settings().SetTheme(studiotheme.New())
 	s := session.New(model.NewProject("Leer"))
 	p := New(&page.Context{Session: s}).(*Page)

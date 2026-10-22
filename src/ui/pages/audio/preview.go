@@ -10,11 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"fyne.io/fyne/v2"
-
 	"framestudio-proto/src/export"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 )
 
 // previewSeconds limits how much audio one "Vorhören" mixes.
@@ -157,7 +156,7 @@ func (v *previewer) Start() {
 	v.spawn(func() {
 		defer os.Remove(path)
 		if err := v.run(ctx, clone, opts); err != nil {
-			fyne.Do(func() {
+			kit.Do(func() {
 				v.failed(gen, fmt.Errorf("Audio für das Vorhören ließ sich nicht mischen: %w", err))
 			})
 			return
@@ -166,10 +165,10 @@ func (v *previewer) Start() {
 		cmd := exec.CommandContext(ctx, player.Path, player.Args...)
 		cmd.Stderr = &stderr
 		if err := cmd.Start(); err != nil {
-			fyne.Do(func() { v.failed(gen, fmt.Errorf("%s lässt sich nicht starten: %w", player.Name, err)) })
+			kit.Do(func() { v.failed(gen, fmt.Errorf("%s lässt sich nicht starten: %w", player.Name, err)) })
 			return
 		}
-		fyne.Do(func() { v.playing(gen, player.Name) })
+		kit.Do(func() { v.playing(gen, player.Name) })
 		err := cmd.Wait()
 		if err != nil {
 			msg := strings.TrimSpace(stderr.String())
@@ -181,7 +180,7 @@ func (v *previewer) Start() {
 			}
 			err = fmt.Errorf("Wiedergabe mit %s abgebrochen (%s). Audioausgabe des Systems prüfen.", player.Name, msg)
 		}
-		fyne.Do(func() { v.failed(gen, err) })
+		kit.Do(func() { v.failed(gen, err) })
 	})
 }
 

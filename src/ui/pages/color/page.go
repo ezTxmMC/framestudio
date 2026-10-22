@@ -357,7 +357,7 @@ func (p *Page) thumbFor(c model.Clip) (img image.Image, missing bool, load func(
 	item, cache := *m, p.ctx.Media
 	return nil, false, func() {
 		img, err := cache.Thumbnail(item, thumbW*2, thumbH*2)
-		fyne.Do(func() {
+		kit.Do(func() {
 			if err != nil || img == nil {
 				p.thumbState[item.ID] = thumbFailed
 			} else {

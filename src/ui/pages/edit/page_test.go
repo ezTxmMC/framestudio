@@ -13,6 +13,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -54,6 +55,7 @@ type fixture struct {
 func newFixture(t *testing.T, p *model.Project) *fixture {
 	t.Helper()
 	app := test.NewTempApp(t)
+	kit.UseUIQueue(t)
 	app.Settings().SetTheme(studiotheme.New())
 	f := &fixture{s: session.New(p), q: &queue{}}
 	cache := media.NewCache()

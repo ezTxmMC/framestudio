@@ -3,8 +3,6 @@ package kit
 import (
 	"time"
 
-	"fyne.io/fyne/v2"
-
 	"framestudio-proto/src/session"
 )
 
@@ -23,7 +21,7 @@ func DrivePlayback(s *session.Session) (stop func()) {
 			last := time.Now()
 			for range ticker.C {
 				done := false
-				fyne.DoAndWait(func() {
+				DoAndWait(func() {
 					now := time.Now()
 					s.Advance(now.Sub(last))
 					last = now

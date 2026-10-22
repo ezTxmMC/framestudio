@@ -5,9 +5,8 @@ import (
 	"os"
 	"sync"
 
-	"fyne.io/fyne/v2"
-
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/ui/kit"
 )
 
 // mediaSource is the part of media.Cache the timeline draws from.
@@ -85,7 +84,7 @@ func (l *loader) get(m model.MediaItem, wave bool, buckets int) *asset {
 		l.pending = true
 		l.mu.Unlock()
 		if queue {
-			fyne.Do(l.flush)
+			kit.Do(l.flush)
 		}
 	}()
 	return a

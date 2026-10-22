@@ -18,6 +18,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -33,6 +34,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	a := test.NewTempApp(t)
+	kit.UseUIQueue(t)
 	a.Settings().SetTheme(studiotheme.New())
 	p := model.NewProject("Showreel 2026")
 	must(t, p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "Hintergrund", 0, 75)))
