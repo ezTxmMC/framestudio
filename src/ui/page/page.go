@@ -40,3 +40,9 @@ type Page interface {
 	// Close releases subscriptions and goroutines when the project tab closes.
 	Close()
 }
+
+// DropTarget is implemented by pages that accept files dropped onto the window.
+// The shell routes drops to the active page, or to the media page otherwise.
+type DropTarget interface {
+	Dropped(uris []fyne.URI)
+}

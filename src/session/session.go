@@ -45,6 +45,8 @@ type Session struct {
 
 type snapshot struct {
 	label   string
+	key     string
+	at      time.Time
 	project *model.Project
 }
 
@@ -80,7 +82,7 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 		s.Project = before
 		return err
 	}
-	s.undo = append(s.undo, snapshot{label, before})
+	s.undo = append(s.undo, snapshot{label: label, at: time.Now(), project: before})
 	if len(s.undo) > maxUndo {
 		s.undo = s.undo[1:]
 	}
@@ -89,6 +91,32 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 	s.Dirty = true
 	s.fixSelection()
 	s.clampPlayhead()
+	s.Notify(ChangeProject | ChangeMeta)
+	return nil
+}
+
+// EditCoalesced is Edit for continuous controls such as sliders: consecutive edits with the
+// same key within 1.5 s share one undo step, so dragging a fader is undone in one go.
+func (s *Session) EditCoalesced(key, label string, fn func(p *model.Project) error) error {
+	n := len(s.undo)
+	if n == 0 || s.undo[n-1].key != key || time.Since(s.undo[n-1].at) > 1500*time.Millisecond {
+		if err := s.Edit(label, fn); err != nil {
+			return err
+		}
+		s.undo[len(s.undo)-1].key = key
+		s.undo[len(s.undo)-1].at = time.Now()
+		return nil
+	}
+	before := s.Project.Clone()
+	if err := fn(s.Project); err != nil {
+		s.Project = before
+		return err
+	}
+	s.undo[n-1].at = time.Now()
+	s.redo = nil
+	s.Project.Modified = time.Now()
+	s.Dirty = true
+	s.fixSelection()
 	s.Notify(ChangeProject | ChangeMeta)
 	return nil
 }
@@ -117,7 +145,7 @@ func (s *Session) Undo() {
 	}
 	last := s.undo[len(s.undo)-1]
 	s.undo = s.undo[:len(s.undo)-1]
-	s.redo = append(s.redo, snapshot{last.label, s.Project})
+	s.redo = append(s.redo, snapshot{label: last.label, project: s.Project})
 	s.Project = last.project
 	s.Dirty = true
 	s.fixSelection()
@@ -131,7 +159,7 @@ func (s *Session) Redo() {
 	}
 	next := s.redo[len(s.redo)-1]
 	s.redo = s.redo[:len(s.redo)-1]
-	s.undo = append(s.undo, snapshot{next.label, s.Project})
+	s.undo = append(s.undo, snapshot{label: next.label, project: s.Project})
 	s.Project = next.project
 	s.Dirty = true
 	s.fixSelection()

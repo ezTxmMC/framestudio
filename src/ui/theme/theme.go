@@ -3,11 +3,12 @@
 package studiotheme
 
 import (
-	_ "embed"
 	"image/color"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
+
+	"framestudio-proto/src/assets"
 )
 
 var (
@@ -38,23 +39,11 @@ var ClipColors = []struct {
 	{"Mandarine", color.NRGBA{0xC8, 0x64, 0x3A, 0xFF}},
 }
 
-//go:embed fonts/RobotoCondensed-Regular.ttf
-var fontRegular []byte
-
-//go:embed fonts/RobotoCondensed-Bold.ttf
-var fontBold []byte
-
-//go:embed fonts/RobotoCondensed-Italic.ttf
-var fontItalic []byte
-
-//go:embed fonts/JetBrainsMono-Medium.ttf
-var fontMono []byte
-
 var (
-	resRegular = fyne.NewStaticResource("RobotoCondensed-Regular.ttf", fontRegular)
-	resBold    = fyne.NewStaticResource("RobotoCondensed-Bold.ttf", fontBold)
-	resItalic  = fyne.NewStaticResource("RobotoCondensed-Italic.ttf", fontItalic)
-	resMono    = fyne.NewStaticResource("JetBrainsMono-Medium.ttf", fontMono)
+	resRegular = fyne.NewStaticResource("RobotoCondensed-Regular.ttf", assets.FontRegular)
+	resBold    = fyne.NewStaticResource("RobotoCondensed-Bold.ttf", assets.FontBold)
+	resItalic  = fyne.NewStaticResource("RobotoCondensed-Italic.ttf", assets.FontItalic)
+	resMono    = fyne.NewStaticResource("JetBrainsMono-Medium.ttf", assets.FontMono)
 )
 
 type Theme struct{}

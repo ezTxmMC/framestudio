@@ -72,3 +72,20 @@ func TestPlaybackAdvance(t *testing.T) {
 		t.Fatalf("loop in range, ph=%d", s.Playhead)
 	}
 }
+
+func TestEditCoalesced(t *testing.T) {
+	s := newSession()
+	id := s.Project.Tracks[0].Clips[0].ID
+	for _, v := range []float64{0.2, 0.4, 0.6} {
+		v := v
+		_ = s.EditCoalesced("opacity:"+id, "Deckkraft", func(p *model.Project) error {
+			c, _, _ := p.Clip(id)
+			c.Opacity = v
+			return nil
+		})
+	}
+	s.Undo()
+	if c, _, _ := s.Project.Clip(id); c.Opacity != 1 || s.CanUndo() {
+		t.Fatalf("one undo should revert the whole drag, opacity=%v", c.Opacity)
+	}
+}
