@@ -33,6 +33,7 @@ type library struct {
 	sig       string
 	thumbs    map[string]image.Image
 	loading   map[string]bool
+	failed    bool // a thumbnail could not be loaded; retried when the page is shown again
 	insertBtn *widget.Button
 	appendBtn *widget.Button
 
@@ -125,6 +126,15 @@ func (l *library) update(c session.Change) {
 	}
 }
 
+// retryThumbs rebuilds the list if a thumbnail failed earlier, e.g. while a drive was
+// unmounted.
+func (l *library) retryThumbs() {
+	if l.failed {
+		l.failed = false
+		l.rebuild()
+	}
+}
+
 func (l *library) rebuild() {
 	s := l.pg.ctx.Session
 	l.rows = map[string]*row{}
@@ -154,22 +164,28 @@ func (l *library) thumb(m model.MediaItem) fyne.CanvasObject {
 	bg.CornerRadius = 2
 	bg.SetMinSize(fyne.NewSize(thumbW, thumbH))
 	icon := widget.NewIcon(kindIcon(m.Kind))
-	img := canvas.NewImageFromImage(l.thumbs[m.ID])
+	key := m.ID + "|" + m.Path // a relinked item gets a new poster
+	img := canvas.NewImageFromImage(l.thumbs[key])
 	img.FillMode = canvas.ImageFillContain
 	if img.Image != nil {
 		icon.Hide()
 	}
 	cache := l.pg.ctx.Media
-	if img.Image == nil && cache != nil && !l.loading[m.ID] {
-		l.loading[m.ID] = true
+	if img.Image == nil && cache != nil && !l.loading[key] {
+		l.loading[key] = true
 		post := l.pg.post
 		go func() {
 			t, err := cache.Thumbnail(m, thumbW*2, thumbH*2)
 			post(func() {
 				if err != nil || t == nil {
-					return // keep the kind icon; missing media or ffmpeg is reported elsewhere
+					// Keep the kind icon (missing media or ffmpeg is reported elsewhere)
+					// and try again on the next rebuild, e.g. once the file is back.
+					delete(l.loading, key)
+					l.failed = true
+					return
 				}
-				l.thumbs[m.ID] = t
+				delete(l.loading, key)
+				l.thumbs[key] = t
 				img.Image = t
 				icon.Hide()
 				img.Refresh()

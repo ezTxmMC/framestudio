@@ -251,6 +251,14 @@ func TestAutoSelectAndAudioEmptyState(t *testing.T) {
 	if f.p.primary.grading.Visible() || !f.p.primary.empty.Visible() {
 		t.Error("audio selection should show the empty state")
 	}
+	// Coming back with an audio clip selected (e.g. from the edit page) grades the
+	// picture under the playhead instead.
+	f.p.Deactivate()
+	f.p.Activate()
+	if f.s.SelectedClip != f.title {
+		t.Fatalf("audio selection kept on activation: %q", f.s.SelectedClip)
+	}
+	f.s.SelectClip(f.a)
 
 	// hidden tracks are skipped
 	f.s.Project.Tracks[1].Hidden = true
@@ -354,5 +362,18 @@ func TestScreenshot(t *testing.T) {
 	defer out.Close()
 	if err := png.Encode(out, f.w.Canvas().Capture()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHiddenPageStopsViewer(t *testing.T) {
+	f := newFixture(t)
+	f.p.Activate()
+	f.p.Deactivate()
+	if f.p.viewer.Active() {
+		t.Fatal("hidden colour page must pause its viewer")
+	}
+	f.p.Activate()
+	if !f.p.viewer.Active() {
+		t.Fatal("viewer must render again when the page is shown")
 	}
 }

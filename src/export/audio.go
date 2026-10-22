@@ -83,11 +83,25 @@ func BuildAudioMix(p *model.Project, from, to, firstInput int, available func(mo
 		// Pad short sources so fades and offsets refer to the full clip length.
 		fmt.Fprintf(&b, ",apad=whole_dur=%s", sec(c.Length))
 		if c.FadeIn > 0 {
-			fmt.Fprintf(&b, ",afade=t=in:st=0:d=%s", sec(min(c.FadeIn, c.Length)))
+			// FadeIn may exceed the clip (unfinished ramp after a split); afade simply stops.
+			fmt.Fprintf(&b, ",afade=t=in:st=0:d=%s", sec(c.FadeIn))
+			if c.FadeInFrom > 0 {
+				fmt.Fprintf(&b, ":silence=%s", ftoa(c.FadeInFrom))
+			}
 		}
 		if c.FadeOut > 0 {
-			fo := min(c.FadeOut, c.Length)
+			fo, unity := c.FadeOut, 1.0
+			if fo > c.Length { // ramp began before the clip: start at the gain reached there
+				unity = c.FadeOutTo + (1-c.FadeOutTo)*float64(c.Length)/float64(fo)
+				fo = c.Length
+			}
 			fmt.Fprintf(&b, ",afade=t=out:st=%s:d=%s", sec(c.Length-fo), sec(fo))
+			if c.FadeOutTo > 0 {
+				fmt.Fprintf(&b, ":silence=%s", ftoa(c.FadeOutTo))
+			}
+			if unity < 1 {
+				fmt.Fprintf(&b, ":unity=%s", ftoa(unity))
+			}
 		}
 		s, e := max(c.Start, from), min(c.End(), to)
 		if s > c.Start || e < c.End() {
@@ -97,7 +111,9 @@ func BuildAudioMix(p *model.Project, from, to, firstInput int, available func(mo
 			fmt.Fprintf(&b, ",volume=%s", ftoa(part.gain))
 		}
 		if d := s - from; d > 0 {
-			fmt.Fprintf(&b, ",adelay=delays=%d:all=1", int(float64(d)*1000/fps+0.5))
+			// adelay emits its padding without timestamps; rebuild them from the sample
+			// count or amix/apad would drop the leading silence.
+			fmt.Fprintf(&b, ",adelay=delays=%d:all=1,asetpts=N/SR/TB", int(float64(d)*1000/fps+0.5))
 		}
 		fmt.Fprintf(&b, "[a%d];", i)
 	}

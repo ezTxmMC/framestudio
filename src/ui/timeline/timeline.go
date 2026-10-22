@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/media"
+	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 )
 
@@ -37,6 +38,7 @@ type Timeline struct {
 
 	unsub  func()
 	ld     *loader
+	known  map[string]model.MediaItem // media as last drawn, to spot relinks
 	r      *tlRenderer
 	closed bool
 
@@ -127,8 +129,9 @@ func (t *Timeline) changed(c session.Change) {
 		return
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
-		if t.drag != nil && c&session.ChangeProject != 0 {
+		if c&session.ChangeProject != 0 {
 			t.drag = nil // the dragged clip may be gone (undo)
+			t.forgetChangedMedia()
 		}
 		t.follow()
 		t.Refresh()
@@ -141,6 +144,19 @@ func (t *Timeline) changed(c session.Change) {
 		}
 		t.r.updatePlayhead() // cheap path during playback
 	}
+}
+
+// forgetChangedMedia drops loaded filmstrips and waveforms of media items whose file or
+// length changed (relink, replaced file), so they load again.
+func (t *Timeline) forgetChangedMedia() {
+	known := make(map[string]model.MediaItem, len(t.s.Project.Media))
+	for _, m := range t.s.Project.Media {
+		if old, ok := t.known[m.ID]; ok && (old.Path != m.Path || old.Duration != m.Duration) {
+			t.ld.forget(m.ID)
+		}
+		known[m.ID] = m
+	}
+	t.known = known
 }
 
 // follow pages the view so the playhead stays visible. It reports whether the view moved.

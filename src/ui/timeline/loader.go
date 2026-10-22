@@ -4,6 +4,7 @@ import (
 	"image"
 	"os"
 	"sync"
+	"time"
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
@@ -26,10 +27,15 @@ type assetKey struct {
 // asset is the loaded state of one media item for one purpose (filmstrip or waveform).
 type asset struct {
 	done    bool
-	offline bool // file missing on disk
+	offline bool      // file missing on disk
+	checked time.Time // when the file was found offline
 	thumb   image.Image
 	peaks   []float32
 }
+
+// offlineRecheck is how long an offline result is trusted before the file is looked up
+// again, so remounted drives come back without reopening the project.
+const offlineRecheck = 2 * time.Second
 
 // loader fetches thumbnails and waveforms in the background so ffmpeg never blocks the
 // UI thread. Results are published on the UI thread and trigger one coalesced refresh.
@@ -54,8 +60,15 @@ func (l *loader) get(m model.MediaItem, wave bool, buckets int) *asset {
 	k := assetKey{m.ID, m.Path, wave}
 	l.mu.Lock()
 	a, ok := l.items[k]
+	if ok && a.done && a.offline && time.Since(a.checked) >= offlineRecheck {
+		ok = false // look again; the old asset keeps drawing as offline meanwhile
+	}
 	if !ok {
 		a = &asset{}
+		if old := l.items[k]; old != nil && old.done {
+			*a = *old
+			a.done = true
+		}
 		l.items[k] = a
 	}
 	closed := l.closed
@@ -110,7 +123,7 @@ func (l *loader) flush() {
 func (l *loader) load(m model.MediaItem, wave bool, buckets int) asset {
 	res := asset{done: true}
 	if _, err := os.Stat(m.Path); err != nil {
-		res.offline = true
+		res.offline, res.checked = true, time.Now()
 		return res
 	}
 	if l.src == nil {

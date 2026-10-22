@@ -9,11 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"framestudio-proto/src/export"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/liveaudio"
 )
 
 // previewSeconds limits how much audio one "Vorhören" mixes.
@@ -103,7 +106,25 @@ type previewer struct {
 	gen     int
 	cancel  context.CancelFunc
 	from    int
-	syncing bool // the previewer itself is changing session playback
+	syncing bool   // the previewer itself is changing session playback
+	release func() // lifts the hold on the live playback sound
+	wg      sync.WaitGroup
+}
+
+// wait blocks until mixdowns and players have exited (temp file removed) or the
+// timeout passed.
+func (v *previewer) wait(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		v.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // Busy reports whether a preview is being mixed or played.
@@ -153,7 +174,9 @@ func (v *previewer) Start() {
 		From: from, To: to, IncludeAudio: true,
 	}
 	clone := p.Clone()
+	v.wg.Add(1)
 	v.spawn(func() {
+		defer v.wg.Done()
 		defer os.Remove(path)
 		if err := v.run(ctx, clone, opts); err != nil {
 			kit.Do(func() {
@@ -204,6 +227,10 @@ func (v *previewer) finish() {
 		v.s.SetPlaying(false)
 		v.syncing = false
 	}
+	if v.release != nil {
+		v.release()
+		v.release = nil
+	}
 	v.onChange()
 }
 
@@ -214,6 +241,9 @@ func (v *previewer) playing(gen int, name string) {
 	}
 	v.state = previewPlaying
 	v.status = "Wiedergabe über " + filepath.Base(name)
+	if v.release == nil {
+		v.release = liveaudio.Hold(v.s) // the preview player makes the sound itself
+	}
 	v.syncing = true
 	v.s.Seek(v.from)
 	v.s.SetPlaying(true)

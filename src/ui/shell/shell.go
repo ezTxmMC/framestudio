@@ -6,9 +6,11 @@ package shell
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -22,6 +24,7 @@ import (
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
 	audiopage "framestudio-proto/src/ui/pages/audio"
 	colorpage "framestudio-proto/src/ui/pages/color"
@@ -76,6 +79,7 @@ type project struct {
 	savedAt   time.Time
 	autosaved bool
 	saveErr   string
+	autosaves []*autosaveJob // recent autosaves, to undo them on "Verwerfen"
 
 	tab      *tabButton
 	stopPlay func()
@@ -89,6 +93,7 @@ type Shell struct {
 	cache    *media.Cache
 	renderer *render.Renderer
 	pageDefs []pageDef
+	saves    *saveLog
 
 	projects []*project
 	active   *project
@@ -102,7 +107,8 @@ type Shell struct {
 
 	menu          *menus
 	shift         bool
-	pendingAnswer func(choice) // open save prompt, for tests
+	pendingAnswer func(choice)                    // open save prompt, for tests
+	confirmHook   func(message string, ok func()) // tests answer busy prompts
 
 	closeWindow   func()
 	drivePlayback func(*session.Session) (stop func())
@@ -117,7 +123,15 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh := &Shell{
 		app: a, win: w, cache: cache, renderer: render.New(cache),
 		pageDefs: defaultPages(), now: time.Now, closeWindow: w.Close,
-		drivePlayback: kit.DrivePlayback,
+		saves: newSaveLog(),
+	}
+	sh.drivePlayback = func(s *session.Session) func() {
+		stopClock := kit.DrivePlayback(s)
+		stopSound := liveaudio.Drive(s, sh.showErr)
+		return func() {
+			stopClock()
+			stopSound()
+		}
 	}
 	sh.bars = newBars(sh)
 	sh.content = container.NewStack()
@@ -349,6 +363,7 @@ func (sh *Shell) deactivatePage(p *project) {
 }
 
 func (sh *Shell) showWorkspace() {
+	sh.mgr.cancelThumbnails()
 	sh.showManager = false
 	sh.root.Objects = []fyne.CanvasObject{sh.workspace}
 	sh.root.Refresh()
@@ -372,18 +387,33 @@ func (sh *Shell) leaveManager() {
 	sh.activate(sh.active)
 }
 
-// closeProject closes tab p, asking to save unsaved changes first.
+// closeProject closes tab p, asking first if an export would be cancelled or changes
+// are unsaved.
 func (sh *Shell) closeProject(p *project) {
 	if p == nil {
 		return
 	}
+	if busy := projectBusy(p); busy != "" {
+		sh.activate(p)
+		sh.confirmBusy(busy+". Abbrechen und schließen?", "Abbrechen und schließen", func() { sh.closeSaved(p) })
+		return
+	}
+	sh.closeSaved(p)
+}
+
+// closeSaved closes p, asking to save unsaved changes first.
+func (sh *Shell) closeSaved(p *project) {
 	if !p.sess.Dirty {
 		sh.closeNow(p)
 		return
 	}
 	sh.activate(p)
+	mark := sh.saves.next()
 	sh.askSave(fmt.Sprintf("„%s“ hat ungespeicherte Änderungen.", p.sess.Project.Name), "Speichern", func(c choice) {
-		save, closeIt := resolveClose(p.sess.Dirty, c)
+		if c == choiceDiscard {
+			sh.discardAutosaves(p, mark)
+		}
+		save, closeIt := resolveClose(p.sess.Dirty || c == choiceDiscard, c)
 		if save {
 			if err := sh.Save(p); err != nil {
 				sh.showErr(err)
@@ -416,6 +446,35 @@ func (sh *Shell) closeNow(p *project) {
 		sh.ShowManager()
 	}
 	sh.refreshChrome()
+}
+
+// projectBusy describes background work of p that closing would cancel, or "".
+func projectBusy(p *project) string {
+	var parts []string
+	for _, id := range slices.Sorted(maps.Keys(p.pages)) {
+		if b, ok := p.pages[id].(page.Busy); ok {
+			if msg := b.Busy(); msg != "" {
+				parts = append(parts, msg)
+			}
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// confirmBusy asks before cancelling background work; ok runs on confirmation.
+func (sh *Shell) confirmBusy(message, confirm string, ok func()) {
+	if sh.confirmHook != nil {
+		sh.confirmHook(message, ok)
+		return
+	}
+	d := dialog.NewConfirm("Export läuft", message, func(yes bool) {
+		if yes {
+			ok()
+		}
+	}, sh.win)
+	d.SetConfirmText(confirm)
+	d.SetDismissText("Weiterlaufen lassen")
+	d.Show()
 }
 
 // refreshChrome syncs title, tabs, page bar, status and menus with the current state.

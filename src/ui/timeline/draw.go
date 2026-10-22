@@ -482,31 +482,35 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 	return objs
 }
 
-// drawFades shades fade-in/out ramps as triangles with a bright ramp line.
+// drawFades shades fade-in/out ramps with a bright ramp line. A ramp continued from a
+// split starts or ends at its partial gain instead of at silence.
 func (r *tlRenderer) drawFades(objs []fyne.CanvasObject, g geom, c model.Clip, x0, x1, top, h float32) []fyne.CanvasObject {
 	shade := color.NRGBA{0, 0, 0, 0x78}
 	line := alpha(white, 0xA0)
-	if c.FadeIn > 0 {
-		fw := min(float32(float64(c.FadeIn)*g.ppf), x1-x0)
-		if fw >= 2 {
-			tri := &canvas.ArbitraryPolygon{FillColor: shade, Points: []fyne.Position{{X: 0, Y: 0}, {X: fw, Y: 0}, {X: 0, Y: h}}}
-			tri.Move(fyne.NewPos(x0, top))
-			tri.Resize(fyne.NewSize(fw, h))
-			ln := canvas.NewLine(line)
-			ln.Position1, ln.Position2 = fyne.NewPos(x0, top+h), fyne.NewPos(x0+fw, top)
-			objs = append(objs, tri, ln)
+	ramp := func(fx0, gain0, fx1, gain1 float32) {
+		if fx1-fx0 < 2 {
+			return
 		}
+		y0, y1 := h*(1-gain0), h*(1-gain1)
+		tri := &canvas.ArbitraryPolygon{FillColor: shade, Points: []fyne.Position{
+			{X: 0, Y: 0}, {X: fx1 - fx0, Y: 0}, {X: fx1 - fx0, Y: y1}, {X: 0, Y: y0}}}
+		tri.Move(fyne.NewPos(fx0, top))
+		tri.Resize(fyne.NewSize(fx1-fx0, h))
+		ln := canvas.NewLine(line)
+		ln.Position1, ln.Position2 = fyne.NewPos(fx0, top+y0), fyne.NewPos(fx1, top+y1)
+		objs = append(objs, tri, ln)
+	}
+	if c.FadeIn > 0 {
+		full := float32(float64(c.FadeIn) * g.ppf)
+		fw := min(full, x1-x0)
+		from := float32(c.FadeInFrom)
+		ramp(x0, from, x0+fw, from+(1-from)*fw/full)
 	}
 	if c.FadeOut > 0 {
-		fw := min(float32(float64(c.FadeOut)*g.ppf), x1-x0)
-		if fw >= 2 {
-			tri := &canvas.ArbitraryPolygon{FillColor: shade, Points: []fyne.Position{{X: 0, Y: 0}, {X: fw, Y: 0}, {X: fw, Y: h}}}
-			tri.Move(fyne.NewPos(x1-fw, top))
-			tri.Resize(fyne.NewSize(fw, h))
-			ln := canvas.NewLine(line)
-			ln.Position1, ln.Position2 = fyne.NewPos(x1-fw, top), fyne.NewPos(x1, top+h)
-			objs = append(objs, tri, ln)
-		}
+		full := float32(float64(c.FadeOut) * g.ppf)
+		fw := min(full, x1-x0)
+		to := float32(c.FadeOutTo)
+		ramp(x1-fw, to+(1-to)*fw/full, x1, to)
 	}
 	return objs
 }

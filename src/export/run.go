@@ -314,38 +314,34 @@ func readProgress(rd io.Reader, fps, total int, rep *reporter) {
 	}
 }
 
+// runPNG renders the sequence into a hidden sibling folder and moves it into place only
+// when every frame is written, so a failed or cancelled run never touches an earlier
+// export. Old frames of the same name that are not part of the new range are removed.
 func runPNG(ctx context.Context, p *model.Project, r *render.Renderer, o Options, rep *reporter) error {
 	from, to := Range(p, o)
-	dir := o.Path
-	created := false
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(dir, 0o755); err != nil {
-			return fmt.Errorf("Ordner %s kann nicht angelegt werden: %w", dir, err)
-		}
-		created = true
-	}
+	dir := filepath.Clean(o.Path)
 	name := filepath.Base(dir)
-	var mu sync.Mutex
-	var written []string
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), "."+name+".*.part")
+	if err != nil {
+		return fmt.Errorf("Ordner neben %s kann nicht angelegt werden: %w", dir, err)
+	}
+	defer os.RemoveAll(tmp) // empty after a successful swap
 	pool := workers()
 	fr := newFrameRenderer(p, r, o.Width, o.Height, pool)
 	defer fr.Close()
 	enc := png.Encoder{CompressionLevel: png.BestSpeed}
 	total := to - from
 	rep.Stage("Bilder rendern", 0, total)
-	err := pipeline(ctx, total, pool,
+	err = pipeline(ctx, total, pool,
 		func(i int) (struct{}, error) {
 			if ctx.Err() != nil {
 				return struct{}{}, ctx.Err()
 			}
-			path := filepath.Join(dir, fmt.Sprintf("%s_%06d.png", name, i))
+			path := filepath.Join(tmp, frameName(name, i))
 			f, err := os.Create(path)
 			if err != nil {
 				return struct{}{}, fmt.Errorf("Bild %s kann nicht geschrieben werden: %w", path, err)
 			}
-			mu.Lock()
-			written = append(written, path)
-			mu.Unlock()
 			err = enc.Encode(f, fr.frame(from+i))
 			if cerr := f.Close(); err == nil {
 				err = cerr
@@ -359,13 +355,38 @@ func runPNG(ctx context.Context, p *model.Project, r *render.Renderer, o Options
 			rep.Frame(i+1, total)
 			return nil
 		})
-	if err != nil || ctx.Err() != nil {
-		for _, path := range written {
+	if err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return swapSequence(tmp, dir, name, total)
+}
+
+func frameName(name string, i int) string { return fmt.Sprintf("%s_%06d.png", name, i) }
+
+// swapSequence moves a finished sequence from tmp into dir. If dir does not exist the
+// folder is renamed as a whole; otherwise stale frames of an earlier export are removed
+// and the new ones moved in. Other files in dir are left alone.
+func swapSequence(tmp, dir, name string, total int) error {
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.Rename(tmp, dir); err != nil {
+			return fmt.Errorf("Ordner %s kann nicht angelegt werden: %w", dir, err)
+		}
+		return nil
+	}
+	old, _ := filepath.Glob(filepath.Join(dir, name+"_[0-9]*.png"))
+	for _, path := range old {
+		num := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), name+"_"), ".png")
+		if i, err := strconv.Atoi(num); err == nil && i >= total {
 			os.Remove(path)
 		}
-		if created {
-			os.Remove(dir)
+	}
+	for i := range total {
+		if err := os.Rename(filepath.Join(tmp, frameName(name, i)), filepath.Join(dir, frameName(name, i))); err != nil {
+			return fmt.Errorf("Bilder können nicht nach %s verschoben werden: %w", dir, err)
 		}
 	}
-	return err
+	return nil
 }

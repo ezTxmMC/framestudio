@@ -144,14 +144,14 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 		return fmt.Errorf("ffprobe lieferte unlesbare Daten: %v", err)
 	}
 	hasVideo := false
-	var dur float64
+	// The picture defines a video file's length: camera files often carry a few frames
+	// more sound than picture, and frames past the last image cannot be decoded.
+	var videoDur, audioDur float64
 	for _, s := range out.Streams {
 		switch s.CodecType {
 		case "audio":
 			m.HasAudio = true
-			if d := parseFloat(s.Duration); d > dur && !hasVideo {
-				dur = d
-			}
+			audioDur = max(audioDur, streamDuration(s.Duration, s.Tags))
 		case "video":
 			if hasVideo || s.Disposition.AttachedPic != 0 || s.Width == 0 {
 				continue
@@ -165,13 +165,15 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 			if avg := parseRate(s.AvgFrameRate); m.FPS == 0 || (m.FPS > 240 && avg > 0) {
 				m.FPS = avg
 			}
-			if d := parseFloat(s.Duration); d > 0 {
-				dur = d
-			}
+			videoDur = streamDuration(s.Duration, s.Tags)
 		}
 	}
-	if d := parseFloat(out.Format.Duration); d > 0 {
-		dur = d
+	dur := parseFloat(out.Format.Duration)
+	switch {
+	case hasVideo && videoDur > 0:
+		dur = videoDur
+	case !hasVideo && dur <= 0:
+		dur = audioDur
 	}
 	switch {
 	case m.Kind == model.KindVideo && !hasVideo && m.HasAudio:
@@ -187,6 +189,24 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 	}
 	m.Duration = time.Duration(dur * float64(time.Second))
 	return nil
+}
+
+// streamDuration reads a stream's duration in seconds, falling back to the DURATION
+// tag ("01:02:03.040000000") that Matroska files carry instead.
+func streamDuration(d string, tags map[string]string) float64 {
+	if v := parseFloat(d); v > 0 {
+		return v
+	}
+	tag := tags["DURATION"]
+	if tag == "" {
+		tag = tags["duration"]
+	}
+	parts := strings.Split(tag, ":")
+	if len(parts) != 3 {
+		return 0
+	}
+	h, mi, sec := parseFloat(parts[0]), parseFloat(parts[1]), parseFloat(parts[2])
+	return h*3600 + mi*60 + sec
 }
 
 func rotated(tag string, side []struct {

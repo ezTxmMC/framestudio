@@ -104,6 +104,9 @@ func (p *Page) Activate() {
 	if p.viewer != nil {
 		p.viewer.SetActive(true)
 	}
+	if p.lib != nil {
+		p.lib.retryThumbs()
+	}
 }
 
 func (p *Page) Deactivate() {
@@ -214,24 +217,23 @@ func (p *Page) setZoom(z float32) {
 
 func (p *Page) zoomBy(f float32) { p.setZoom(p.zoom * f) }
 
-// split cuts the selected clip's track at the playhead, or every track without selection.
+// split cuts the clip under the playhead on the selected clip's track. Without a
+// selection, or if that track has nothing to cut at the playhead, it cuts every
+// unlocked track at the playhead.
 func (p *Page) split() {
 	s := p.ctx.Session
 	f := s.Playhead
 	if c, ok := s.Clip(); ok {
 		_, ti, _ := s.Project.Clip(c.ID)
 		t := &s.Project.Tracks[ti]
-		ci := t.ClipAt(f)
-		if ci < 0 || t.Clips[ci].Start == f {
-			p.showErr(fmt.Errorf("Auf Spur %s liegt am Playhead kein Clip zum Teilen. Playhead in einen Clip setzen oder die Auswahl mit Klick auf eine leere Stelle aufheben", t.Name))
+		if ci := t.ClipAt(f); ci >= 0 && t.Clips[ci].Start != f && !t.Locked {
+			id := t.Clips[ci].ID
+			p.edit("Clip teilen", func(pr *model.Project) error {
+				_, err := pr.SplitClip(id, f)
+				return err
+			})
 			return
 		}
-		id := t.Clips[ci].ID
-		p.edit("Clip teilen", func(pr *model.Project) error {
-			_, err := pr.SplitClip(id, f)
-			return err
-		})
-		return
 	}
 	cut := false
 	for _, t := range s.Project.Tracks {
@@ -240,7 +242,7 @@ func (p *Page) split() {
 		}
 	}
 	if !cut {
-		p.showErr(errors.New("Am Playhead liegt kein Clip zum Teilen. Playhead in einen Clip setzen"))
+		p.showErr(errors.New("Am Playhead liegt kein Clip zum Teilen. Playhead in einen Clip auf einer entsperrten Spur setzen"))
 		return
 	}
 	p.edit("Alle Spuren teilen", func(pr *model.Project) error {
@@ -355,16 +357,13 @@ func (p *Page) insertMedia(mediaID string, atEnd bool) {
 	}
 }
 
-// insertGenerator places a 5 s generator clip at the playhead on the selected video track.
+// insertGenerator places a 5 s generator clip at the playhead; titles go on a free
+// track above the picture (see placeGenerator).
 func (p *Page) insertGenerator(genID string) {
 	s := p.ctx.Session
 	c := generatorClip(genID, s.FPS(), s.Playhead)
 	if p.edit(c.Name+" einfügen", func(pr *model.Project) error {
-		t, err := targetTrack(pr, s.SelectedTrack, c.Kind)
-		if err != nil {
-			return err
-		}
-		return pr.PlaceClip(t.ID, c)
+		return placeGenerator(pr, s.SelectedTrack, c)
 	}) == nil {
 		p.selectInserted(c.ID)
 	}
@@ -378,14 +377,11 @@ func (p *Page) selectInserted(id string) {
 	}
 }
 
-// setFPS changes the frame rate in one undo step, keeping clip timing in seconds.
+// setFPS changes the frame rate in one undo step, keeping clip timing in seconds. The
+// session moves playhead and In/Out along, also on undo and redo.
 func (p *Page) setFPS(fps int) {
-	s := p.ctx.Session
-	old := s.FPS()
-	if fps == old {
+	if fps == p.ctx.Session.FPS() {
 		return
 	}
-	if p.edit("Bildrate ändern", func(pr *model.Project) error { return rescaleFPS(pr, fps) }) == nil {
-		rescaleSession(s, old, fps)
-	}
+	p.edit("Bildrate ändern", func(pr *model.Project) error { return rescaleFPS(pr, fps) })
 }

@@ -168,7 +168,10 @@ func (p *Page) Activate() {
 	if p.content == nil {
 		return
 	}
-	p.autoSelect()
+	if p.viewer != nil {
+		p.viewer.SetActive(true)
+	}
+	p.autoSelect(true)
 	p.refreshStrip()
 	p.primary.refresh()
 	if f := p.scopes.latest(); f != nil {
@@ -176,7 +179,13 @@ func (p *Page) Activate() {
 	}
 }
 
-func (p *Page) Deactivate() { p.active = false }
+// Deactivate stops the hidden viewer from rendering every seek and playback tick.
+func (p *Page) Deactivate() {
+	p.active = false
+	if p.viewer != nil {
+		p.viewer.SetActive(false)
+	}
+}
 
 func (p *Page) Close() {
 	if p.unsub != nil {
@@ -255,7 +264,7 @@ func (p *Page) changed(c session.Change) {
 	if c&(session.ChangeProject|session.ChangeSelection|session.ChangePlayhead) == 0 {
 		return
 	}
-	if p.autoSelect() {
+	if p.autoSelect(c&session.ChangePlayhead != 0) {
 		return // SelectClip notified and refreshed already
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
@@ -264,14 +273,19 @@ func (p *Page) changed(c session.Change) {
 	}
 }
 
-// autoSelect selects the clip under the playhead when nothing is selected and the page
-// is visible. It reports whether the selection changed.
-func (p *Page) autoSelect() bool {
-	if !p.active || p.s.SelectedClip != "" {
+// autoSelect selects the clip under the playhead when the page is visible and nothing
+// is selected. With replace it also replaces a selection that cannot be graded (e.g. an
+// audio clip picked on the edit page); that happens when the page opens or the playhead
+// moves. It reports whether the selection changed.
+func (p *Page) autoSelect(replace bool) bool {
+	if !p.active {
+		return false
+	}
+	if sel, ok := p.s.Clip(); ok && (sel.Kind.IsVisual() || !replace) {
 		return false
 	}
 	c := clipUnder(p.s.Project, p.s.Playhead)
-	if c == nil {
+	if c == nil || c.ID == p.s.SelectedClip {
 		return false
 	}
 	p.s.SelectClip(c.ID)

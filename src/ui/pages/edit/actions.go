@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"framestudio-proto/src/model"
-	"framestudio-proto/src/session"
 )
 
 // Default length of stills and generators in seconds.
@@ -46,47 +45,49 @@ func generatorClip(id string, fps, start int) model.Clip {
 	}
 }
 
-// targetTrack picks the track for a new clip of kind k: the selected track if it fits,
-// otherwise the topmost video track (visual clips) or the first audio track.
-func targetTrack(p *model.Project, selected string, k model.ClipKind) (*model.Track, error) {
-	if t, _ := p.Track(selected); t != nil && t.Kind.Accepts(k) {
-		return t, nil
-	}
-	if k.IsVisual() {
-		if v := p.TrackIndices(model.TrackVideo); len(v) > 0 {
-			return &p.Tracks[v[len(v)-1]], nil
-		}
-		return nil, errors.New("Das Projekt hat keine Videospur. Mit „Videospur hinzufügen“ eine anlegen")
-	}
-	if a := p.TrackIndices(model.TrackAudio); len(a) > 0 {
-		return &p.Tracks[a[0]], nil
-	}
-	return nil, errors.New("Das Projekt hat keine Audiospur. Mit „Audiospur hinzufügen“ eine anlegen")
+// insertMedia overwrites media item m at frame start on the selected track or the next
+// fitting unlocked one; a video's sound goes to the first unlocked audio track. The
+// routine is shared with the media page (model.PlaceMedia). Returns the main clip's ID.
+func insertMedia(p *model.Project, selectedTrack string, m model.MediaItem, start int) (string, error) {
+	return p.PlaceMedia(m, start, defaultSeconds*p.Settings.FPS, selectedTrack)
 }
 
-// insertMedia overwrites media item m at frame start. Video with sound also gets its
-// audio on the first audio track. Returns the ID of the main clip.
-func insertMedia(p *model.Project, selectedTrack string, m model.MediaItem, start int) (string, error) {
-	t, err := targetTrack(p, selectedTrack, m.Kind)
-	if err != nil {
-		return "", err
+// placeGenerator places a generator clip. Titles overlay the picture: they go to the
+// lowest unlocked video track above the topmost clip under their start that is free for
+// their whole length, and a new video track is added when there is none. Colour mattes
+// use the selected track like media.
+func placeGenerator(p *model.Project, selectedTrack string, c model.Clip) error {
+	if c.Kind != model.KindTitle {
+		t, err := p.TargetTrack(c.Kind, selectedTrack)
+		if err != nil {
+			return err
+		}
+		return p.PlaceClip(t.ID, c)
 	}
-	c := p.ClipFromMedia(m, start, defaultSeconds*p.Settings.FPS)
-	if err := p.PlaceClip(t.ID, c); err != nil {
-		return "", err
-	}
-	if m.Kind == model.KindVideo && m.HasAudio {
-		if a := p.TrackIndices(model.TrackAudio); len(a) > 0 && !p.Tracks[a[0]].Locked {
-			snd := c
-			snd.ID = model.NewID()
-			snd.Kind = model.KindAudio
-			snd.Color = audioClipColor
-			if err := p.PlaceClip(p.Tracks[a[0]].ID, snd); err != nil {
-				return "", err
-			}
+	video := p.TrackIndices(model.TrackVideo)
+	base := -1 // position in video of the topmost track with a clip at c.Start
+	for k, i := range video {
+		if p.Tracks[i].ClipAt(c.Start) >= 0 {
+			base = k
 		}
 	}
-	return c.ID, nil
+	for _, i := range video[base+1:] {
+		t := &p.Tracks[i]
+		if !t.Locked && free(t, c.Start, c.End()) {
+			return p.PlaceClip(t.ID, c)
+		}
+	}
+	return p.PlaceClip(p.AddTrack(model.TrackVideo).ID, c)
+}
+
+// free reports whether no clip of t overlaps [from,to).
+func free(t *model.Track, from, to int) bool {
+	for _, c := range t.Clips {
+		if c.Start < to && c.End() > from {
+			return false
+		}
+	}
+	return true
 }
 
 // rescaleFPS changes the frame rate and converts every frame position so clips keep
@@ -129,18 +130,14 @@ func scaleFrames(f, from, to int) int {
 	return int(math.Round(float64(f) * float64(to) / float64(from)))
 }
 
-// rescaleSession moves playhead and In/Out after a frame rate change.
-func rescaleSession(s *session.Session, from, to int) {
-	s.In, s.Out = scaleFrames(s.In, from, to), scaleFrames(s.Out, from, to)
-	s.Playhead = scaleFrames(s.Playhead, from, to)
-	s.Notify(session.ChangePlayhead)
-}
-
 // explain turns model errors into messages that say how to fix them.
 func explain(err error) error {
+	var all *model.LockedTracksError
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &all):
+		return err
 	case errors.Is(err, model.ErrLocked):
 		return errors.New("Die Spur ist gesperrt. Spur in der Timeline entsperren und erneut versuchen")
 	case errors.Is(err, model.ErrWrongTrack):

@@ -5,6 +5,7 @@ package deliver
 
 import (
 	"os/exec"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -47,7 +48,12 @@ func newPage(ctx *page.Context) *Page {
 		ctx: ctx,
 		do:  kit.Do,
 		openFolder: func(dir string) error {
-			return exec.Command("xdg-open", dir).Start()
+			cmd := exec.Command("xdg-open", dir)
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			go cmd.Wait() // reap the child so it does not linger as a zombie
+			return nil
 		},
 	}
 }
@@ -84,6 +90,7 @@ func (p *Page) sessionChanged(c session.Change) {
 	}
 	if c&session.ChangeProject != 0 {
 		p.form.refreshProject()
+		p.queue.projectChanged()
 	} else if p.form.rangeMoved() {
 		p.form.refreshRange()
 	} else {
@@ -105,9 +112,34 @@ func (p *Page) Activate() {
 		p.form.refreshProject()
 		p.updateSummary()
 	}
+	if p.view != nil {
+		p.view.SetActive(true)
+	}
 }
 
-func (p *Page) Deactivate()                  {}
+// Deactivate stops the hidden monitor from rendering every seek and playback tick.
+func (p *Page) Deactivate() {
+	if p.view != nil {
+		p.view.SetActive(false)
+	}
+}
+
+// Busy reports a running export or queued jobs, which closing the project would cancel.
+func (p *Page) Busy() string {
+	if p.queue == nil {
+		return ""
+	}
+	return p.queue.busy()
+}
+
+// Wait lets cancelled exports remove their partial output before the app exits.
+func (p *Page) Wait(timeout time.Duration) bool {
+	if p.queue == nil {
+		return true
+	}
+	return p.queue.wait(timeout)
+}
+
 func (p *Page) TypedKey(*fyne.KeyEvent) bool { return false }
 
 // Close cancels running jobs and releases the subscription and viewer.

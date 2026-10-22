@@ -494,3 +494,113 @@ func TestScreenshot(t *testing.T) {
 		capture(t, w, "/tmp/fs-shortcuts.png")
 	}
 }
+
+// busyPage is a deliver page stand-in with an export running.
+type busyPage struct {
+	fakePage
+	busy   string
+	waited bool
+}
+
+func (b *busyPage) Busy() string { return b.busy }
+func (b *busyPage) Wait(time.Duration) bool {
+	b.waited = true
+	return true
+}
+
+func TestAutosaveCannotOverwriteNewerSave(t *testing.T) {
+	sh, _, _ := newTestShell(t)
+	path := saveSample(t, "Wettlauf", 1920, 1080, 25, 10)
+	sh.Start([]string{path})
+	edit(t, sh) // 2 clips
+	jobs := sh.autosaveJobs()
+	edit(t, sh) // 3 clips, then Ctrl+S before the autosave writes
+	sh.saveActive()
+	runAutosave(jobs) // the older snapshot arrives late
+	sh.finishAutosave(jobs)
+	p, err := store.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(p.Tracks[0].Clips); n != 3 {
+		t.Fatalf("file holds %d clips, want the 3 of the explicit save", n)
+	}
+	if sh.Active().Dirty {
+		t.Fatal("explicit save is clean")
+	}
+}
+
+func TestDiscardUndoesAutosaveDuringPrompt(t *testing.T) {
+	sh, _, _ := newTestShell(t)
+	path := saveSample(t, "Verwerfen", 1920, 1080, 25, 10)
+	sh.Start([]string{path})
+	p := sh.active
+	edit(t, sh)
+	sh.closeProject(p)
+	if sh.pendingAnswer == nil {
+		t.Fatal("dirty close must prompt")
+	}
+	jobs := sh.autosaveJobs() // the autosave tick fires while the prompt is open
+	runAutosave(jobs)
+	sh.finishAutosave(jobs)
+	sh.pendingAnswer(choiceDiscard)
+	if len(sh.projects) != 0 {
+		t.Fatal("tab not closed")
+	}
+	if q, _ := store.Load(path); len(q.Tracks[0].Clips) != 1 {
+		t.Fatalf("discarded edit is on disk: %d clips", len(q.Tracks[0].Clips))
+	}
+}
+
+func TestCloseAndQuitAskWhileExporting(t *testing.T) {
+	sh, _, _ := newTestShell(t)
+	bp := &busyPage{fakePage: fakePage{id: page.Deliver}, busy: "Export „Film.mp4“ läuft (17 %)"}
+	for i := range sh.pageDefs {
+		if sh.pageDefs[i].ID == page.Deliver {
+			sh.pageDefs[i].New = func(*page.Context) page.Page { return bp }
+		}
+	}
+	sh.Start([]string{saveSample(t, "Render", 1920, 1080, 25, 10)})
+	sh.showPageID(page.Deliver)
+	var asked string
+	var confirm func()
+	sh.confirmHook = func(msg string, ok func()) { asked, confirm = msg, ok }
+	sh.closeActive()
+	if len(sh.projects) != 1 || !strings.Contains(asked, "17 %") {
+		t.Fatalf("closing during an export must ask first, got %q", asked)
+	}
+	asked = ""
+	sh.Quit()
+	if len(sh.projects) != 1 || !strings.Contains(asked, "beenden") {
+		t.Fatalf("quitting during an export must ask first, got %q", asked)
+	}
+	confirm()
+	if len(sh.projects) != 0 || !bp.closed || !bp.waited {
+		t.Fatal("confirmed quit must close the page and wait for its cleanup")
+	}
+}
+
+func TestRenameOpenProjectKeepsEditsUnsaved(t *testing.T) {
+	sh, _, _ := newTestShell(t)
+	path := saveSample(t, "Alt", 1920, 1080, 25, 10)
+	sh.Start([]string{path})
+	p := sh.active
+	edit(t, sh)
+	sh.ShowManager()
+	if err := sh.mgr.rename(path, "Neu"); err != nil {
+		t.Fatal(err)
+	}
+	if p.sess.Project.Name != "Neu" || !p.sess.Dirty {
+		t.Fatalf("session name %q dirty %v", p.sess.Project.Name, p.sess.Dirty)
+	}
+	q, err := store.Load(p.sess.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Name != "Neu" || len(q.Tracks[0].Clips) != 1 {
+		t.Fatalf("file has name %q and %d clips; unsaved edits must not be written", q.Name, len(q.Tracks[0].Clips))
+	}
+	if filepath.Base(p.sess.Path) != "Neu.fsproj" {
+		t.Fatalf("library file not renamed: %s", p.sess.Path)
+	}
+}

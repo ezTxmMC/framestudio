@@ -84,9 +84,17 @@ func (t *Timeline) Tapped(ev *fyne.PointEvent) {
 	}
 }
 
-// blade splits c at the (snapped) frame under x.
+// blade splits c at the (snapped) frame under x. A snap onto the clip's own edges (for
+// example the start of an abutting clip) is ignored: there is nothing to cut there.
 func (t *Timeline) blade(g geom, c model.Clip, x float32) {
-	f := t.snap(g, g.frameAt(x), c.ID, true)
+	raw := g.frameAt(x)
+	f := t.snap(g, raw, c.ID, true)
+	if f <= c.Start || f >= c.End() {
+		f, t.snapAt = raw, -1
+	}
+	if f <= c.Start || f >= c.End() {
+		return // on the clip's first frame: nothing to cut
+	}
 	t.edit("Clip teilen", func(p *model.Project) error {
 		_, err := p.SplitClip(c.ID, f)
 		return err

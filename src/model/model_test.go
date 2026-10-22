@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -139,5 +140,156 @@ func TestCloneIsDeep(t *testing.T) {
 	c.Tracks[0].Clips[0].Name = "changed"
 	if p.Tracks[0].Clips[0].Name != "A" {
 		t.Fatal("clone shares memory")
+	}
+}
+
+func TestAddTrackPicksFreeName(t *testing.T) {
+	p := NewProject("x") // V1, V2, A1
+	if err := p.RemoveTrack(p.Tracks[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	p.AddTrack(TrackVideo)
+	p.AddTrack(TrackVideo)
+	seen := map[string]bool{}
+	for _, tr := range p.Tracks {
+		if seen[tr.Name] {
+			t.Fatalf("duplicate track name %s in %v", tr.Name, p.Tracks)
+		}
+		seen[tr.Name] = true
+	}
+	if !seen["V1"] || !seen["V3"] {
+		t.Fatalf("expected V1 and V3, got %v", seen)
+	}
+}
+
+func TestLockedTrackProtectsRemoval(t *testing.T) {
+	p, v1 := proj()
+	m := MediaItem{ID: "m1", Kind: KindImage, Name: "Bild", Path: "/x.png"}
+	p.AddMedia(m)
+	c := p.ClipFromMedia(m, 200, 25)
+	if err := p.PlaceClip(v1, c); err != nil {
+		t.Fatal(err)
+	}
+	p.Tracks[0].Locked = true
+	if err := p.RemoveTrack(v1); err != ErrLocked {
+		t.Fatalf("RemoveTrack on locked track = %v, want ErrLocked", err)
+	}
+	if err := p.RemoveMedia("m1"); err != ErrLocked {
+		t.Fatalf("RemoveMedia with clip on locked track = %v, want ErrLocked", err)
+	}
+	if len(p.Media) != 1 || len(p.Tracks[0].Clips) != 3 {
+		t.Fatal("refused removal must not change the project")
+	}
+}
+
+func fadeCurve(p *Project, from, to int) []float64 {
+	var out []float64
+	for f := from; f < to; f++ {
+		g := 0.0
+		for _, tr := range p.Tracks {
+			if ci := tr.ClipAt(f); ci >= 0 {
+				g = tr.Clips[ci].FadeFactor(f)
+			}
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
+func TestSplitKeepsFadesContinuous(t *testing.T) {
+	for _, cut := range []int{1, 20, 49, 50, 51, 80, 99} {
+		p := NewProject("x")
+		v1 := p.Tracks[0].ID
+		c := NewClip(KindColor, "A", 0, 100)
+		c.FadeIn, c.FadeOut = 50, 50
+		_ = p.PlaceClip(v1, c)
+		want := fadeCurve(p, 0, 100)
+		if _, err := p.SplitClip(c.ID, cut); err != nil {
+			t.Fatal(err)
+		}
+		got := fadeCurve(p, 0, 100)
+		for i := range want {
+			if d := got[i] - want[i]; d > 1e-9 || d < -1e-9 {
+				t.Fatalf("cut %d: frame %d gain %.3f, want %.3f", cut, i, got[i], want[i])
+			}
+		}
+		// a second split of a part keeps it continuous too
+		if r := p.Tracks[0].Clips[len(p.Tracks[0].Clips)-1]; r.Length > 2 {
+			_, _ = p.SplitClip(r.ID, r.Start+r.Length/2)
+			got = fadeCurve(p, 0, 100)
+			for i := range want {
+				if d := got[i] - want[i]; d > 1e-9 || d < -1e-9 {
+					t.Fatalf("cut %d+: frame %d gain %.3f, want %.3f", cut, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
+
+func TestOverwriteInsideFadeKeepsCurve(t *testing.T) {
+	p := NewProject("x")
+	v1 := p.Tracks[0].ID
+	c := NewClip(KindColor, "A", 0, 100)
+	c.FadeIn, c.FadeOut = 40, 40
+	_ = p.PlaceClip(v1, c)
+	want := fadeCurve(p, 0, 100)
+	_ = p.PlaceClip(v1, NewClip(KindColor, "X", 30, 40))
+	got := fadeCurve(p, 0, 100)
+	for _, f := range []int{0, 10, 29, 70, 80, 99} {
+		if d := got[f] - want[f]; d > 1e-9 || d < -1e-9 {
+			t.Fatalf("frame %d gain %.3f, want %.3f", f, got[f], want[f])
+		}
+	}
+}
+
+func TestTrimClampsFades(t *testing.T) {
+	p := NewProject("x")
+	v1 := p.Tracks[0].ID
+	c := NewClip(KindColor, "A", 0, 100)
+	c.FadeIn, c.FadeOut = 60, 60
+	_ = p.PlaceClip(v1, c)
+	if err := p.TrimClip(c.ID, 0, 30); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := p.Clip(c.ID)
+	if got.FadeIn != 30 || got.FadeOut != 30 {
+		t.Fatalf("fades %d/%d, want 30/30", got.FadeIn, got.FadeOut)
+	}
+}
+
+func TestPlaceMediaSkipsLockedTracks(t *testing.T) {
+	p := NewProject("x") // V1, V2, A1
+	a2 := p.AddTrack(TrackAudio)
+	a2ID := a2.ID
+	m := MediaItem{ID: "v", Name: "Strand", Kind: KindVideo, HasAudio: true, Duration: 2 * time.Second, Path: "/v.mp4"}
+	p.AddMedia(m)
+	p.Tracks[0].Locked = true // V1
+	p.Tracks[2].Locked = true // A1
+	id, err := p.PlaceMedia(m, 0, 125, p.Tracks[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ti, _ := p.Clip(id); p.Tracks[ti].Name != "V2" {
+		t.Fatalf("picture on %s, want V2", p.Tracks[ti].Name)
+	}
+	if tr, _ := p.Track(a2ID); len(tr.Clips) != 1 || tr.Clips[0].Kind != KindAudio {
+		t.Fatalf("sound must go to the free A2: %+v", tr.Clips)
+	}
+	// all audio tracks locked: nothing is placed and the error says why
+	tr, _ := p.Track(a2ID)
+	tr.Locked = true
+	before := len(p.Tracks[1].Clips)
+	if _, err := p.PlaceMedia(m, 100, 125, ""); err == nil || !errors.Is(err, ErrLocked) {
+		t.Fatalf("got %v, want a locked-tracks error", err)
+	}
+	if len(p.Tracks[1].Clips) != before {
+		t.Fatal("failed placement must not leave the picture behind")
+	}
+	// no audio track at all: one is created
+	q := NewProject("y")
+	q.RemoveTrack(q.Tracks[2].ID)
+	q.AddMedia(m)
+	if _, err := q.PlaceMedia(m, 0, 125, ""); err != nil || len(q.TrackIndices(TrackAudio)) != 1 {
+		t.Fatalf("audio track not created: %v", err)
 	}
 }

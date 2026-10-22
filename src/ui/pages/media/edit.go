@@ -15,56 +15,17 @@ import (
 // stillSeconds is the default length of a still placed on the timeline.
 const stillSeconds = 5
 
-// targetTrack picks the track for a clip kind: the preferred track if it accepts the
-// kind and is unlocked, otherwise the first such track. A missing track is created.
-func targetTrack(p *model.Project, kind model.ClipKind, preferred string) (string, error) {
-	if t, _ := p.Track(preferred); t != nil && t.Kind.Accepts(kind) && !t.Locked {
-		return t.ID, nil
-	}
-	tk := model.TrackVideo
-	if !kind.IsVisual() {
-		tk = model.TrackAudio
-	}
-	for _, i := range p.TrackIndices(tk) {
-		if !p.Tracks[i].Locked {
-			return p.Tracks[i].ID, nil
-		}
-	}
-	if len(p.TrackIndices(tk)) > 0 {
-		if tk == model.TrackAudio {
-			return "", errors.New("Alle Audiospuren sind gesperrt. Eine Spur entsperren und erneut einfügen")
-		}
-		return "", errors.New("Alle Videospuren sind gesperrt. Eine Spur entsperren und erneut einfügen")
-	}
-	return p.AddTrack(tk).ID, nil
-}
-
-// placeMedia overwrites media m onto the timeline at frame at. Stills get five seconds;
-// a video with sound also gets its audio clip on the first audio track. It returns the
-// ID of the main clip and its end frame.
+// placeMedia overwrites media m onto the timeline at frame at (see model.PlaceMedia,
+// shared with the edit page). Stills get five seconds. It returns the ID of the main
+// clip and its end frame.
 func placeMedia(p *model.Project, m model.MediaItem, at int, preferredTrack string) (string, int, error) {
 	fps := max(p.Settings.FPS, 1)
-	c := p.ClipFromMedia(m, max(at, 0), stillSeconds*fps)
-	tid, err := targetTrack(p, m.Kind, preferredTrack)
+	id, err := p.PlaceMedia(m, at, stillSeconds*fps, preferredTrack)
 	if err != nil {
 		return "", 0, err
 	}
-	if err := p.PlaceClip(tid, c); err != nil {
-		return "", 0, err
-	}
-	if m.Kind == model.KindVideo && m.HasAudio {
-		a := model.NewClip(model.KindAudio, m.Name, c.Start, c.Length)
-		a.MediaID = m.ID
-		a.Color = model.RGBA{R: 0x3D, G: 0x9A, B: 0x5B, A: 0xFF}
-		aid, err := targetTrack(p, model.KindAudio, "")
-		if err != nil {
-			return "", 0, err
-		}
-		if err := p.PlaceClip(aid, a); err != nil {
-			return "", 0, err
-		}
-	}
-	return c.ID, c.End(), nil
+	c, _, _ := p.Clip(id)
+	return id, c.End(), nil
 }
 
 // usage counts the timeline clips that reference a media item.

@@ -288,7 +288,7 @@ func TestBuildAudioMix(t *testing.T) {
 	want := "[1:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,atrim=start=0:end=4,asetpts=PTS-STARTPTS,apad=whole_dur=4," +
 		"afade=t=in:st=0:d=1,afade=t=out:st=2:d=2,volume=0.5[a0];" +
 		"[2:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,atrim=start=1:end=2,asetpts=PTS-STARTPTS,apad=whole_dur=1," +
-		"adelay=delays=2000:all=1[a1];" +
+		"adelay=delays=2000:all=1,asetpts=N/SR/TB[a1];" +
 		"[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,apad=whole_dur=4,atrim=end=4,asetpts=PTS-STARTPTS[aout]"
 	if mix.Filter != want {
 		t.Errorf("filter\n got %s\nwant %s", mix.Filter, want)
@@ -297,7 +297,7 @@ func TestBuildAudioMix(t *testing.T) {
 	// Range starting inside the first clip trims after the fades and shifts the delay.
 	mix, _ = BuildAudioMix(p, 40, 60, 0, nil)
 	if !strings.Contains(mix.Filter, "afade=t=out:st=2:d=2,atrim=start=1.6:end=2.4,asetpts=PTS-STARTPTS,volume=0.5[a0]") ||
-		!strings.Contains(mix.Filter, "atrim=start=0:end=0.4,asetpts=PTS-STARTPTS,adelay=delays=400:all=1[a1]") ||
+		!strings.Contains(mix.Filter, "atrim=start=0:end=0.4,asetpts=PTS-STARTPTS,adelay=delays=400:all=1,asetpts=N/SR/TB[a1]") ||
 		!strings.HasSuffix(mix.Filter, "apad=whole_dur=0.8,atrim=end=0.8,asetpts=PTS-STARTPTS[aout]") {
 		t.Errorf("range filter: %s", mix.Filter)
 	}
@@ -482,4 +482,143 @@ func TestSeqSource(t *testing.T) {
 	})
 	must(t, err)
 	s.Close()
+}
+
+// soundSpans returns the [start,end) seconds of non-silent audio in a file.
+func soundSpans(t *testing.T, path string, total float64) [][2]float64 {
+	t.Helper()
+	out, _ := exec.Command("ffmpeg", "-hide_banner", "-nostats", "-i", path, "-af", "silencedetect=n=-40dB:d=0.2",
+		"-f", "null", "-").CombinedOutput()
+	var spans [][2]float64
+	start := 0.0
+	for _, line := range strings.Split(string(out), "\n") {
+		if _, v, ok := strings.Cut(line, "silence_start: "); ok {
+			s, _ := strconv.ParseFloat(strings.Fields(v)[0], 64)
+			if s > start+0.01 {
+				spans = append(spans, [2]float64{start, s})
+			}
+		}
+		if _, v, ok := strings.Cut(line, "silence_end: "); ok {
+			start, _ = strconv.ParseFloat(strings.Fields(v)[0], 64)
+		}
+	}
+	if start < total-0.05 && (!strings.Contains(string(out), "silence_start") ||
+		strings.LastIndex(string(out), "silence_end") > strings.LastIndex(string(out), "silence_start")) {
+		spans = append(spans, [2]float64{start, total}) // sound runs to the end
+	}
+	return spans
+}
+
+func TestAudioOffsetWithSourceIn(t *testing.T) {
+	needFFmpeg(t)
+	dir := t.TempDir()
+	tone := filepath.Join(dir, "tone.wav")
+	out, err := exec.Command("ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=6", tone).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	p := model.NewProject("Sync")
+	a2 := p.AddTrack(model.TrackAudio).ID
+	m := model.MediaItem{ID: "tone", Name: "tone", Path: tone, Kind: model.KindAudio, Duration: 6 * time.Second}
+	p.AddMedia(m)
+	c1 := p.ClipFromMedia(m, 25, 0)
+	c1.SourceIn, c1.Length = 10, 50 // 1 s .. 3 s, starts inside the source
+	must(t, p.PlaceClip(p.Tracks[2].ID, c1))
+	c2 := p.ClipFromMedia(m, 100, 0)
+	c2.Length = 100 // 4 s .. 8 s
+	c2.FadeIn, c2.FadeOut = 10, 60
+	must(t, p.PlaceClip(a2, c2))
+	// cuts inside the fade-out give partial ramps (afade silence/unity)
+	right, err := p.SplitClip(c2.ID, 160)
+	must(t, err)
+	_, err = p.SplitClip(right, 180)
+	must(t, err)
+	if mix, _ := BuildAudioMix(p, 0, 200, 0, nil); !strings.Contains(mix.Filter, ":silence=") || !strings.Contains(mix.Filter, ":unity=") {
+		t.Errorf("split fades need partial ramps: %s", mix.Filter)
+	}
+	path := filepath.Join(dir, "mix.wav")
+	must(t, Run(context.Background(), p, nil, Options{Format: FormatWAV, Path: path, IncludeAudio: true}, nil))
+	d := ffprobe(t, path).duration()
+	if d < 7.95 || d > 8.05 {
+		t.Errorf("mixdown is %.3f s, want 8", d)
+	}
+	spans := soundSpans(t, path, d)
+	want := [][2]float64{{1, 3}, {4, 7.9}}
+	if len(spans) != 2 {
+		t.Fatalf("sound at %v, want %v", spans, want)
+	}
+	for i := range want {
+		if d := spans[i][0] - want[i][0]; d < -0.06 || d > 0.06 {
+			t.Errorf("span %d starts at %.3f s, want %.0f", i, spans[i][0], want[i][0])
+		}
+	}
+	if d := spans[0][1] - 3; d < -0.06 || d > 0.06 {
+		t.Errorf("first span ends at %.3f s, want 3", spans[0][1])
+	}
+}
+
+func TestValidateReportsOfflineMedia(t *testing.T) {
+	saved := lookFFmpeg
+	defer func() { lookFFmpeg = saved }()
+	lookFFmpeg = func() bool { return true }
+	p := model.NewProject("Offline")
+	v := model.MediaItem{ID: "v", Name: "Strand", Path: "/fehlt/strand.mp4", Kind: model.KindVideo, Duration: 2 * time.Second, HasAudio: true}
+	a := model.MediaItem{ID: "a", Name: "Musik", Path: "/fehlt/musik.wav", Kind: model.KindAudio, Duration: 2 * time.Second}
+	p.AddMedia(v)
+	p.AddMedia(a)
+	must(t, p.PlaceClip(p.Tracks[0].ID, p.ClipFromMedia(v, 0, 0)))
+	must(t, p.PlaceClip(p.Tracks[2].ID, p.ClipFromMedia(a, 0, 0)))
+	dir := t.TempDir()
+	o := Options{Format: FormatMP4, Path: filepath.Join(dir, "a.mp4"), Width: 160, Height: 90, IncludeAudio: true}
+	err := Validate(p, o)
+	var off *OfflineError
+	if !errors.As(err, &off) || len(off.Media) != 2 || !strings.Contains(err.Error(), "Strand, Musik") {
+		t.Fatalf("got %v", err)
+	}
+	o.IncludeAudio = false
+	if err := Validate(p, o); !errors.As(err, &off) || len(off.Media) != 1 {
+		t.Fatalf("without sound only the picture counts: %v", err)
+	}
+	o.AllowOffline = true
+	must(t, Validate(p, o))
+}
+
+func TestPNGReplacesOldSequenceSafely(t *testing.T) {
+	needFFmpeg(t)
+	p := testProject(t, 2)
+	dir := filepath.Join(t.TempDir(), "seq")
+	o := Options{Format: FormatPNG, Path: dir, Width: 160, Height: 90, From: 0, To: 30}
+	must(t, Run(context.Background(), p, nil, o, nil))
+	keep := filepath.Join(dir, "notiz.txt")
+	must(t, os.WriteFile(keep, []byte("x"), 0o644))
+
+	// A cancelled re-export leaves the earlier sequence untouched.
+	ctx, cancel := context.WithCancel(context.Background())
+	o2 := o
+	o2.To = 50
+	err := Run(ctx, p, nil, o2, func(pr Progress) {
+		if pr.Frame > 3 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "seq_*.png"))
+	if len(files) != 30 {
+		t.Fatalf("%d frames after cancel, want the 30 of the earlier export", len(files))
+	}
+
+	// A shorter export replaces the sequence without leaving stale frames.
+	o3 := o
+	o3.To = 10
+	must(t, Run(context.Background(), p, nil, o3, nil))
+	files, _ = filepath.Glob(filepath.Join(dir, "seq_*.png"))
+	if len(files) != 10 {
+		t.Fatalf("%d frames, want 10", len(files))
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Error("unrelated files in the folder must stay")
+	}
+	assertNoPartials(t, filepath.Dir(dir))
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/image/draw"
 
@@ -59,15 +60,74 @@ type Cache struct {
 	closed      bool
 	wg          sync.WaitGroup
 
+	// Background jobs (thumbnails, waveforms) share a few ffmpeg slots, stop when the
+	// cache closes and can be cancelled per media item.
+	ctx  context.Context
+	stop context.CancelFunc
+	bg   chan struct{}
+	jmu  sync.Mutex
+	jobs map[string]map[*int]context.CancelFunc
+
 	hits, misses atomic.Int64 // frame cache statistics
 }
 
+// Limits for background ffmpeg jobs.
+const (
+	maxBackground = 3                // concurrent thumbnail/waveform decoders per cache
+	posterTimeout = 30 * time.Second // longest a single-frame decode may take
+	peaksTimeout  = 10 * time.Minute // longest a full-file waveform decode may take
+)
+
 func NewCache() *Cache {
+	ctx, stop := context.WithCancel(context.Background())
 	return &Cache{
 		stills: newLRU(stillBudget),
 		frames: newLRU(frameBudget),
 		thumbs: newLRU(thumbBudget),
 		waves:  newLRU(waveBudget),
+		ctx:    ctx,
+		stop:   stop,
+		bg:     make(chan struct{}, maxBackground),
+		jobs:   map[string]map[*int]context.CancelFunc{},
+	}
+}
+
+// background runs fn in one of the limited background slots with a context that ends
+// after timeout, when the cache closes or when Cancel(mediaID) is called.
+func (c *Cache) background(mediaID string, timeout time.Duration, fn func(ctx context.Context) (any, error)) (any, error) {
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	defer cancel()
+	key := new(int)
+	c.jmu.Lock()
+	if c.jobs[mediaID] == nil {
+		c.jobs[mediaID] = map[*int]context.CancelFunc{}
+	}
+	c.jobs[mediaID][key] = cancel
+	c.jmu.Unlock()
+	defer func() {
+		c.jmu.Lock()
+		delete(c.jobs[mediaID], key)
+		if len(c.jobs[mediaID]) == 0 {
+			delete(c.jobs, mediaID)
+		}
+		c.jmu.Unlock()
+	}()
+	select {
+	case c.bg <- struct{}{}:
+		defer func() { <-c.bg }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("Vorschau abgebrochen: %w", ctx.Err())
+	}
+	return fn(ctx)
+}
+
+// Cancel stops running and queued thumbnail and waveform decodes of a media item, e.g.
+// when its project closes. Callers waiting for them get an error; nothing is cached.
+func (c *Cache) Cancel(mediaID string) {
+	c.jmu.Lock()
+	defer c.jmu.Unlock()
+	for _, cancel := range c.jobs[mediaID] {
+		cancel()
 	}
 }
 
@@ -161,7 +221,9 @@ func (c *Cache) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, er
 	if err != nil || img != nil {
 		return img, err
 	}
-	one, err := decodeOne(m, seconds(n, fps), w, h)
+	ctx, cancel := context.WithTimeout(c.ctx, posterTimeout)
+	defer cancel()
+	one, err := decodeOne(ctx, m, frameArgs(m.Path, n, fps, w, h, 1), w, h)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +253,13 @@ func (c *Cache) Thumbnail(m model.MediaItem, w, h int) (image.Image, error) {
 				img = drawWaveform(peaks, w, h)
 			}
 		} else {
-			img, err = c.posterFrame(m, w, h)
+			var v any
+			v, err = c.background(m.ID, posterTimeout, func(ctx context.Context) (any, error) {
+				return c.posterFrame(ctx, m, w, h)
+			})
+			if err == nil {
+				img = v.(image.Image)
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -206,15 +274,15 @@ func (c *Cache) Thumbnail(m model.MediaItem, w, h int) (image.Image, error) {
 	return v.(image.Image), nil
 }
 
-func (c *Cache) posterFrame(m model.MediaItem, w, h int) (image.Image, error) {
+func (c *Cache) posterFrame(ctx context.Context, m model.MediaItem, w, h int) (image.Image, error) {
 	if _, err := os.Stat(m.Path); err != nil {
 		return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
 	}
 	w, h = fitSize(m.Width, m.Height, w, h)
 	t := m.Duration.Seconds() / 10
-	img, err := decodeOne(m, t, w, h)
-	if err != nil && t > 0 {
-		img, err = decodeOne(m, 0, w, h)
+	img, err := decodeOne(ctx, m, posterArgs(m.Path, t, w, h), w, h)
+	if err != nil && t > 0 && ctx.Err() == nil {
+		img, err = decodeOne(ctx, m, posterArgs(m.Path, 0, w, h), w, h)
 	}
 	if err != nil {
 		return nil, err
@@ -251,10 +319,13 @@ func (c *Cache) peaks(m model.MediaItem) ([]float32, error) {
 		if err != nil {
 			return nil, err
 		}
-		p, err := readPeaks(context.Background(), bin, m)
+		v, err := c.background(m.ID, peaksTimeout, func(ctx context.Context) (any, error) {
+			return readPeaks(ctx, bin, m)
+		})
 		if err != nil {
 			return nil, err
 		}
+		p := v.([]float32)
 		c.waves.put(key, m.ID, p, int64(len(p)*4))
 		return p, nil
 	})
@@ -278,6 +349,7 @@ func (c *Cache) Close() {
 	c.pmu.Lock()
 	c.closed = true
 	c.pmu.Unlock()
+	c.stop()
 	c.stopPrefetch("")
 	c.wg.Wait()
 }
@@ -312,7 +384,7 @@ func OpenVideo(m model.MediaItem, n, fps, w, h int) (FrameReader, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stderr := &tailBuffer{}
-	cmd := exec.CommandContext(ctx, bin, videoArgs(m.Path, seconds(n, fps), fps, w, h, 0)...)
+	cmd := exec.CommandContext(ctx, bin, frameArgs(m.Path, n, fps, w, h, 0)...)
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
 	if err == nil {

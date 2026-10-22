@@ -33,7 +33,14 @@ func (p *Project) AddTrack(kind TrackKind) *Track {
 	if kind == TrackAudio {
 		prefix = "A"
 	}
-	n := len(p.TrackIndices(kind)) + 1
+	used := map[string]bool{}
+	for _, t := range p.Tracks {
+		used[t.Name] = true
+	}
+	n := 1 // lowest free number, so names stay unique after a track was removed
+	for used[fmt.Sprintf("%s%d", prefix, n)] {
+		n++
+	}
 	t := Track{ID: NewID(), Name: fmt.Sprintf("%s%d", prefix, n), Kind: kind, Volume: 1, Clips: []Clip{}}
 	// keep video tracks before audio tracks
 	if kind == TrackVideo {
@@ -47,10 +54,14 @@ func (p *Project) AddTrack(kind TrackKind) *Track {
 	return &p.Tracks[len(p.Tracks)-1]
 }
 
+// RemoveTrack deletes a track and its clips. Locked tracks are refused.
 func (p *Project) RemoveTrack(id string) error {
-	_, i := p.Track(id)
+	t, i := p.Track(id)
 	if i < 0 {
 		return ErrNotFound
+	}
+	if t.Locked {
+		return ErrLocked
 	}
 	p.Tracks = append(p.Tracks[:i], p.Tracks[i+1:]...)
 	return nil
@@ -66,24 +77,17 @@ func (t *Track) clearRange(from, to int) {
 		case c.Start >= from && c.End() <= to:
 			// fully covered, drop
 		case c.Start < from && c.End() > to:
-			left, right := c, c
-			left.Length = from - c.Start
-			left.FadeOut = 0
+			left, _ := splitAt(c, from)
+			_, right := splitAt(c, to)
 			right.ID = NewID()
-			right.SourceIn += to - c.Start
-			right.Start = to
-			right.Length = c.End() - to
-			right.FadeIn = 0
 			out = append(out, left, right)
 		case c.Start < from:
-			c.Length = from - c.Start
-			out = append(out, c)
+			left, _ := splitAt(c, from)
+			out = append(out, left)
 		default: // overlaps the right edge of the range
-			cut := to - c.Start
-			c.SourceIn += cut
-			c.Start = to
-			c.Length -= cut
-			out = append(out, c)
+			_, right := splitAt(c, to)
+			right.ID = c.ID
+			out = append(out, right)
 		}
 	}
 	if out == nil {
@@ -178,11 +182,48 @@ func (p *Project) TrimClip(clipID string, start, length int) error {
 	}
 	trimmed := *c
 	trimmed.Start, trimmed.Length, trimmed.SourceIn = start, length, in
+	// Fades follow the clip edges and never exceed the new length (an unfinished ramp
+	// left over from a split is kept as it is).
+	if c.FadeIn <= c.Length {
+		trimmed.FadeIn = min(trimmed.FadeIn, length)
+	}
+	if c.FadeOut <= c.Length {
+		trimmed.FadeOut = min(trimmed.FadeOut, length)
+	}
 	t.Clips = append(t.Clips[:ci], t.Clips[ci+1:]...)
 	t.clearRange(start, start+length)
 	t.Clips = append(t.Clips, trimmed)
 	t.sortClips()
 	return nil
+}
+
+// splitAt cuts c at timeline frame f (c.Start < f < c.End()). The fade curve stays
+// continuous: a part that starts or ends inside a fade gets a ramp that begins or ends at
+// the gain the original clip had there. The right part gets a new ID.
+func splitAt(c Clip, f int) (left, right Clip) {
+	left, right = c, c
+	left.Length = f - c.Start
+	right.ID = NewID()
+	right.Start = f
+	right.Length = c.End() - f
+	right.SourceIn += f - c.Start
+
+	// Fade-in: the left part keeps the ramp (possibly unfinished); the right part
+	// continues it from the gain reached at f.
+	if d := f - c.Start; c.FadeIn > d {
+		right.FadeIn = c.FadeIn - d
+		right.FadeInFrom = c.FadeInFrom + (1-c.FadeInFrom)*float64(d)/float64(c.FadeIn)
+	} else {
+		right.FadeIn, right.FadeInFrom = 0, 0
+	}
+	// Fade-out: the right part keeps the ramp; the left part ends at the gain it had at f-1.
+	if d := c.End() - f; c.FadeOut > d {
+		left.FadeOut = c.FadeOut - d
+		left.FadeOutTo = c.FadeOutTo + (1-c.FadeOutTo)*float64(d)/float64(c.FadeOut)
+	} else {
+		left.FadeOut, left.FadeOutTo = 0, 0
+	}
+	return left, right
 }
 
 // SplitClip cuts the clip at timeline frame f and returns the ID of the right part.
@@ -198,14 +239,7 @@ func (p *Project) SplitClip(clipID string, f int) (string, error) {
 	if f <= c.Start || f >= c.End() {
 		return "", ErrInvalidEdit
 	}
-	left, right := *c, *c
-	left.Length = f - c.Start
-	left.FadeOut = 0
-	right.ID = NewID()
-	right.Start = f
-	right.Length = c.End() - f
-	right.SourceIn += f - c.Start
-	right.FadeIn = 0
+	left, right := splitAt(*c, f)
 	t.Clips[ci] = left
 	t.Clips = append(t.Clips, right)
 	t.sortClips()
@@ -271,7 +305,8 @@ func (p *Project) AddMedia(m MediaItem) string {
 	return m.ID
 }
 
-// RemoveMedia deletes a media item and every clip that uses it.
+// RemoveMedia deletes a media item and every clip that uses it. It returns ErrLocked
+// without changes if any of those clips sits on a locked track.
 func (p *Project) RemoveMedia(id string) error {
 	idx := -1
 	for i := range p.Media {
@@ -281,6 +316,16 @@ func (p *Project) RemoveMedia(id string) error {
 	}
 	if idx < 0 {
 		return ErrNotFound
+	}
+	for _, t := range p.Tracks {
+		if !t.Locked {
+			continue
+		}
+		for _, c := range t.Clips {
+			if c.MediaID == id {
+				return ErrLocked
+			}
+		}
 	}
 	p.Media = append(p.Media[:idx], p.Media[idx+1:]...)
 	for ti := range p.Tracks {

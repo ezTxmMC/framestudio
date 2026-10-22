@@ -439,10 +439,34 @@ func (f *settingsForm) submit(start bool) {
 		o.Path = f.pg.queue.uniquePath(o.Path)
 		err = export.Validate(f.pg.ctx.Session.Project, o)
 	}
+	var off *export.OfflineError
+	if errors.As(err, &off) && f.pg.ctx.Window != nil {
+		f.setError(err)
+		d := dialog.NewConfirm("Medien offline", err.Error(), func(ok bool) {
+			if !ok {
+				return
+			}
+			o.AllowOffline = true
+			if err := export.Validate(f.pg.ctx.Session.Project, o); err != nil {
+				f.setError(err)
+				return
+			}
+			f.enqueue(o, start)
+		}, f.pg.ctx.Window)
+		d.SetConfirmText("Trotzdem exportieren")
+		d.SetDismissText("Abbrechen")
+		d.Show()
+		return
+	}
 	if err != nil {
 		f.setError(err)
 		return
 	}
+	f.enqueue(o, start)
+}
+
+func (f *settingsForm) enqueue(o export.Options, start bool) {
+	f.setError(nil)
 	f.pg.queue.add(o, f.pg.ctx.Session.Project.Clone(), start)
 	f.pg.updateSummary()
 }

@@ -2,6 +2,8 @@
 package page
 
 import (
+	"time"
+
 	"fyne.io/fyne/v2"
 
 	"framestudio-proto/src/media"
@@ -39,6 +41,20 @@ type Page interface {
 	TypedKey(k *fyne.KeyEvent) bool
 	// Close releases subscriptions and goroutines when the project tab closes.
 	Close()
+}
+
+// Busy is implemented by pages that run work the user would lose by closing the project,
+// such as exports. Busy returns a short German description ("Export läuft (17 %)"), or ""
+// when idle. The shell asks before closing a busy project.
+type Busy interface {
+	Busy() string
+}
+
+// Waiter is implemented by pages whose background goroutines must finish cleanup (temp
+// files, child processes) after Close. Wait blocks until they have ended or the timeout
+// passed, and reports whether they ended.
+type Waiter interface {
+	Wait(timeout time.Duration) bool
 }
 
 // DropTarget is implemented by pages that accept files dropped onto the window.

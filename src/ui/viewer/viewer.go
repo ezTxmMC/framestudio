@@ -110,6 +110,9 @@ func (v *Viewer) SetActive(on bool) {
 	}
 }
 
+// Active reports whether the viewer renders (see SetActive).
+func (v *Viewer) Active() bool { return v.active }
+
 // SetCompare renders the ungraded frame when on (colour page before/after).
 func (v *Viewer) SetCompare(on bool) {
 	v.opts.SkipGrade = on

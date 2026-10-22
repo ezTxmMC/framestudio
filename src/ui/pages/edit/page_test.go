@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -250,8 +251,8 @@ func TestGeneratorInsertion(t *testing.T) {
 	if c.Start != 200 || c.Length != 125 {
 		t.Fatalf("lower third at %d+%d", c.Start, c.Length)
 	}
-	if _, ti, _ := f.s.Project.Clip(c.ID); f.s.Project.Tracks[ti].ID != f.s.Project.Tracks[1].ID {
-		t.Fatal("not on the selected video track")
+	if _, ti, _ := f.s.Project.Clip(c.ID); f.s.Project.Tracks[ti].Name != "V1" {
+		t.Fatal("nothing under the playhead: the lowest free video track takes the title")
 	}
 	f.s.Undo()
 	if _, ok := f.s.Clip(); ok {
@@ -410,5 +411,124 @@ func TestRescaleFPSKeepsMediaInBounds(t *testing.T) {
 	m, _ := p.MediaByID(id)
 	if got.SourceIn+got.Length > p.MediaFrames(*m) {
 		t.Fatalf("clip exceeds source after rescale: %+v", got)
+	}
+}
+
+func TestTitlesOverlayThePicture(t *testing.T) {
+	f := newFixture(t, basicProject()) // V1 colour 0-100, V2 title 25-75
+	f.s.SelectTrack(f.s.Project.Tracks[0].ID)
+	trackOf := func(id string) string {
+		_, ti, _ := f.s.Project.Clip(id)
+		return f.s.Project.Tracks[ti].Name
+	}
+	f.s.Seek(80) // over the colour clip; V2 is free from 80 on
+	f.pg.insertGenerator("lower")
+	c, _ := f.s.Clip()
+	if trackOf(c.ID) != "V2" || len(f.s.Project.Tracks[0].Clips) != 1 || f.s.Project.Tracks[0].Clips[0].Length != 100 {
+		t.Fatalf("lower third must sit above the picture on V2, got %s", trackOf(c.ID))
+	}
+	f.s.Undo()
+	f.s.Seek(50) // over both V1 and the title on V2: a new track is added on top
+	f.pg.insertGenerator("title")
+	c, _ = f.s.Clip()
+	if trackOf(c.ID) != "V3" || len(f.s.Project.TrackIndices(model.TrackVideo)) != 3 {
+		t.Fatalf("title must go to a new V3, got %s", trackOf(c.ID))
+	}
+	if len(f.errs) > 0 {
+		t.Fatal(f.errs)
+	}
+}
+
+func TestSplitFallsBackWhenSelectionIsElsewhere(t *testing.T) {
+	p := basicProject()
+	m := model.MediaItem{ID: "mus", Name: "Musik", Kind: model.KindAudio, Duration: 20 * time.Second, Path: "/m.wav"}
+	p.AddMedia(m)
+	music := p.ClipFromMedia(m, 150, 0)
+	_ = p.PlaceClip(p.Tracks[2].ID, music)
+	f := newFixture(t, p)
+	f.s.SelectClip(music.ID)
+	f.s.Seek(10) // inside the colour clip on V1, not under the music
+	f.pg.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS})
+	if len(f.errs) > 0 {
+		t.Fatalf("split failed: %v", f.errs)
+	}
+	if len(f.s.Project.Tracks[0].Clips) != 2 {
+		t.Fatal("clip under the playhead not cut")
+	}
+}
+
+func TestInsertSkipsLockedTracks(t *testing.T) {
+	p := basicProject()
+	a2 := p.AddTrack(model.TrackAudio).ID
+	id := p.AddMedia(model.MediaItem{Name: "Strand.mp4", Kind: model.KindVideo, Duration: 4 * time.Second, HasAudio: true, Width: 1920, Height: 1080})
+	p.Tracks[1].Locked = true // V2
+	p.Tracks[2].Locked = true // A1
+	f := newFixture(t, p)
+	f.s.SelectTrack(p.Tracks[1].ID)
+	f.s.Seek(300)
+	f.pg.insertMedia(id, false)
+	if len(f.errs) > 0 {
+		t.Fatalf("insert failed: %v", f.errs)
+	}
+	if tr, _ := f.s.Project.Track(a2); len(tr.Clips) != 1 {
+		t.Fatal("sound must go to the free A2")
+	}
+	tr, _ := f.s.Project.Track(a2)
+	tr.Locked = true
+	f.pg.insertMedia(id, true)
+	if len(f.errs) != 1 || !strings.Contains(f.errs[0].Error(), "Audiospuren sind gesperrt") {
+		t.Fatalf("expected a hint about locked audio tracks, got %v", f.errs)
+	}
+}
+
+func TestFPSChangeUndoKeepsRange(t *testing.T) {
+	f := newFixture(t, basicProject())
+	f.s.Playhead, f.s.In, f.s.Out = 50, 25, 75
+	f.pg.setFPS(50)
+	if f.s.Playhead != 100 || f.s.In != 50 || f.s.Out != 150 {
+		t.Fatalf("after change: %d %d %d", f.s.Playhead, f.s.In, f.s.Out)
+	}
+	f.s.Undo()
+	if f.s.FPS() != 25 || f.s.Playhead != 50 || f.s.In != 25 || f.s.Out != 75 {
+		t.Fatalf("after undo: fps %d, %d %d %d", f.s.FPS(), f.s.Playhead, f.s.In, f.s.Out)
+	}
+}
+
+func TestInspectorDurationStopsAtNextClip(t *testing.T) {
+	p := basicProject() // V1 Farbe 0-100
+	_ = p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "B", 100, 100))
+	f := newFixture(t, p)
+	f.s.SelectClip(clipNamed(t, f.s.Project, "Farbe").ID)
+	dur := find[*commitEntry](f.pg.insp.box)[2]
+	enter(dur, "00:00:06:00")
+	if a, b := clipNamed(t, f.s.Project, "Farbe"), clipNamed(t, f.s.Project, "B"); a.Length != 100 || b.Start != 100 || b.Length != 100 {
+		t.Fatalf("next clip overwritten: A %d+%d, B %d+%d", a.Start, a.Length, b.Start, b.Length)
+	}
+	shown := false
+	for _, n := range find[*widget.Label](f.pg.insp.box) {
+		if n.Visible() && strings.Contains(n.Text, "nächste Clip beginnt bei 00:00:04:00") {
+			shown = true
+		}
+	}
+	if !shown {
+		t.Fatal("no hint about the next clip")
+	}
+	enter(dur, "00:00:03:00") // shorter is fine
+	if a := clipNamed(t, f.s.Project, "Farbe"); a.Length != 75 {
+		t.Fatalf("length %d, want 75", a.Length)
+	}
+}
+
+func TestLibraryThumbRetriesAfterFailure(t *testing.T) {
+	p := basicProject()
+	p.AddMedia(model.MediaItem{Name: "weg.mp4", Path: "/nonexistent/weg.mp4", Kind: model.KindVideo, Duration: time.Second, Width: 16, Height: 9})
+	f := newFixture(t, p)
+	f.q.drain()
+	if len(f.pg.lib.loading) != 0 || !f.pg.lib.failed {
+		t.Fatalf("failed load must be retried later: loading %v failed %v", f.pg.lib.loading, f.pg.lib.failed)
+	}
+	f.pg.Activate()
+	if f.pg.lib.failed {
+		t.Fatal("activation should retry the thumbnail")
 	}
 }

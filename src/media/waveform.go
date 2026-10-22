@@ -34,6 +34,9 @@ func readPeaks(ctx context.Context, bin string, m model.MediaItem) ([]float32, e
 	}
 	peaks, readErr := envelope(stdout)
 	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("Wellenform von „%s“ abgebrochen: %w", m.Name, ctx.Err())
+	}
 	if readErr != nil {
 		return nil, fmt.Errorf("Ton von „%s“ kann nicht gelesen werden: %v", m.Name, readErr)
 	}

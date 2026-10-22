@@ -613,3 +613,56 @@ func screenshotProject(t *testing.T) *model.Project {
 	_ = m
 	return p
 }
+
+func TestBladeIgnoresSnapToNeighbourEdge(t *testing.T) {
+	f := setup(t, 1000, 300) // A 0..100, B 100..150 on V1
+	f.tl.SetSnapping(true)
+	f.tl.SetTool(ToolBlade)
+	f.s.Seek(400)
+	g := f.tl.geom()
+	x := g.frameX(100) - 2 // inside A, within the snap zone of B's start
+	f.tap(fyne.NewPos(x, f.rowMid("V1")))
+	if len(f.errs) != 0 {
+		t.Fatalf("blade near the edit point failed: %v", f.errs)
+	}
+	clips := f.track("V1").Clips
+	if len(clips) != 3 || clips[0].Start != 0 || clips[1].End() != 100 || clips[1].Start <= 0 {
+		t.Fatalf("expected A cut just before 100: %+v", clips)
+	}
+}
+
+func TestOfflineMediaComesBack(t *testing.T) {
+	f := setup(t, 1000, 300)
+	path := filepath.Join(t.TempDir(), "spaeter.wav")
+	m := model.MediaItem{ID: "later", Name: "spaeter.wav", Path: path, Kind: model.KindAudio, Duration: 4 * time.Second}
+	l := f.tl.ld
+	a := l.get(m, true, 64)
+	if got := l.snapshot(a); !got.offline {
+		t.Fatalf("missing file not offline: %+v", got)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l.mu.Lock()
+	a.checked = time.Now().Add(-offlineRecheck) // the recheck interval has passed
+	l.mu.Unlock()
+	if got := l.snapshot(l.get(m, true, 64)); got.offline {
+		t.Fatal("file is back but still drawn offline")
+	}
+}
+
+func TestRelinkReloadsAssets(t *testing.T) {
+	f := setup(t, 1000, 300)
+	m := model.MediaItem{ID: "rl", Name: "a.wav", Path: "/nonexistent/a.wav", Kind: model.KindAudio, Duration: 4 * time.Second}
+	_ = f.s.Edit("x", func(p *model.Project) error { p.AddMedia(m); return nil })
+	a := f.tl.ld.get(m, true, 64)
+	_ = f.s.Edit("Neu verknüpfen", func(p *model.Project) error {
+		p.Media[0].Duration = 5 * time.Second
+		return nil
+	})
+	if f.tl.ld.get(p0(f), true, 64) == a {
+		t.Fatal("changed media must load again")
+	}
+}
+
+func p0(f *fixture) model.MediaItem { return f.s.Project.Media[0] }

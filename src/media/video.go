@@ -53,22 +53,37 @@ func clampFrame(m model.MediaItem, n, fps int) int {
 
 func seconds(n, fps int) float64 { return float64(n) / float64(fps) }
 
-// videoArgs builds an ffmpeg command line that writes raw RGBA frames of w x h to stdout.
-// fps > 0 resamples to that rate; frames > 0 stops after that many frames.
-func videoArgs(path string, t float64, fps, w, h, frames int) []string {
+// seekLead is how far before the wanted frame decoding starts, so the frame rate filter
+// sees the source frame that precedes the target time.
+const seekLead = 0.5
+
+// frameArgs builds an ffmpeg command line that writes frames n, n+1, ... of a video
+// resampled to fps as raw RGBA of w x h to stdout; frames > 0 stops after that many.
+//
+// Timestamps stay absolute (-copyts) and the fps filter runs before the cut, so frame n
+// is the same source frame whether decoding starts at 0 or seeks: random access, the
+// prefetchers and sequential export all show identical frames for every rate pair.
+func frameArgs(path string, n, fps, w, h, frames int) []string {
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+	if t := seconds(n, fps) - seekLead; t > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 6, 64))
+	}
+	args = append(args, "-copyts", "-start_at_zero", "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn")
+	if frames > 0 {
+		args = append(args, "-frames:v", strconv.Itoa(frames))
+	}
+	vf := fmt.Sprintf("fps=%d,trim=start_pts=%d,scale=%d:%d:flags=bicubic", fps, n, w, h)
+	return append(args, "-vf", vf, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgba", "-")
+}
+
+// posterArgs builds an ffmpeg command line that writes the frame at time t as raw RGBA.
+func posterArgs(path string, t float64, w, h int) []string {
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
 	if t > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 6, 64))
 	}
-	args = append(args, "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn")
-	vf := fmt.Sprintf("scale=%d:%d:flags=bicubic", w, h)
-	if fps > 0 {
-		vf = fmt.Sprintf("fps=%d,%s", fps, vf)
-	}
-	if frames > 0 {
-		args = append(args, "-frames:v", strconv.Itoa(frames))
-	}
-	return append(args, "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgba", "-")
+	args = append(args, "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1")
+	return append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=bicubic", w, h), "-f", "rawvideo", "-pix_fmt", "rgba", "-")
 }
 
 func rgbaFrame(buf []byte, w, h int) *image.RGBA {
@@ -96,18 +111,21 @@ func (b *tailBuffer) String() string {
 	return b.buf.String()
 }
 
-// decodeOne decodes the single frame at time t, scaled to exactly w x h.
-func decodeOne(m model.MediaItem, t float64, w, h int) (*image.RGBA, error) {
+// decodeOne runs ffmpeg with args and returns the first raw w x h frame it writes.
+func decodeOne(ctx context.Context, m model.MediaItem, args []string, w, h int) (*image.RGBA, error) {
 	bin, err := ffmpegPath()
 	if err != nil {
 		return nil, err
 	}
 	var stdout bytes.Buffer
 	var stderr tailBuffer
-	cmd := exec.Command(bin, videoArgs(m.Path, t, 0, w, h, 1)...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()
 	if stdout.Len() < w*h*4 {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("Dekodieren von „%s“ abgebrochen: %w", m.Name, ctx.Err())
+		}
 		return nil, decodeError(m, stderr.String(), runErr)
 	}
 	return rgbaFrame(stdout.Bytes()[:w*h*4], w, h), nil
@@ -179,7 +197,7 @@ func (p *prefetcher) lastUsed() time.Time {
 
 func (p *prefetcher) run(ctx context.Context, bin string, m model.MediaItem) {
 	var stderr tailBuffer
-	cmd := exec.CommandContext(ctx, bin, videoArgs(m.Path, seconds(p.start, p.s.fps), p.s.fps, p.s.w, p.s.h, 0)...)
+	cmd := exec.CommandContext(ctx, bin, frameArgs(m.Path, p.start, p.s.fps, p.s.w, p.s.h, 0)...)
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
 	if err == nil {

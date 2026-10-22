@@ -304,7 +304,8 @@ var shortcutGroups = []struct {
 	}},
 	{"Wiedergabe", [][2]string{
 		{"Leertaste", "Abspielen / Pause"},
-		{"J / K / L", "Rückwärts / Stopp / Vorwärts"},
+		{"J", "Vorheriger Schnittpunkt"},
+		{"K / L", "Stopp / Abspielen"},
 		{"← / →", "Ein Frame zurück / vor"},
 		{"↑ / ↓", "Vorheriger / nächster Schnittpunkt"},
 		{"I / O", "In- / Out-Punkt setzen"},

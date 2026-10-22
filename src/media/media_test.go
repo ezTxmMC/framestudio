@@ -2,8 +2,10 @@ package media
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,6 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -262,7 +267,7 @@ func TestVideoFrame(t *testing.T) {
 		t.Fatalf("sequential frames should mostly hit the cache, got %d hits", c.hits.Load()-hits)
 	}
 	// Prefetched frames match direct single-frame decodes.
-	one, err := decodeOne(m, seconds(15, 25), 80, 45)
+	one, err := decodeOne(context.Background(), m, frameArgs(m.Path, 15, 25, 80, 45, 1), 80, 45)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,5 +441,140 @@ func TestEnvelopeAndResample(t *testing.T) {
 	}
 	if r := resamplePeaks([]float32{0.5}, 3); r[2] != 0.5 {
 		t.Fatalf("upsample %v", r)
+	}
+}
+
+// rateVideo writes a 64x36 test pattern with every frame distinct.
+func rateVideo(t *testing.T, rate, seconds int) model.MediaItem {
+	t.Helper()
+	needFFmpeg(t)
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("v%d.mp4", rate))
+	ffmpeg(t, "-f", "lavfi", "-i", fmt.Sprintf("testsrc=size=64x36:rate=%d:duration=%d", rate, seconds),
+		"-c:v", "libx264", "-qp", "0", "-g", strconv.Itoa(rate), path)
+	return mustProbe(t, path)
+}
+
+func readAll(t *testing.T, r FrameReader) []image.Image {
+	t.Helper()
+	defer r.Close()
+	var out []image.Image
+	for {
+		img, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, img)
+	}
+}
+
+func TestRandomAccessMatchesSequential(t *testing.T) {
+	for _, tc := range []struct{ src, fps int }{{30, 25}, {25, 30}, {25, 25}} {
+		m := rateVideo(t, tc.src, 6)
+		r, err := OpenVideo(m, 0, tc.fps, 64, 36)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seq := readAll(t, r)
+		if len(seq) != 6*tc.fps {
+			t.Fatalf("%d->%d: %d sequential frames, want %d", tc.src, tc.fps, len(seq), 6*tc.fps)
+		}
+		c := NewCache()
+		for _, n := range []int{1, 5, 7, 12, 37, 61, 99, 6*tc.fps - 1} {
+			ctx := context.Background()
+			one, err := decodeOne(ctx, m, frameArgs(m.Path, n, tc.fps, 64, 36, 1), 64, 36)
+			if err != nil {
+				t.Fatalf("%d->%d frame %d: %v", tc.src, tc.fps, n, err)
+			}
+			if !sameImage(one, seq[n]) {
+				t.Errorf("%d->%d: random access frame %d differs from sequential decoding", tc.src, tc.fps, n)
+			}
+			r, err := OpenVideo(m, n, tc.fps, 64, 36)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := r.Next()
+			r.Close()
+			if err != nil || !sameImage(first, seq[n]) {
+				t.Errorf("%d->%d: OpenVideo(%d) differs from sequential decoding (%v)", tc.src, tc.fps, n, err)
+			}
+			vf, err := c.VideoFrame(m, n, tc.fps, 64, 36)
+			if err != nil || !sameImage(vf, seq[n]) {
+				t.Errorf("%d->%d: VideoFrame(%d) differs from sequential decoding (%v)", tc.src, tc.fps, n, err)
+			}
+		}
+		c.Close()
+	}
+}
+
+func TestProbeUsesVideoStreamDuration(t *testing.T) {
+	needFFmpeg(t)
+	path := filepath.Join(t.TempDir(), "longaud.mp4")
+	ffmpeg(t, "-f", "lavfi", "-i", "testsrc2=size=64x36:rate=25:duration=4",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=5", "-c:v", "libx264", "-c:a", "aac", path)
+	m := mustProbe(t, path)
+	if d := m.Duration.Seconds(); d < 3.95 || d > 4.05 {
+		t.Fatalf("duration %.3f s, want the 4 s of picture", d)
+	}
+	c := NewCache()
+	defer c.Close()
+	if _, err := c.VideoFrame(m, 99, 25, 64, 36); err != nil {
+		t.Fatalf("last frame: %v", err)
+	}
+}
+
+func TestCancelStopsBackgroundJobs(t *testing.T) {
+	c := NewCache()
+	defer c.Close()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.background("m", time.Minute, func(ctx context.Context) (any, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		done <- err
+	}()
+	<-started
+	c.Cancel("m")
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled job should fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Cancel did not stop the job")
+	}
+}
+
+func TestBackgroundJobsAreLimited(t *testing.T) {
+	c := NewCache()
+	defer c.Close()
+	var running, peak atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 12 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = c.background(fmt.Sprint(i), time.Minute, func(context.Context) (any, error) {
+				n := running.Add(1)
+				for {
+					p := peak.Load()
+					if n <= p || peak.CompareAndSwap(p, n) {
+						break
+					}
+				}
+				time.Sleep(20 * time.Millisecond)
+				running.Add(-1)
+				return nil, nil
+			})
+		}()
+	}
+	wg.Wait()
+	if p := peak.Load(); p > maxBackground {
+		t.Fatalf("%d background jobs ran at once, limit %d", p, maxBackground)
 	}
 }

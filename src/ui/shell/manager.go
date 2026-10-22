@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -19,6 +20,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/session"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -46,17 +48,18 @@ type manager struct {
 	sh   *Shell
 	view fyne.CanvasObject
 
-	grid      *fyne.Container
-	empty     fyne.CanvasObject
-	recent    *fyne.Container
-	count     *canvas.Text
-	dirText   *canvas.Text
-	back      *widget.Button
-	actions   []*widget.Button
-	cards     []*projectCard
-	selected  string // path of the selected card
-	dir       string
-	thumbsGen int
+	grid       *fyne.Container
+	empty      fyne.CanvasObject
+	recent     *fyne.Container
+	count      *canvas.Text
+	dirText    *canvas.Text
+	back       *widget.Button
+	actions    []*widget.Button
+	cards      []*projectCard
+	selected   string // path of the selected card
+	dir        string
+	thumbsGen  int
+	stopThumbs context.CancelFunc // ends the running thumbnail pass
 }
 
 func newManager(sh *Shell) *manager {
@@ -224,16 +227,23 @@ func (m *manager) selectPath(path string) {
 	}
 }
 
-// loadThumbnails renders a frame of every card's project in the background.
+// loadThumbnails renders a frame of every card's project in the background. A new pass
+// or leaving the manager stops the previous one before its next card.
 func (m *manager) loadThumbnails() {
+	m.cancelThumbnails()
 	m.thumbsGen++
 	gen := m.thumbsGen
+	ctx, cancel := context.WithCancel(context.Background())
+	m.stopThumbs = cancel
 	cards := slices.Clone(m.cards)
 	r := m.sh.renderer
 	go func() {
 		for _, c := range cards {
+			if ctx.Err() != nil {
+				return
+			}
 			p, err := store.Load(c.d.Path)
-			if err != nil || p.Duration() == 0 {
+			if err != nil || p.Duration() == 0 || ctx.Err() != nil {
 				continue
 			}
 			w, h := 384, 384*p.Settings.Height/p.Settings.Width
@@ -249,6 +259,14 @@ func (m *manager) loadThumbnails() {
 			})
 		}
 	}()
+}
+
+// cancelThumbnails stops the running thumbnail pass, if any.
+func (m *manager) cancelThumbnails() {
+	if m.stopThumbs != nil {
+		m.stopThumbs()
+		m.stopThumbs = nil
+	}
 }
 
 func (m *manager) open(path string) {
@@ -302,15 +320,14 @@ func nonEmpty(s string) error {
 	return nil
 }
 
-// rename changes the project name; library files are renamed to match.
+// rename changes the project name; library files are renamed to match. For an open
+// project only the name is written to the file, so its unsaved edits stay unsaved and
+// can still be discarded.
 func (m *manager) rename(path, name string) error {
 	if name == "" {
 		return errors.New("Der Name darf nicht leer sein")
 	}
-	if p := m.sh.findOpen(path); p != nil {
-		p.sess.Rename(name)
-		return m.sh.Save(p)
-	}
+	open := m.sh.findOpen(path)
 	proj, err := store.Load(path)
 	if err != nil {
 		return err
@@ -322,7 +339,7 @@ func (m *manager) rename(path, name string) error {
 		store.SafeName(name) != strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) {
 		newPath = store.SuggestPath(m.dir, name)
 	}
-	if err := store.Save(proj, newPath); err != nil {
+	if err := m.sh.writeProject(proj, newPath); err != nil {
 		return err
 	}
 	if newPath != path {
@@ -334,6 +351,16 @@ func (m *manager) rename(path, name string) error {
 			return fmt.Errorf("Die alte Datei %s konnte nicht entfernt werden: %w", path, err)
 		}
 		m.selected = newPath
+	}
+	if p := open; p != nil {
+		clean := !p.sess.Dirty
+		p.sess.Rename(name)
+		p.sess.Path = newPath
+		if clean {
+			p.sess.MarkSaved(newPath) // file and session agree again
+		} else {
+			p.sess.Notify(session.ChangeMeta)
+		}
 	}
 	return nil
 }
@@ -368,7 +395,7 @@ func (m *manager) duplicate(path string) (string, error) {
 	proj.Name += " Kopie"
 	proj.Created, proj.Modified = now, now
 	dst := store.SuggestPath(m.dir, proj.Name)
-	return dst, store.Save(proj, dst)
+	return dst, m.sh.writeProject(proj, dst)
 }
 
 func (m *manager) deleteSelected() {

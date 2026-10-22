@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -149,6 +150,9 @@ func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	}
 	return true
 }
+
+// Wait lets a running preview remove its temporary WAV and its player exit.
+func (p *Page) Wait(timeout time.Duration) bool { return p.prev.wait(timeout) }
 
 func (p *Page) Close() {
 	p.closed = true

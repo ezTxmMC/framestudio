@@ -336,3 +336,69 @@ func TestScreenshot(t *testing.T) {
 	defer file.Close()
 	must(t, png.Encode(file, img))
 }
+
+func TestQueuedJobRendersCurrentTimeline(t *testing.T) {
+	h := newHarness(t)
+	h.configure(t, export.FormatPNG)
+	f := h.pg.form
+	test.Tap(f.addBtn) // queued, not started
+	q := h.pg.queue
+	if len(q.jobs) != 1 || q.jobs[0].status != jobReady {
+		t.Fatalf("job not queued: %+v", q.jobs)
+	}
+	if got := h.pg.Busy(); !strings.Contains(got, "Auftrag wartet") {
+		t.Fatalf("Busy = %q", got)
+	}
+	// Edit the timeline after queueing: the job must render the new length.
+	must(t, h.s.Edit("verlängern", func(p *model.Project) error {
+		return p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "Mehr", 75, 25))
+	}))
+	if j := q.jobs[0]; j.frames != 100 || !strings.Contains(j.view.meta.Text, "00:00:04:00") {
+		t.Fatalf("queued job shows %d frames (%q)", j.frames, j.view.meta.Text)
+	}
+	q.renderAll()
+	j := q.jobs[0]
+	if j.project.Duration() != 100 {
+		t.Fatalf("job renders a stale snapshot of %d frames", j.project.Duration())
+	}
+	if got := h.pg.Busy(); !strings.Contains(got, "läuft") {
+		t.Fatalf("Busy while running = %q", got)
+	}
+	h.pump(t, func() bool { return j.status >= jobDone })
+	if j.status != jobDone {
+		t.Fatalf("status %v: %v", j.status, j.err)
+	}
+	if h.pg.Busy() != "" || !h.pg.Wait(time.Second) {
+		t.Fatal("finished queue must not be busy")
+	}
+}
+
+func TestOfflineMediaAsksFirst(t *testing.T) {
+	h := newHarness(t)
+	h.configure(t, export.FormatPNG)
+	must(t, h.s.Edit("offline", func(p *model.Project) error {
+		m := model.MediaItem{ID: "weg", Name: "Strand", Path: "/nonexistent/strand.png", Kind: model.KindImage}
+		p.AddMedia(m)
+		return p.PlaceClip(p.Tracks[0].ID, p.ClipFromMedia(m, 0, 25))
+	}))
+	test.Tap(h.pg.form.addBtn)
+	if len(h.pg.queue.jobs) != 0 {
+		t.Fatal("offline media must not be queued without asking")
+	}
+	if !strings.Contains(h.pg.form.errText.Text, "offline (Strand)") {
+		t.Fatalf("message %q", h.pg.form.errText.Text)
+	}
+}
+
+func TestHiddenPageStopsViewer(t *testing.T) {
+	h := newHarness(t)
+	h.pg.Activate()
+	h.pg.Deactivate()
+	if h.pg.view.Active() {
+		t.Fatal("hidden export page must pause its monitor")
+	}
+	h.pg.Activate()
+	if !h.pg.view.Active() {
+		t.Fatal("monitor must render again when shown")
+	}
+}

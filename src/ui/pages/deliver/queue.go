@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -43,7 +44,7 @@ func (s jobStatus) String() string {
 type job struct {
 	id      int
 	opts    export.Options
-	project *model.Project // clone taken at enqueue time
+	project *model.Project // clone of the timeline, retaken when rendering starts
 	frames  int
 
 	status   jobStatus
@@ -64,6 +65,7 @@ type queue struct {
 	nextID  int
 	running *job
 	closed  bool
+	wg      sync.WaitGroup // export goroutines
 
 	list    *fyne.Container
 	empty   fyne.CanvasObject
@@ -169,6 +171,11 @@ func (q *queue) runNext() {
 }
 
 func (q *queue) start(j *job) {
+	// Render the timeline as it is now, not as it was when the job was added.
+	j.project = q.pg.ctx.Session.Project.Clone()
+	j.frames = frameCount(j.project, j.opts)
+	j.view.meta.Text = jobSummary(j.opts, j.project.Settings.FPS, j.frames)
+	j.view.meta.Refresh()
 	ctx, cancel := context.WithCancel(context.Background())
 	j.cancel = cancel
 	j.status = jobRunning
@@ -179,7 +186,9 @@ func (q *queue) start(j *job) {
 
 	do := q.pg.do
 	r := q.pg.ctx.Renderer
+	q.wg.Add(1)
 	go func() {
+		defer q.wg.Done()
 		begin := time.Now()
 		err := export.Run(ctx, j.project, r, j.opts, func(pr export.Progress) {
 			do(func() {
@@ -263,6 +272,69 @@ func (q *queue) openFolder(j *job) {
 	}
 	if err := q.pg.openFolder(dir); err != nil {
 		q.pg.showErr(fmt.Errorf("Der Ordner %s kann nicht geöffnet werden. Ist xdg-open installiert? (%v)", dir, err))
+	}
+}
+
+// projectChanged updates the duration shown on jobs that have not started yet.
+func (q *queue) projectChanged() {
+	p := q.pg.ctx.Session.Project
+	for _, j := range q.jobs {
+		if j.status != jobReady && j.status != jobWaiting {
+			continue
+		}
+		if n := frameCount(p, j.opts); n != j.frames || j.project.Settings.FPS != p.Settings.FPS {
+			j.frames = n
+			j.view.meta.Text = jobSummary(j.opts, p.Settings.FPS, n)
+			j.view.meta.Refresh()
+		}
+	}
+}
+
+// busy describes unfinished work, or "" when nothing would be lost by closing.
+func (q *queue) busy() string {
+	open := 0
+	for _, j := range q.jobs {
+		if j.status == jobReady || j.status == jobWaiting {
+			open++
+		}
+	}
+	msg := ""
+	if j := q.running; j != nil {
+		pct := 0
+		if j.progress.Total > 0 {
+			pct = j.progress.Frame * 100 / j.progress.Total
+		}
+		msg = fmt.Sprintf("Export „%s“ läuft (%d %%)", j.name(), pct)
+	}
+	switch {
+	case open == 0:
+	case msg != "":
+		msg += fmt.Sprintf(", %s %s", plural(open, "weiterer Auftrag wartet", "weitere Aufträge warten"), "in der Render-Warteschlange")
+	default:
+		msg = fmt.Sprintf("%s in der Render-Warteschlange", plural(open, "Auftrag wartet", "Aufträge warten"))
+	}
+	return msg
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// wait blocks until export goroutines have ended (partial output removed) or timeout.
+func (q *queue) wait(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		q.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 

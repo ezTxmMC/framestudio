@@ -89,3 +89,26 @@ func TestEditCoalesced(t *testing.T) {
 		t.Fatalf("one undo should revert the whole drag, opacity=%v", c.Opacity)
 	}
 }
+
+func TestFrameRateChangeMovesPlayheadAndRange(t *testing.T) {
+	p := model.NewProject("fps")
+	_ = p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "A", 0, 500))
+	s := New(p)
+	s.Playhead, s.In, s.Out = 50, 25, 75
+	check := func(when string, ph, in, out int) {
+		t.Helper()
+		if s.Playhead != ph || s.In != in || s.Out != out {
+			t.Fatalf("%s: playhead %d in %d out %d, want %d %d %d", when, s.Playhead, s.In, s.Out, ph, in, out)
+		}
+	}
+	_ = s.Edit("Bildrate ändern", func(p *model.Project) error {
+		p.Settings.FPS = 50
+		p.Tracks[0].Clips[0].Length = 1000
+		return nil
+	})
+	check("edit", 100, 50, 150)
+	s.Undo()
+	check("undo", 50, 25, 75)
+	s.Redo()
+	check("redo", 100, 50, 150)
+}

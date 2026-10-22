@@ -43,6 +43,7 @@ type Options struct {
 	Quality      Quality
 	From, To     int // frame range, To exclusive; To <= From means whole timeline
 	IncludeAudio bool
+	AllowOffline bool // render even if media in the range is missing (placeholders, no sound)
 }
 
 // Preset is a named starting point shown on the deliver page.
@@ -190,7 +191,73 @@ func Validate(p *model.Project, o Options) error {
 			return errors.New("Im Bereich gibt es keine hörbaren Audio-Clips. Prüfe Stummschaltung und Solo der Audiospuren.")
 		}
 	}
-	return checkOutput(o)
+	if err := checkOutput(o); err != nil {
+		return err
+	}
+	if off := OfflineMedia(p, o); len(off) > 0 && !o.AllowOffline {
+		return &OfflineError{Media: off}
+	}
+	return nil
+}
+
+// OfflineError reports media that the export range uses but that cannot be read. Set
+// Options.AllowOffline to render anyway.
+type OfflineError struct {
+	Media []model.MediaItem
+}
+
+func (e *OfflineError) Error() string {
+	names := ""
+	for i, m := range e.Media {
+		if i == 3 {
+			names += fmt.Sprintf(" und %d weitere", len(e.Media)-3)
+			break
+		}
+		if i > 0 {
+			names += ", "
+		}
+		names += m.Name
+	}
+	what := "1 Medium im Bereich ist offline"
+	if len(e.Media) > 1 {
+		what = fmt.Sprintf("%d Medien im Bereich sind offline", len(e.Media))
+	}
+	return what + " (" + names + "). Verknüpfe sie unter Medien › „Neu verknüpfen“ oder exportiere trotzdem."
+}
+
+// OfflineMedia lists the media items whose files are missing but that the export of o
+// would show or play: clips in the range on visible video tracks and, if sound is
+// exported, audible clips on audio tracks. Each item appears once, in project order.
+func OfflineMedia(p *model.Project, o Options) []model.MediaItem {
+	if p == nil {
+		return nil
+	}
+	from, to := Range(p, o)
+	used := map[string]bool{}
+	if o.Format != FormatWAV {
+		for _, t := range p.Tracks {
+			if t.Kind != model.TrackVideo || t.Hidden {
+				continue
+			}
+			for _, c := range t.Clips {
+				if c.MediaID != "" && c.End() > from && c.Start < to {
+					used[c.MediaID] = true
+				}
+			}
+		}
+	}
+	if o.Format == FormatWAV || (o.IncludeAudio && o.Format != FormatGIF && o.Format != FormatPNG) {
+		for _, part := range audioParts(p, from, to, nil) {
+			used[part.media.ID] = true
+		}
+	}
+	var out []model.MediaItem
+	for _, m := range p.Media {
+		if used[m.ID] && !fileExists(m) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // checkOutput verifies that the output folder exists and is writable.

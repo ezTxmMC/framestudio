@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/page"
 )
 
 // choice is the answer to "Änderungen speichern?".
@@ -89,7 +91,7 @@ func (sh *Shell) Save(p *project) error {
 }
 
 func (sh *Shell) saveTo(p *project, path string) error {
-	if err := store.Save(p.sess.Project, path); err != nil {
+	if err := sh.writeProject(p.sess.Project, path); err != nil {
 		return err
 	}
 	p.savedAt = sh.now()
@@ -99,6 +101,33 @@ func (sh *Shell) saveTo(p *project, path string) error {
 	store.AddRecent(path)
 	sh.refreshChrome()
 	return nil
+}
+
+// writeProject writes proj to path on the UI thread, after any autosave of that file
+// that is writing right now; older autosaves that have not written yet are skipped.
+func (sh *Shell) writeProject(proj *model.Project, path string) error {
+	_, err := sh.saves.write(path, sh.saves.next(), func() error { return store.Save(proj, path) })
+	return err
+}
+
+// discardAutosaves undoes what autosave wrote to p's file after mark (a sequence number
+// taken when the save prompt opened) and blocks older pending autosaves, so "Verwerfen"
+// really leaves the file as it was.
+func (sh *Shell) discardAutosaves(p *project, mark uint64) {
+	path := p.sess.Path
+	if path == "" {
+		return
+	}
+	sh.saves.block(path) // waits for a write in progress
+	for _, j := range p.autosaves {
+		if j.path == path && j.landed > mark {
+			if err := sh.saves.restore(path, j.prev, j.existed); err != nil {
+				fyne.LogError("Automatisch gespeicherte Änderungen verwerfen", err)
+			}
+			break // the earliest such write holds the state before the prompt
+		}
+	}
+	p.autosaves = nil
 }
 
 // saveActive is the "Speichern" command.
@@ -157,8 +186,27 @@ func (sh *Shell) closeActive() {
 	}
 }
 
-// Quit closes the window, asking once about all unsaved projects.
+// Quit closes the window, asking first about running exports and then once about all
+// unsaved projects.
 func (sh *Shell) Quit() {
+	var busy []string
+	for _, p := range sh.projects {
+		if b := projectBusy(p); b != "" {
+			if len(sh.projects) > 1 {
+				b = "„" + p.sess.Project.Name + "“: " + b
+			}
+			busy = append(busy, b)
+		}
+	}
+	if len(busy) > 0 {
+		sh.confirmBusy(strings.Join(busy, "\n")+".\nAbbrechen und beenden?", "Abbrechen und beenden", sh.quitSaved)
+		return
+	}
+	sh.quitSaved()
+}
+
+// quitSaved quits, asking once about all unsaved projects.
+func (sh *Shell) quitSaved() {
 	dirty := dirtyProjects(sh.projects)
 	if len(dirty) == 0 {
 		sh.shutdown()
@@ -174,7 +222,13 @@ func (sh *Shell) Quit() {
 		msg = fmt.Sprintf("%d Projekte haben ungespeicherte Änderungen: %s.", len(dirty), strings.Join(names, ", "))
 		label = "Alle speichern"
 	}
+	mark := sh.saves.next()
 	sh.askSave(msg, label, func(c choice) {
+		if c == choiceDiscard {
+			for _, p := range dirty {
+				sh.discardAutosaves(p, mark)
+			}
+		}
 		save, quit := resolveClose(true, c)
 		if save {
 			for _, p := range dirty {
@@ -190,18 +244,37 @@ func (sh *Shell) Quit() {
 	})
 }
 
-// shutdown releases all projects and closes the window.
+// shutdown releases all projects, gives cancelled exports and previews a moment to
+// remove their partial files and players, and closes the window.
 func (sh *Shell) shutdown() {
+	var waiters []page.Waiter
 	for _, p := range slices.Clone(sh.projects) {
+		for _, pg := range p.pages {
+			if w, ok := pg.(page.Waiter); ok {
+				waiters = append(waiters, w)
+			}
+		}
 		sh.closeNowQuiet(p)
+	}
+	deadline := time.Now().Add(shutdownWait)
+	for _, w := range waiters {
+		w.Wait(max(time.Until(deadline), 0))
 	}
 	sh.closeWindow()
 }
+
+// shutdownWait bounds how long quitting waits for background cleanup.
+const shutdownWait = 3 * time.Second
 
 // closeNowQuiet releases p without switching tabs or showing the manager.
 func (sh *Shell) closeNowQuiet(p *project) {
 	for _, pg := range p.pages {
 		pg.Close()
+	}
+	if sh.findOtherUser(p) == nil {
+		for _, m := range p.sess.Project.Media {
+			sh.cache.Cancel(m.ID) // stop its thumbnail and waveform decodes
+		}
 	}
 	p.stopPlay()
 	p.unsub()
@@ -211,20 +284,50 @@ func (sh *Shell) closeNowQuiet(p *project) {
 	}
 }
 
+// findOtherUser returns another open project that shares media IDs with p (a duplicate
+// opened twice), whose decodes must keep running.
+func (sh *Shell) findOtherUser(p *project) *project {
+	ids := map[string]bool{}
+	for _, m := range p.sess.Project.Media {
+		ids[m.ID] = true
+	}
+	for _, q := range sh.projects {
+		if q == p {
+			continue
+		}
+		for _, m := range q.sess.Project.Media {
+			if ids[m.ID] {
+				return q
+			}
+		}
+	}
+	return nil
+}
+
 // autosaveJob is one background save: a snapshot cloned on the UI thread.
 type autosaveJob struct {
 	proj *project
 	snap *model.Project
 	path string
 	rev  int
-	err  error
+	seq  uint64 // when the snapshot was taken
+	log  *saveLog
+
+	// Set by the writer under the file lock.
+	wrote   bool
+	landed  uint64 // sequence number when the write finished
+	prev    []byte // file content before the write
+	existed bool
+	err     error
 }
 
 // StartAutosave writes dirty projects that have a file every interval; the returned
 // func stops it.
 func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 	quit := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -242,7 +345,13 @@ func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 			}
 		}
 	}()
-	return func() { close(quit) }
+	return func() {
+		close(quit)
+		select { // let a write in progress finish its rename
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}
 }
 
 // autosaveJobs snapshots the projects to autosave. UI thread only.
@@ -250,16 +359,31 @@ func (sh *Shell) autosaveJobs() []*autosaveJob {
 	var jobs []*autosaveJob
 	for _, p := range sh.projects {
 		if p.sess.Dirty && p.sess.Path != "" {
-			jobs = append(jobs, &autosaveJob{proj: p, snap: p.sess.Project.Clone(), path: p.sess.Path, rev: p.rev})
+			j := &autosaveJob{proj: p, snap: p.sess.Project.Clone(), path: p.sess.Path, rev: p.rev,
+				seq: sh.saves.next(), log: sh.saves}
+			jobs = append(jobs, j)
+			p.autosaves = append(p.autosaves, j)
+			if n := len(p.autosaves); n > 4 {
+				p.autosaves = p.autosaves[n-4:]
+			}
 		}
 	}
 	return jobs
 }
 
-// runAutosave writes the snapshots; safe off the UI thread.
+// runAutosave writes the snapshots, skipping any that a newer save made obsolete; safe
+// off the UI thread.
 func runAutosave(jobs []*autosaveJob) {
 	for _, j := range jobs {
-		j.err = store.Save(j.snap, j.path)
+		_, j.err = j.log.write(j.path, j.seq, func() error {
+			prev, err := os.ReadFile(j.path)
+			j.prev, j.existed = prev, err == nil
+			if err := store.Save(j.snap, j.path); err != nil {
+				return err
+			}
+			j.wrote, j.landed = true, j.log.next()
+			return nil
+		})
 	}
 }
 
@@ -276,7 +400,7 @@ func (sh *Shell) finishAutosave(jobs []*autosaveJob) {
 			continue
 		}
 		p.saveErr = ""
-		if p.rev == j.rev {
+		if j.wrote && p.rev == j.rev && p.sess.Dirty {
 			p.savedAt = sh.now()
 			p.autosaved = true
 			p.sess.MarkSaved(j.path)

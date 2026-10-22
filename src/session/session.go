@@ -3,6 +3,7 @@
 package session
 
 import (
+	"math"
 	"time"
 
 	"framestudio-proto/src/model"
@@ -82,6 +83,7 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 		s.Project = before
 		return err
 	}
+	s.rescaleTime(before.Settings.FPS)
 	s.undo = append(s.undo, snapshot{label: label, at: time.Now(), project: before})
 	if len(s.undo) > maxUndo {
 		s.undo = s.undo[1:]
@@ -112,6 +114,7 @@ func (s *Session) EditCoalesced(key, label string, fn func(p *model.Project) err
 		s.Project = before
 		return err
 	}
+	s.rescaleTime(before.Settings.FPS)
 	s.undo[n-1].at = time.Now()
 	s.redo = nil
 	s.Project.Modified = time.Now()
@@ -146,7 +149,9 @@ func (s *Session) Undo() {
 	last := s.undo[len(s.undo)-1]
 	s.undo = s.undo[:len(s.undo)-1]
 	s.redo = append(s.redo, snapshot{label: last.label, project: s.Project})
+	old := s.Project.Settings.FPS
 	s.Project = last.project
+	s.rescaleTime(old)
 	s.Dirty = true
 	s.fixSelection()
 	s.clampPlayhead()
@@ -160,7 +165,9 @@ func (s *Session) Redo() {
 	next := s.redo[len(s.redo)-1]
 	s.redo = s.redo[:len(s.redo)-1]
 	s.undo = append(s.undo, snapshot{label: next.label, project: s.Project})
+	old := s.Project.Settings.FPS
 	s.Project = next.project
+	s.rescaleTime(old)
 	s.Dirty = true
 	s.fixSelection()
 	s.clampPlayhead()
@@ -180,6 +187,18 @@ func (s *Session) Rename(name string) {
 		p.Name = name
 		return nil
 	})
+}
+
+// rescaleTime keeps playhead and In/Out at the same time in seconds when the project
+// frame rate changed from old (by an edit, undo or redo).
+func (s *Session) rescaleTime(old int) {
+	fps := s.Project.Settings.FPS
+	if old <= 0 || fps <= 0 || old == fps {
+		return
+	}
+	conv := func(f int) int { return int(math.Round(float64(f) * float64(fps) / float64(old))) }
+	s.Playhead, s.In, s.Out = conv(s.Playhead), conv(s.In), conv(s.Out)
+	s.Notify(ChangePlayhead)
 }
 
 func (s *Session) fixSelection() {

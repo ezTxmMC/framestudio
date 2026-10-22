@@ -102,7 +102,12 @@ type Clip struct {
 	Volume   float64  `json:"volume"`  // linear gain, 1 = unity
 	FadeIn   int      `json:"fadeIn,omitempty"`
 	FadeOut  int      `json:"fadeOut,omitempty"`
-	Fit      Fit      `json:"fit,omitempty"`
+	// FadeInFrom and FadeOutTo are the gain levels (0..1) where the fade ramps begin and end.
+	// They are non-zero only on the parts of a clip that was split inside a fade, so the
+	// curve stays continuous across the cut. FadeIn may then exceed Length (partial ramp).
+	FadeInFrom float64 `json:"fadeInFrom,omitempty"`
+	FadeOutTo  float64 `json:"fadeOutTo,omitempty"`
+	Fit        Fit     `json:"fit,omitempty"`
 }
 
 func (c Clip) End() int { return c.Start + c.Length }
@@ -114,10 +119,10 @@ func (c Clip) Contains(f int) bool { return f >= c.Start && f < c.End() }
 func (c Clip) FadeFactor(f int) float64 {
 	k := 1.0
 	if c.FadeIn > 0 && f-c.Start < c.FadeIn {
-		k = float64(f-c.Start) / float64(c.FadeIn)
+		k = c.FadeInFrom + (1-c.FadeInFrom)*float64(f-c.Start)/float64(c.FadeIn)
 	}
 	if c.FadeOut > 0 && c.End()-f <= c.FadeOut {
-		if o := float64(c.End()-f-1) / float64(c.FadeOut); o < k {
+		if o := c.FadeOutTo + (1-c.FadeOutTo)*float64(c.End()-f-1)/float64(c.FadeOut); o < k {
 			k = o
 		}
 	}

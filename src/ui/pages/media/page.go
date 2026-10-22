@@ -431,6 +431,10 @@ func (p *Page) confirmRemove(m model.MediaItem) {
 
 func (p *Page) remove(id string) {
 	err := p.ctx.Session.Edit("Medium entfernen", func(pr *model.Project) error { return pr.RemoveMedia(id) })
+	if errors.Is(err, model.ErrLocked) {
+		p.showErr(errors.New("Medium konnte nicht entfernt werden: Clips davon liegen auf einer gesperrten Spur. Spur entsperren und erneut versuchen"))
+		return
+	}
 	if err != nil {
 		p.showErr(fmt.Errorf("Medium konnte nicht entfernt werden: %w", err))
 		return

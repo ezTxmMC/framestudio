@@ -277,11 +277,17 @@ func (in *clipEditor) timingSection(c *model.Clip) fyne.CanvasObject {
 			err = errors.New("Die Dauer muss mindestens 1 Frame betragen")
 		}
 		if err == nil {
-			err = in.timing("Clipdauer ändern", func(p *model.Project, c *model.Clip, _ string) error {
+			err = in.timing("Clipdauer ändern", func(p *model.Project, c *model.Clip, track string) error {
 				if m, ok := p.MediaByID(c.MediaID); ok && m.Duration > 0 {
 					if avail := p.MediaFrames(*m) - c.SourceIn; f > avail {
 						return fmt.Errorf("Das Quellmaterial reicht nur für %s. Eine kürzere Dauer eingeben", p.Timecode(avail))
 					}
+				}
+				// Like dragging the edge, the length stops at the next clip instead of
+				// overwriting it.
+				if next, ok := nextClipStart(p, track, c); ok && c.Start+f > next {
+					return fmt.Errorf("Der nächste Clip beginnt bei %s. Höchstens %s eingeben oder den Clip zuerst verschieben",
+						p.Timecode(next), p.Timecode(next-c.Start))
 				}
 				return p.TrimClip(c.ID, c.Start, f)
 			})
@@ -698,4 +704,19 @@ func parseHex(s string) (model.RGBA, error) {
 		return model.RGBA{}, errors.New("Farbe als Hexwert angeben, z.B. #3F73B5")
 	}
 	return model.RGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 255}, nil
+}
+
+// nextClipStart returns the start of the first clip after c on the track with ID track.
+func nextClipStart(p *model.Project, track string, c *model.Clip) (int, bool) {
+	t, _ := p.Track(track)
+	if t == nil {
+		return 0, false
+	}
+	next, ok := 0, false
+	for _, o := range t.Clips {
+		if o.ID != c.ID && o.Start >= c.End() && (!ok || o.Start < next) {
+			next, ok = o.Start, true
+		}
+	}
+	return next, ok
 }
