@@ -456,7 +456,7 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 	}
 	if c.Kind == model.KindTitle && avail > 12 && bodyH > 16 {
 		it := fyne.TextStyle{Italic: true}
-		if s := r.fit(c.Title.Text, 12, it, avail); s != "" {
+		if s := r.fit(strings.Join(strings.Fields(c.Title.Text), " "), 12, it, avail); s != "" {
 			objs = append(objs, r.text(s, alpha(studiotheme.Text, 0xC8), 12, it, tx, bodyTop+(bodyH-15.6)/2))
 		}
 	}

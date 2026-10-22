@@ -332,7 +332,7 @@ func TestLaneTapSelectsAndClipPanelEdits(t *testing.T) {
 	if h.s.SelectedClip != "" || h.s.Playhead < tr.Clips[0].End()+45 {
 		t.Errorf("empty tap: clip %q playhead %d", h.s.SelectedClip, h.s.Playhead)
 	}
-	if h.p.clip.form.Visible() {
+	if h.p.clip.scroll.Visible() {
 		t.Error("clip panel should show its empty state")
 	}
 }

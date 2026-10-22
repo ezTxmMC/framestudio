@@ -44,6 +44,7 @@ func Run(a fyne.App, files []string) {
 	stop := sh.StartAutosave(autosaveInterval)
 	w.ShowAndRun()
 	stop()
+	sh.cache.Close() // stops background ffmpeg decoders
 }
 
 // pageDef describes a workspace page in page bar order.

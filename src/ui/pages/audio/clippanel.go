@@ -31,7 +31,7 @@ type clipPanel struct {
 	vol, fadeIn, fadeOut    *widget.Slider
 	volVal, inVal, outVal   *canvas.Text
 	hint                    *canvas.Text
-	form, empty             fyne.CanvasObject
+	form, empty, scroll     fyne.CanvasObject
 	obj                     fyne.CanvasObject
 }
 
@@ -78,7 +78,8 @@ func newClipPanel(pg *Page) *clipPanel {
 	msg := canvas.NewText("Audioclip in den Spuren anklicken, um ihn zu bearbeiten.", studiotheme.Muted)
 	msg.TextSize = 12
 	c.empty = container.NewCenter(msg)
-	c.obj = container.NewStack(container.NewVScroll(c.form), c.empty)
+	c.scroll = container.NewVScroll(c.form)
+	c.obj = container.NewStack(c.scroll, c.empty)
 	return c
 }
 
@@ -151,7 +152,7 @@ func (c *clipPanel) update() {
 	cl, ti, _ := s.Project.Clip(s.SelectedClip)
 	if cl == nil || cl.Kind != model.KindAudio {
 		c.id = ""
-		c.form.Hide()
+		c.scroll.Hide()
 		c.empty.Show()
 		return
 	}
@@ -159,7 +160,7 @@ func (c *clipPanel) update() {
 	defer func() { c.updating = false }()
 	c.id = cl.ID
 	c.empty.Hide()
-	c.form.Show()
+	c.scroll.Show()
 	p := s.Project
 	fps := p.Settings.FPS
 
