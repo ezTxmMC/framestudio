@@ -6,52 +6,281 @@
 package media
 
 import (
+	"bufio"
+	"context"
 	"errors"
+	"fmt"
 	"image"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"golang.org/x/image/draw"
 
 	"framestudio-proto/src/model"
 )
 
 // FFmpegAvailable reports whether ffmpeg and ffprobe are on PATH.
-func FFmpegAvailable() bool { return false }
+func FFmpegAvailable() bool {
+	lookTools()
+	return tools.ffmpeg != "" && tools.ffprobe != ""
+}
 
 // KindForPath classifies a file by extension; ok is false for unsupported files.
-func KindForPath(path string) (kind model.ClipKind, ok bool) { return "", false }
+func KindForPath(path string) (kind model.ClipKind, ok bool) {
+	kind, ok = extKinds[strings.ToLower(filepath.Ext(path))]
+	return kind, ok
+}
 
 // Extensions lists supported file extensions (lower case, with dot) for file dialogs.
-func Extensions() []string { return nil }
+func Extensions() []string { return append([]string(nil), extOrder...) }
 
 // Probe inspects a file and returns a MediaItem with a fresh ID, name, kind, size, duration.
-func Probe(path string) (model.MediaItem, error) { return model.MediaItem{}, errors.New("TODO") }
+func Probe(path string) (model.MediaItem, error) { return probeFile(path) }
+
+// Cache budgets in bytes.
+const (
+	stillBudget = 256 << 20
+	frameBudget = 512 << 20
+	thumbBudget = 64 << 20
+	waveBudget  = 64 << 20
+)
 
 // Cache decodes and memoises media. The zero value is not usable; call NewCache.
-type Cache struct{}
+type Cache struct {
+	stills, frames, thumbs, waves *lru
+	flight                        flight
 
-func NewCache() *Cache { return &Cache{} }
+	pmu         sync.Mutex
+	prefetchers []*prefetcher
+	closed      bool
+	wg          sync.WaitGroup
+
+	hits, misses atomic.Int64 // frame cache statistics
+}
+
+func NewCache() *Cache {
+	return &Cache{
+		stills: newLRU(stillBudget),
+		frames: newLRU(frameBudget),
+		thumbs: newLRU(thumbBudget),
+		waves:  newLRU(waveBudget),
+	}
+}
 
 // Image returns a still image scaled to fit within maxW x maxH (aspect preserved).
 func (c *Cache) Image(m model.MediaItem, maxW, maxH int) (image.Image, error) {
-	return nil, errors.New("TODO")
+	if m.Kind != model.KindImage {
+		return nil, fmt.Errorf("„%s“ ist kein Standbild", m.Name)
+	}
+	full, err := c.fullImage(m)
+	if err != nil {
+		return nil, err
+	}
+	b := full.Bounds()
+	w, h := fitSize(b.Dx(), b.Dy(), maxW, maxH)
+	if w == b.Dx() && h == b.Dy() {
+		return full, nil
+	}
+	key := fmt.Sprintf("img|%s|%s|%dx%d", m.ID, m.Path, w, h)
+	if v, ok := c.stills.get(key); ok {
+		return v.(image.Image), nil
+	}
+	v, err := c.flight.do(key, func() (any, error) {
+		dst := image.NewRGBA(image.Rect(0, 0, w, h))
+		draw.CatmullRom.Scale(dst, dst.Bounds(), full, b, draw.Src, nil)
+		c.stills.put(key, m.ID, dst, int64(w*h*4))
+		return dst, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(image.Image), nil
+}
+
+// fullImage decodes a still once at full resolution.
+func (c *Cache) fullImage(m model.MediaItem) (image.Image, error) {
+	key := "full|" + m.ID + "|" + m.Path
+	if v, ok := c.stills.get(key); ok {
+		return v.(image.Image), nil
+	}
+	v, err := c.flight.do(key, func() (any, error) {
+		f, err := os.Open(m.Path)
+		if err != nil {
+			return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
+		}
+		defer f.Close()
+		img, _, err := image.Decode(bufio.NewReader(f))
+		if err != nil {
+			return nil, fmt.Errorf("„%s“ ist kein lesbares Bild: %v", m.Name, err)
+		}
+		b := img.Bounds()
+		c.stills.put(key, m.ID, img, int64(b.Dx()*b.Dy()*4))
+		return img, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(image.Image), nil
 }
 
 // VideoFrame returns source frame n (counted at the given project fps) of a video, scaled to fit w x h.
 func (c *Cache) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
-	return nil, errors.New("TODO")
+	switch m.Kind {
+	case model.KindImage:
+		return c.Image(m, w, h)
+	case model.KindAudio:
+		return nil, fmt.Errorf("„%s“ hat kein Bild", m.Name)
+	}
+	if fps <= 0 {
+		fps = 25
+	}
+	w, h = fitSize(m.Width, m.Height, w, h)
+	if w <= 0 || h <= 0 {
+		return nil, errors.New("Bildgröße für die Vorschau ist ungültig")
+	}
+	n = clampFrame(m, n, fps)
+	s := stream{id: m.ID, path: m.Path, fps: fps, w: w, h: h}
+	key := s.frameKey(n)
+	if v, ok := c.frames.get(key); ok {
+		c.hits.Add(1)
+		return v.(image.Image), nil
+	}
+	c.misses.Add(1)
+	if _, err := os.Stat(m.Path); err != nil {
+		return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
+	}
+	p, err := c.prefetcherFor(m, s, n)
+	if err != nil {
+		return nil, err
+	}
+	img, err := p.wait(n)
+	if err != nil || img != nil {
+		return img, err
+	}
+	one, err := decodeOne(m, seconds(n, fps), w, h)
+	if err != nil {
+		return nil, err
+	}
+	c.frames.put(key, m.ID, one, int64(w*h*4))
+	return one, nil
 }
 
 // Thumbnail returns a poster image for the media pool: the still, the first video frame,
 // or a rendered waveform for audio.
 func (c *Cache) Thumbnail(m model.MediaItem, w, h int) (image.Image, error) {
-	return nil, errors.New("TODO")
+	if w <= 0 || h <= 0 {
+		return nil, errors.New("Vorschaugröße ist ungültig")
+	}
+	if m.Kind == model.KindImage {
+		return c.Image(m, w, h)
+	}
+	key := fmt.Sprintf("th|%s|%s|%dx%d", m.ID, m.Path, w, h)
+	if v, ok := c.thumbs.get(key); ok {
+		return v.(image.Image), nil
+	}
+	v, err := c.flight.do(key, func() (any, error) {
+		var img image.Image
+		var err error
+		if m.Kind == model.KindAudio {
+			var peaks []float32
+			if peaks, err = c.Waveform(m, w); err == nil {
+				img = drawWaveform(peaks, w, h)
+			}
+		} else {
+			img, err = c.posterFrame(m, w, h)
+		}
+		if err != nil {
+			return nil, err
+		}
+		b := img.Bounds()
+		c.thumbs.put(key, m.ID, img, int64(b.Dx()*b.Dy()*4))
+		return img, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(image.Image), nil
+}
+
+func (c *Cache) posterFrame(m model.MediaItem, w, h int) (image.Image, error) {
+	if _, err := os.Stat(m.Path); err != nil {
+		return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
+	}
+	w, h = fitSize(m.Width, m.Height, w, h)
+	t := m.Duration.Seconds() / 10
+	img, err := decodeOne(m, t, w, h)
+	if err != nil && t > 0 {
+		img, err = decodeOne(m, 0, w, h)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return img, nil
 }
 
 // Waveform returns peak amplitudes 0..1 across the whole file in the given number of buckets.
 func (c *Cache) Waveform(m model.MediaItem, buckets int) ([]float32, error) {
-	return nil, errors.New("TODO")
+	if buckets <= 0 {
+		return nil, errors.New("Anzahl der Wellenform-Abschnitte muss größer als 0 sein")
+	}
+	if m.Kind == model.KindImage {
+		return nil, fmt.Errorf("„%s“ hat keinen Ton", m.Name)
+	}
+	peaks, err := c.peaks(m)
+	if err != nil {
+		return nil, err
+	}
+	return resamplePeaks(peaks, buckets), nil
+}
+
+// peaks returns the cached full-resolution peak envelope of a file.
+func (c *Cache) peaks(m model.MediaItem) ([]float32, error) {
+	key := "wave|" + m.ID + "|" + m.Path
+	if v, ok := c.waves.get(key); ok {
+		return v.([]float32), nil
+	}
+	v, err := c.flight.do(key, func() (any, error) {
+		if _, err := os.Stat(m.Path); err != nil {
+			return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
+		}
+		bin, err := ffmpegPath()
+		if err != nil {
+			return nil, err
+		}
+		p, err := readPeaks(context.Background(), bin, m)
+		if err != nil {
+			return nil, err
+		}
+		c.waves.put(key, m.ID, p, int64(len(p)*4))
+		return p, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]float32), nil
 }
 
 // Invalidate drops all cached data for a media ID (e.g. after relinking).
-func (c *Cache) Invalidate(mediaID string) {}
+func (c *Cache) Invalidate(mediaID string) {
+	c.stopPrefetch(mediaID)
+	for _, l := range []*lru{c.stills, c.frames, c.thumbs, c.waves} {
+		l.dropOwner(mediaID)
+	}
+}
+
+// Close stops all background decoders and waits for their ffmpeg processes to exit.
+// The cache keeps serving cached data but starts no new decoders.
+func (c *Cache) Close() {
+	c.pmu.Lock()
+	c.closed = true
+	c.pmu.Unlock()
+	c.stopPrefetch("")
+	c.wg.Wait()
+}
 
 // FrameReader decodes consecutive video frames, used by export.
 type FrameReader interface {
@@ -61,5 +290,38 @@ type FrameReader interface {
 
 // OpenVideo starts sequential decoding at source frame n, resampled to fps and scaled to w x h.
 func OpenVideo(m model.MediaItem, n, fps, w, h int) (FrameReader, error) {
-	return nil, errors.New("TODO")
+	if m.Kind != model.KindVideo {
+		return nil, fmt.Errorf("„%s“ ist kein Video", m.Name)
+	}
+	bin, err := ffmpegPath()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(m.Path); err != nil {
+		return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
+	}
+	if fps <= 0 {
+		fps = 25
+	}
+	if n < 0 {
+		n = 0
+	}
+	w, h = fitSize(m.Width, m.Height, w, h)
+	if w <= 0 || h <= 0 {
+		return nil, errors.New("Ausgabegröße ist ungültig")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stderr := &tailBuffer{}
+	cmd := exec.CommandContext(ctx, bin, videoArgs(m.Path, seconds(n, fps), fps, w, h, 0)...)
+	cmd.Stderr = stderr
+	stdout, err := cmd.StdoutPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		cancel()
+		return nil, decodeError(m, "", err)
+	}
+	return &frameReader{cmd: cmd, cancel: cancel, r: bufio.NewReaderSize(stdout, 1<<20),
+		stderr: stderr, m: m, w: w, h: h}, nil
 }
