@@ -488,6 +488,13 @@ func Forget(w fyne.Window) {
 	delete(saved, w)
 	delete(wish, w)
 	mu.Unlock()
+	watchMu.Lock()
+	for vp, t := range watchers {
+		if t.w == w {
+			delete(watchers, vp)
+		}
+	}
+	watchMu.Unlock()
 }
 
 // OnChange registers fn for monitor hot-plug events. fn runs on the UI (main) thread.
