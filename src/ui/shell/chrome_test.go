@@ -279,3 +279,43 @@ func TestTopAreaScreenshots(t *testing.T) {
 		})
 	}
 }
+
+// TestChromeScreenshotsInt writes /tmp/fs-int-chrome-{mac,win,system,fullscreen,inactive}.png
+// (FS_SCREENSHOT=1, test driver only).
+func TestChromeScreenshotsInt(t *testing.T) {
+	if os.Getenv("FS_SCREENSHOT") == "" {
+		t.Skip("set FS_SCREENSHOT=1")
+	}
+	for _, c := range []struct {
+		name   string
+		custom bool
+		style  string
+		state  *chrome.State
+	}{
+		{"mac", true, "mac", nil}, {"win", true, "win", nil}, {"system", false, "mac", nil},
+		{"fullscreen", true, "mac", &chrome.State{Focused: true, Fullscreen: true}},
+		{"inactive", true, "mac", &chrome.State{Focused: false}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fk := winchrome.UseFake(t)
+			fk.CanChrome = c.custom
+			a, q := newR3App(t)
+			_ = settings.Update(func(s *settings.Settings) { s.Display.WindowButtons = c.style })
+			sh, w := buildShell(t, a, q)
+			sh.decorate()
+			sh.Start([]string{saveSample(t, "Schnittprojekt", 1920, 1080, 25, 100)})
+			w.Resize(fyne.NewSize(1440, 900))
+			if c.state != nil {
+				fk.SetState(w, *c.state)
+			}
+			f, err := os.Create("/tmp/fs-int-chrome-" + c.name + ".png")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			if err := png.Encode(f, w.Canvas().Capture()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

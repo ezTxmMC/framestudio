@@ -99,6 +99,7 @@ func OnClose(w fyne.Window, fn func()) {
 	mu.Lock()
 	entry(w).close = fn
 	mu.Unlock()
+	chrome.OnClose(w, fn)
 }
 
 // OnFullscreen sets how the green button puts w fullscreen and back.
@@ -113,6 +114,7 @@ func Forget(w fyne.Window) {
 	mu.Lock()
 	delete(handlers, w)
 	mu.Unlock()
+	chrome.OnClose(w, nil)
 }
 
 func handlerOf(w fyne.Window) handler {
@@ -143,11 +145,7 @@ func (System) SetFullscreen(w fyne.Window, on bool) {
 }
 
 func (System) Close(w fyne.Window) {
-	if h := handlerOf(w); h.close != nil {
-		h.close()
-		return
-	}
-	w.Close()
+	chrome.RequestClose(w)
 }
 
 func (System) State(w fyne.Window) chrome.State { return chrome.State(display.Current(w)) }
@@ -177,15 +175,9 @@ func Build(w fyne.Window, o chrome.Options, p Parts, body fyne.CanvasObject) (fy
 		o.Backend = Sys
 	}
 	c := &Chrome{Bar: chrome.NewTitlebar(w, o, p.Leading, p.Center, p.Trailing)}
-	h := Height
-	if o.Compact {
-		h = CompactHeight
-	}
-	floor := canvas.NewRectangle(studiotheme.Gap)
-	floor.SetMinSize(fyne.NewSize(0, h))
 	line := canvas.NewRectangle(studiotheme.Border)
 	line.SetMinSize(fyne.NewSize(1, 1))
-	bar := container.NewBorder(nil, line, nil, nil, container.NewStack(floor, c.Bar))
+	bar := container.NewBorder(nil, line, nil, nil, c.Bar)
 	c.Frame = chrome.NewFrame(w, o.Backend, container.NewBorder(bar, nil, nil, nil, body))
 	return c.Frame, c
 }

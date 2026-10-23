@@ -2,6 +2,7 @@ package settingsui
 
 import (
 	"encoding/json"
+	"framestudio-proto/src/ui/winchrome"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -483,6 +484,7 @@ func TestScreenshot(t *testing.T) {
 	if os.Getenv("FS_SCREENSHOT") == "" {
 		t.Skip("set FS_SCREENSHOT to write /tmp/fs-r3-settings*.png")
 	}
+	winchrome.UseFake(t)
 	f := newFixture(t, "audio")
 	_ = settings.Update(func(s *settings.Settings) { s.Audio.LatencyMS = 40 })
 	capture(t, f.w.win, "/tmp/fs-r3-settings-audio.png")
@@ -491,6 +493,7 @@ func TestScreenshot(t *testing.T) {
 	Restart = func() {}
 	f.w.load(settings.Get())
 	capture(t, f.w.win, "/tmp/fs-r3-settings-display.png")
+	capture(t, f.w.win, "/tmp/fs-int-chrome-settings.png")
 	f.w.showCategory("monitors")
 	capture(t, f.w.win, "/tmp/fs-r3-settings-monitors.png")
 	f.w.search.SetText("spur")
