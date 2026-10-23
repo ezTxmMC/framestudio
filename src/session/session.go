@@ -30,11 +30,17 @@ type Session struct {
 	Playhead int
 	Playing  bool
 	Loop     bool
+	// Rate is the playback speed while playing: 1 normal, 2/4/8 fast forward,
+	// negative values play backwards (J/K/L shuttle).
+	Rate float64
 
 	// In and Out mark an optional range (export, loop playback). Out <= In means unset.
 	In, Out int
 
+	// SelectedClip is the primary selected clip (inspector, colour page). Selected holds
+	// every selected clip ID including the primary one, in selection order.
 	SelectedClip  string
+	Selected      []string
 	SelectedTrack string
 	SelectedMedia string
 
@@ -52,7 +58,7 @@ type snapshot struct {
 }
 
 func New(p *model.Project) *Session {
-	s := &Session{Project: p, listeners: map[int]func(Change){}}
+	s := &Session{Project: p, Rate: 1, listeners: map[int]func(Change){}}
 	if len(p.Tracks) > 0 {
 		s.SelectedTrack = p.Tracks[0].ID
 	}
@@ -202,9 +208,19 @@ func (s *Session) rescaleTime(old int) {
 }
 
 func (s *Session) fixSelection() {
+	kept := s.Selected[:0]
+	for _, id := range s.Selected {
+		if c, _, _ := s.Project.Clip(id); c != nil {
+			kept = append(kept, id)
+		}
+	}
+	s.Selected = kept
 	if s.SelectedClip != "" {
 		if c, _, _ := s.Project.Clip(s.SelectedClip); c == nil {
 			s.SelectedClip = ""
+			if n := len(s.Selected); n > 0 {
+				s.SelectedClip = s.Selected[n-1]
+			}
 		}
 	}
 	if s.SelectedTrack != "" {
@@ -245,15 +261,88 @@ func (s *Session) seek(f int) {
 	s.Notify(ChangePlayhead)
 }
 
+// SelectClip makes id the only selected clip ("" clears the selection).
 func (s *Session) SelectClip(id string) {
-	if s.SelectedClip == id {
+	if id == "" {
+		s.SelectClips(nil)
 		return
 	}
-	s.SelectedClip = id
-	if c, ti, _ := s.Project.Clip(id); c != nil {
+	s.SelectClips([]string{id})
+}
+
+// SelectClips replaces the selection; the last ID becomes the primary clip.
+func (s *Session) SelectClips(ids []string) {
+	var sel []string
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if c, _, _ := s.Project.Clip(id); c != nil && !seen[id] {
+			seen[id] = true
+			sel = append(sel, id)
+		}
+	}
+	primary := ""
+	if len(sel) > 0 {
+		primary = sel[len(sel)-1]
+	}
+	if primary == s.SelectedClip && equalIDs(sel, s.Selected) {
+		return
+	}
+	s.Selected = sel
+	s.SelectedClip = primary
+	if c, ti, _ := s.Project.Clip(primary); c != nil {
 		s.SelectedTrack = s.Project.Tracks[ti].ID
 	}
 	s.Notify(ChangeSelection)
+}
+
+// ToggleClip adds id to the selection or removes it (Ctrl+click).
+func (s *Session) ToggleClip(id string) {
+	if s.IsSelected(id) {
+		var rest []string
+		for _, x := range s.Selected {
+			if x != id {
+				rest = append(rest, x)
+			}
+		}
+		s.SelectClips(rest)
+		return
+	}
+	s.SelectClips(append(append([]string{}, s.Selected...), id))
+}
+
+func (s *Session) IsSelected(id string) bool {
+	for _, x := range s.Selected {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+// SelectAll selects every clip on unlocked tracks.
+func (s *Session) SelectAll() {
+	var ids []string
+	for _, t := range s.Project.Tracks {
+		if t.Locked {
+			continue
+		}
+		for _, c := range t.Clips {
+			ids = append(ids, c.ID)
+		}
+	}
+	s.SelectClips(ids)
+}
+
+func equalIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Session) SelectTrack(id string) {
@@ -283,26 +372,65 @@ func (s *Session) SetLoop(on bool) {
 	s.Notify(ChangePlayback)
 }
 
-// SetPlaying starts or stops playback. Starting at the end rewinds to the start (or In).
+// SetPlaying starts or stops normal-speed playback. Starting at the end rewinds to the start (or In).
 func (s *Session) SetPlaying(on bool) {
-	if on == s.Playing {
+	if !on {
+		if s.Playing {
+			s.Playing = false
+			s.Rate = 1
+			s.Notify(ChangePlayback)
+		}
 		return
 	}
-	if on {
-		end := s.playEnd()
-		if end <= 0 {
-			return
-		}
-		if s.Playhead >= end {
-			s.seek(s.playStart())
-		}
-		s.carry = 0
+	if s.Playing && s.Rate == 1 {
+		return
 	}
-	s.Playing = on
-	s.Notify(ChangePlayback)
+	s.play(1)
 }
 
 func (s *Session) TogglePlaying() { s.SetPlaying(!s.Playing) }
+
+// Shuttle implements J/K/L: dir > 0 plays forward and doubles the speed on repeated
+// presses (up to 8x), dir < 0 does the same backwards, dir == 0 stops.
+func (s *Session) Shuttle(dir int) {
+	switch {
+	case dir == 0:
+		s.SetPlaying(false)
+	case dir > 0 && s.Playing && s.Rate > 0:
+		s.setRate(math.Min(s.Rate*2, 8))
+	case dir < 0 && s.Playing && s.Rate < 0:
+		s.setRate(math.Max(s.Rate*2, -8))
+	case dir > 0:
+		s.play(1)
+	default:
+		s.play(-1)
+	}
+}
+
+func (s *Session) setRate(r float64) {
+	s.Rate = r
+	s.Notify(ChangePlayback)
+}
+
+func (s *Session) play(rate float64) {
+	start, end := s.playStart(), s.playEnd()
+	if end <= 0 {
+		return
+	}
+	if rate > 0 && s.Playhead >= end {
+		s.seek(start)
+	}
+	if rate < 0 && s.Playhead <= start {
+		if !s.Loop {
+			return
+		}
+		s.seek(end)
+	}
+	s.carry = 0
+	s.Rate = rate
+	s.Playing = true
+	s.Notify(ChangePlayback)
+}
 
 func (s *Session) playStart() int {
 	if s.HasRange() {
@@ -318,29 +446,44 @@ func (s *Session) playEnd() int {
 	return s.Project.Duration()
 }
 
-// Advance moves the playhead by real time dt while playing. Called by the playback clock.
+// Advance moves the playhead by real time dt (scaled by Rate) while playing.
+// Called by the playback clock.
 func (s *Session) Advance(dt time.Duration) {
 	if !s.Playing {
 		return
 	}
 	frame := s.Project.FrameDuration()
-	s.carry += dt
+	s.carry += time.Duration(float64(dt) * math.Abs(s.Rate))
 	n := int(s.carry / frame)
 	if n == 0 {
 		return
 	}
 	s.carry -= time.Duration(n) * frame
+	start, end := s.playStart(), s.playEnd()
+	looping := s.Loop && end > start
+	if s.Rate < 0 {
+		f := s.Playhead - n
+		if f < start {
+			if !looping {
+				s.seek(start)
+				s.Playing, s.Rate = false, 1
+				s.Notify(ChangePlayback)
+				return
+			}
+			f = end - (start-f)%(end-start)
+		}
+		s.seek(f)
+		return
+	}
 	f := s.Playhead + n
-	end := s.playEnd()
 	if f >= end {
-		if s.Loop && end > s.playStart() {
-			f = s.playStart() + (f-end)%(end-s.playStart())
-		} else {
+		if !looping {
 			s.seek(end)
-			s.Playing = false
+			s.Playing, s.Rate = false, 1
 			s.Notify(ChangePlayback)
 			return
 		}
+		f = start + (f-end)%(end-start)
 	}
 	s.seek(f)
 }

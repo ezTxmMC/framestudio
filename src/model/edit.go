@@ -403,3 +403,82 @@ func (p *Project) Validate() error {
 	}
 	return nil
 }
+
+// MoveClips moves a group of clips by dFrames and by dTrack tracks of the same kind
+// (positive = towards later tracks in Project.Tracks). The whole group is lifted first so
+// its members never overwrite each other; other clips at the targets are overwritten.
+func (p *Project) MoveClips(ids []string, dFrames, dTrack int) error {
+	type move struct {
+		clip Clip
+		to   string
+	}
+	var moves []move
+	for _, id := range ids {
+		c, ti, _ := p.Clip(id)
+		if c == nil {
+			return ErrNotFound
+		}
+		src := p.Tracks[ti]
+		if src.Locked {
+			return ErrLocked
+		}
+		same := p.TrackIndices(src.Kind)
+		pos := -1
+		for i, idx := range same {
+			if idx == ti {
+				pos = i
+			}
+		}
+		if pos+dTrack < 0 || pos+dTrack >= len(same) {
+			return ErrInvalidEdit
+		}
+		dst := p.Tracks[same[pos+dTrack]]
+		if dst.Locked {
+			return ErrLocked
+		}
+		if c.Start+dFrames < 0 {
+			return ErrInvalidEdit
+		}
+		m := *c
+		m.Start += dFrames
+		moves = append(moves, move{m, dst.ID})
+	}
+	for _, id := range ids {
+		_, ti, ci := p.Clip(id)
+		t := &p.Tracks[ti]
+		t.Clips = append(t.Clips[:ci], t.Clips[ci+1:]...)
+	}
+	for _, m := range moves {
+		if err := p.PlaceClip(m.to, m.clip); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteClips removes several clips; with ripple each track closes its gaps.
+func (p *Project) DeleteClips(ids []string, ripple bool) error {
+	type ref struct {
+		id    string
+		start int
+	}
+	var refs []ref
+	for _, id := range ids {
+		c, ti, _ := p.Clip(id)
+		if c == nil {
+			return ErrNotFound
+		}
+		if p.Tracks[ti].Locked {
+			return ErrLocked
+		}
+		refs = append(refs, ref{id, c.Start})
+	}
+	// right to left so ripple shifts never move a clip that is still to be deleted
+	sort.Slice(refs, func(i, j int) bool { return refs[i].start > refs[j].start })
+	for _, r := range refs {
+		if err := p.DeleteClip(r.id, ripple); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -112,3 +112,61 @@ func TestFrameRateChangeMovesPlayheadAndRange(t *testing.T) {
 	s.Redo()
 	check("redo", 100, 50, 150)
 }
+
+func TestMultiSelection(t *testing.T) {
+	s := newSession()
+	_ = s.Edit("B", func(p *model.Project) error {
+		return p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "B", 50, 20))
+	})
+	a, b := s.Project.Tracks[0].Clips[0].ID, s.Project.Tracks[0].Clips[1].ID
+	s.SelectClip(a)
+	s.ToggleClip(b)
+	if len(s.Selected) != 2 || s.SelectedClip != b || !s.IsSelected(a) {
+		t.Fatalf("toggle add failed: %v primary %s", s.Selected, s.SelectedClip)
+	}
+	s.ToggleClip(b)
+	if len(s.Selected) != 1 || s.SelectedClip != a {
+		t.Fatal("toggle remove should fall back to remaining clip")
+	}
+	s.SelectAll()
+	_ = s.Edit("del", func(p *model.Project) error { return p.DeleteClip(b, false) })
+	if len(s.Selected) != 1 || s.Selected[0] != a {
+		t.Fatalf("deleted clip must leave the selection: %v", s.Selected)
+	}
+	s.SelectClip("")
+	if len(s.Selected) != 0 || s.SelectedClip != "" {
+		t.Fatal("clear failed")
+	}
+}
+
+func TestShuttle(t *testing.T) {
+	s := newSession()
+	s.Seek(25)
+	s.Shuttle(1)
+	s.Shuttle(1)
+	if !s.Playing || s.Rate != 2 {
+		t.Fatalf("LL should be 2x, got %v", s.Rate)
+	}
+	s.Advance(200 * time.Millisecond) // 2x 5 frames
+	if s.Playhead != 35 {
+		t.Fatalf("playhead %d", s.Playhead)
+	}
+	s.Shuttle(-1)
+	if s.Rate != -1 {
+		t.Fatal("J while playing forward should reverse at 1x")
+	}
+	s.Advance(10 * time.Second)
+	if s.Playing || s.Playhead != 0 || s.Rate != 1 {
+		t.Fatalf("reverse should stop at start, ph=%d", s.Playhead)
+	}
+	s.Shuttle(-1)
+	if s.Playing {
+		t.Fatal("cannot play backwards from the start without loop")
+	}
+	s.Seek(10)
+	s.Shuttle(-1)
+	s.Shuttle(0)
+	if s.Playing || s.Rate != 1 {
+		t.Fatal("K should stop and reset the rate")
+	}
+}

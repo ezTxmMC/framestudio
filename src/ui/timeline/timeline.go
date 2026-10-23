@@ -19,6 +19,8 @@ type Tool int
 const (
 	ToolSelect Tool = iota // click selects/seeks, drag moves clips, drag edges trims
 	ToolBlade              // click splits the clip under the cursor
+	ToolRipple             // edge drags trim and shift later clips on the track
+	ToolRoll               // dragging a cut between two adjacent clips moves the edit point
 )
 
 // Timeline renders every track of the session's project and edits it through session.Edit.
@@ -29,6 +31,11 @@ type Timeline struct {
 
 	// OnError reports rejected edits (locked track, wrong track kind...).
 	OnError func(error)
+	// OnZoomChanged reports zoom changes the widget made itself (e.g. Ctrl+wheel), so
+	// toolbars can follow.
+	OnZoomChanged func(float32)
+
+	bladeAll bool
 
 	tool     Tool
 	zoom     float32
@@ -69,6 +76,10 @@ func (t *Timeline) SetTool(tool Tool) {
 }
 
 func (t *Timeline) Tool() Tool { return t.tool }
+
+// SetBladeAllTracks makes the blade cut every unlocked track at the clicked frame.
+func (t *Timeline) SetBladeAllTracks(on bool) { t.bladeAll = on }
+func (t *Timeline) BladeAllTracks() bool      { return t.bladeAll }
 
 // SetZoom sets the zoom factor (1 = whole program fits) keeping the playhead in place.
 func (t *Timeline) SetZoom(z float32) {

@@ -293,3 +293,24 @@ func TestPlaceMediaSkipsLockedTracks(t *testing.T) {
 		t.Fatalf("audio track not created: %v", err)
 	}
 }
+
+func TestGroupMoveAndDelete(t *testing.T) {
+	p, v1 := proj() // A[0,50) B[50,100) on V1
+	a, b := p.Tracks[0].Clips[0].ID, p.Tracks[0].Clips[1].ID
+	if err := p.MoveClips([]string{a, b}, 10, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Tracks[0].Clips) != 0 || len(p.Tracks[1].Clips) != 2 || p.Tracks[1].Clips[0].Start != 10 || p.Tracks[1].Clips[1].Start != 60 {
+		t.Fatalf("group move wrong: %+v", p.Tracks[1].Clips)
+	}
+	if err := p.MoveClips([]string{a}, 0, 1); err != ErrInvalidEdit {
+		t.Fatalf("no V3: want ErrInvalidEdit, got %v", err)
+	}
+	_ = p.PlaceClip(v1, NewClip(KindColor, "C", 200, 10))
+	if err := p.DeleteClips([]string{a, b}, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Tracks[1].Clips) != 0 || p.Tracks[0].Clips[0].Start != 200 {
+		t.Fatal("ripple must be per track only")
+	}
+}
