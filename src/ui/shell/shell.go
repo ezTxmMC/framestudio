@@ -210,6 +210,9 @@ type Shell struct {
 	projects []*project
 	active   *project
 
+	npd *newProject        // the open "Neues Projekt" dialog (tests drive it)
+	psd *projectSettingsUI // the open "Projekteinstellungen" dialog
+
 	chromeOn      bool              // the main window shows the custom title bar (chrome.go)
 	retryDecorate bool              // decorate failed once: ask again after the start
 	undecorated   bool              // the system title bar was taken off the native window
@@ -341,7 +344,7 @@ func (sh *Shell) Start(files []string) {
 		case "last":
 			sh.reopen(g.LastOpen)
 		case "new":
-			sh.newProject(defaultProjectName(), templateByID(g.DefaultTemplate))
+			sh.newProject(defaultProjectName(), settings.Get().TemplateOrDefault(g.DefaultTemplate))
 		}
 	}
 	if len(sh.projects) == 0 {
@@ -400,6 +403,7 @@ func (sh *Shell) OpenFile(path string) error {
 func (sh *Shell) newProject(name string, t Template) *project {
 	proj := model.NewProject(name)
 	proj.Settings.Width, proj.Settings.Height, proj.Settings.FPS = t.Width, t.Height, t.FPS
+	proj.Settings.DropFrame = t.DropFrame && t.FPS.CanDropFrame()
 	p := sh.addProject(proj, "", page.Media)
 	if v := proj.TrackIndices(model.TrackVideo); len(v) > 0 {
 		p.sess.SelectTrack(proj.Tracks[v[0]].ID)

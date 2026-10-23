@@ -41,26 +41,11 @@ var kindNames = map[model.ClipKind]string{
 	model.KindVideo: "Video", model.KindAudio: "Audio",
 }
 
-var resolutions = []struct {
-	Name string
-	W, H int
-}{
-	{"1920 × 1080  Full HD", 1920, 1080},
-	{"1280 × 720  HD", 1280, 720},
-	{"3840 × 2160  UHD", 3840, 2160},
-	{"1080 × 1920  Hochkant", 1080, 1920},
-	{"1080 × 1080  Quadrat", 1080, 1080},
-}
-
-// frameRates is the temporary preset list of the project inspector.
-var frameRates = model.RatePresets
-
 // Palettes as 0xRRGGBBAA.
 var (
-	textColors        = palette(0xFFFFFFFF, 0xC8C9C6FF, 0x000000FF, 0xF2C230FF, 0xE8903AFF, 0x5A8CEBFF)
-	backColors        = palette(0x000000B4, 0x222327E6, 0xFFFFFFD9, 0x3F73B5E6, 0xB4527AE6)
-	fillColors        = palette(0x000000FF, 0x222327FF, 0xFFFFFFFF, 0x3F73B5FF, 0x2F8F8BFF, 0xB8873FFF, 0xB4527AFF)
-	projectBackColors = palette(0x000000FF, 0x222327FF, 0xFFFFFFFF, 0x101C30FF)
+	textColors = palette(0xFFFFFFFF, 0xC8C9C6FF, 0x000000FF, 0xF2C230FF, 0xE8903AFF, 0x5A8CEBFF)
+	backColors = palette(0x000000B4, 0x222327E6, 0xFFFFFFD9, 0x3F73B5E6, 0xB4527AE6)
+	fillColors = palette(0x000000FF, 0x222327FF, 0xFFFFFFFF, 0x3F73B5FF, 0x2F8F8BFF, 0xB8873FFF, 0xB4527AFF)
 )
 
 func palette(v ...uint32) []model.RGBA {
@@ -564,41 +549,14 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 		name.force(v)
 	}
 
-	res := newSelect(nil, nil)
-	res.OnChanged = func(v string) {
-		if in.syncing {
-			return
+	format := kit.MonoText("", studiotheme.Text, 12)
+	backdrop := text("", studiotheme.Muted, 12)
+	change := widget.NewButtonWithIcon("Ändern…", theme.SettingsIcon(), func() {
+		if in.pg.reg != nil {
+			in.pg.reg.Run("file.projectSettings")
 		}
-		for _, r := range resolutions {
-			if r.Name == v {
-				in.pg.edit("Auflösung ändern", func(p *model.Project) error {
-					p.Settings.Width, p.Settings.Height = r.W, r.H
-					return nil
-				})
-			}
-		}
-	}
-	rateNames := make([]string, len(frameRates))
-	for i, r := range frameRates {
-		rateNames[i] = r.Label()
-	}
-	rate := newSelect(rateNames, nil)
-	rate.OnChanged = func(v string) {
-		if in.syncing {
-			return
-		}
-		for i, n := range rateNames {
-			if n == v {
-				in.pg.setFPS(frameRates[i])
-			}
-		}
-	}
-	bg := newSwatches(projectBackColors, func(c model.RGBA) {
-		in.pg.edit("Hintergrundfarbe ändern", func(p *model.Project) error {
-			p.Settings.Background = c
-			return nil
-		})
 	})
+	change.Importance = widget.LowImportance
 
 	stat := func() *canvas.Text { return text("", studiotheme.Text, 12) }
 	tracks, clips, media, markers := stat(), stat(), stat(), stat()
@@ -607,28 +565,8 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 	in.onSync(func() {
 		p := s.Project
 		name.set(p.Name)
-		opts := make([]string, 0, len(resolutions)+1)
-		sel := ""
-		for _, r := range resolutions {
-			opts = append(opts, r.Name)
-			if r.W == p.Settings.Width && r.H == p.Settings.Height {
-				sel = r.Name
-			}
-		}
-		if sel == "" {
-			sel = fmt.Sprintf("%d × %d  Eigene", p.Settings.Width, p.Settings.Height)
-			opts = append(opts, sel)
-		}
-		res.SetOptions(opts)
-		res.SetSelected(sel)
-		cur := p.Rate().Label()
-		if !contains(rateNames, cur) {
-			rate.SetOptions(append(append([]string{}, rateNames...), cur))
-		} else {
-			rate.SetOptions(rateNames)
-		}
-		rate.SetSelected(cur)
-		bg.set(p.Settings.Background)
+		setText(format, fmt.Sprintf("%d × %d · %s%s", p.Settings.Width, p.Settings.Height, p.Rate().Label(), dropText(p)))
+		setText(backdrop, kit.AspectText(p.Settings.Width, p.Settings.Height)+" · "+kit.Megapixels(p.Settings.Width, p.Settings.Height))
 
 		n := 0
 		for _, t := range p.Tracks {
@@ -649,9 +587,9 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 	return []fyne.CanvasObject{
 		firstSection("Projekt",
 			field("Name", name), nameNote.box,
-			field("Auflösung", res),
-			field("Bildrate", rate),
-			field("Hintergrund", bg.box),
+			field("Format", value(format)),
+			field("", value(backdrop)),
+			field("", container.NewHBox(change)),
 		),
 		section("Übersicht",
 			field("Spuren", value(tracks)),
@@ -662,6 +600,14 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 		),
 		container.New(layout.NewCustomPaddedLayout(8, 0, 0, 0), hint),
 	}
+}
+
+// dropText marks drop-frame timecode in the project read-out.
+func dropText(p *model.Project) string {
+	if p.DropFrame() && p.Rate().CanDropFrame() {
+		return " · Drop-Frame"
+	}
+	return ""
 }
 
 func contains(list []string, s string) bool {

@@ -35,7 +35,7 @@ type inspector struct {
 	values   map[string]*widget.Label
 	status   *fyne.Container
 
-	insertBtn, appendBtn, relinkBtn, removeBtn *widget.Button
+	insertBtn, appendBtn, relinkBtn, removeBtn, formatBtn *widget.Button
 
 	body, placeholder *fyne.Container
 
@@ -97,13 +97,14 @@ func newInspector(p *Page) *inspector {
 	in.appendBtn = widget.NewButtonWithIcon("Ans Ende anhängen", theme.MediaSkipNextIcon(), func() { p.insert(p.selectedItems(), true) })
 	in.relinkBtn = widget.NewButtonWithIcon("Neu verknüpfen", theme.SearchReplaceIcon(), func() { in.act(p.showRelinkDialog) })
 	in.removeBtn = widget.NewButtonWithIcon("Entfernen", theme.DeleteIcon(), func() { p.confirmRemove(p.selectedItems()...) })
-	for _, b := range []*widget.Button{in.appendBtn, in.relinkBtn, in.removeBtn} {
+	in.formatBtn = widget.NewButtonWithIcon("Als Projektformat verwenden", theme.MediaVideoIcon(), func() { in.act(p.useAsProjectFormat) })
+	for _, b := range []*widget.Button{in.appendBtn, in.relinkBtn, in.removeBtn, in.formatBtn} {
 		b.Alignment = widget.ButtonAlignLeading
 	}
 
 	sep := canvas.NewRectangle(studiotheme.Border)
 	sep.SetMinSize(fyne.NewSize(1, 1))
-	actions := container.NewVBox(in.insertBtn, container.NewGridWithColumns(2, in.appendBtn, in.relinkBtn), in.removeBtn)
+	actions := container.NewVBox(in.insertBtn, container.NewGridWithColumns(2, in.appendBtn, in.relinkBtn), in.formatBtn, in.removeBtn)
 	in.body = container.NewBorder(
 		container.NewVBox(screen, in.scrubRow, spacer(2), in.name, in.status),
 		container.NewVBox(sep, spacer(2), actions), nil, nil,
@@ -148,6 +149,11 @@ func (in *inspector) show() {
 	in.status.Hidden = !missing
 	in.status.Refresh()
 	in.showCount()
+	if m.Width > 0 && (m.Kind == model.KindVideo || m.Kind == model.KindImage) && len(in.p.sel) <= 1 {
+		in.formatBtn.Enable()
+	} else {
+		in.formatBtn.Disable()
+	}
 	if m == in.shown && uses == in.uses {
 		return
 	}

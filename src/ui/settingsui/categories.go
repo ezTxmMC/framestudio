@@ -54,12 +54,8 @@ func (w *window) buildCategories() []*category {
 			rangeMsg: "Bitte 0 oder 10 bis 3600 Sekunden eingeben.", lazy: true})
 	w.folder(general, "Projektordner", "Hier legt Frame Studio neue Projekte ab.", "Standardbibliothek",
 		"Projektordner wählen", func(s *settings.Settings) *string { return &s.General.ProjectsDir })
-	tpl := make([]option[string], len(Templates))
-	for i, t := range Templates {
-		tpl[i] = option[string]{t.ID, t.Label}
-	}
-	choice(w, general, "Vorlage für neue Projekte", "Auflösung und Bildrate, die „Neues Projekt“ vorschlägt.", tpl,
-		func(s *settings.Settings) *string { return &s.General.DefaultTemplate })
+	w.templateChoice(general)
+	w.userTemplates(general)
 	w.check(general, "Beim Schließen nachfragen", "Vor dem Schließen oder Beenden mit ungespeicherten Änderungen fragen. Aus: Projekte mit Datei werden ohne Rückfrage gespeichert.",
 		func(s *settings.Settings) *bool { return &s.General.ConfirmClose })
 

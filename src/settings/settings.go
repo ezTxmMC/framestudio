@@ -34,6 +34,9 @@ type General struct {
 	DefaultTemplate string   `json:"defaultTemplate"`
 	ConfirmClose    bool     `json:"confirmClose"`
 	LastOpen        []string `json:"lastOpen"` // project paths open at last quit
+	// Templates are the user's own project formats ("Eigene Vorlage"); DefaultTemplate
+	// holds a built-in ID, "user:<n>" or the last used format ("fmt:1920x1080@25").
+	Templates []Template `json:"templates"`
 }
 
 type Playback struct {
@@ -230,9 +233,9 @@ func Update(fn func(s *Settings)) error {
 // Reset restores the factory settings (keeps LastOpen).
 func Reset() error {
 	return Update(func(s *Settings) {
-		last := s.General.LastOpen
+		last, tpl := s.General.LastOpen, s.General.Templates
 		*s = Defaults()
-		s.General.LastOpen = last
+		s.General.LastOpen, s.General.Templates = last, tpl
 	})
 }
 
@@ -269,5 +272,6 @@ func clone(s Settings) Settings {
 		c.Keymap[k] = v
 	}
 	c.General.LastOpen = append([]string(nil), s.General.LastOpen...)
+	c.General.Templates = append([]Template(nil), s.General.Templates...)
 	return c
 }

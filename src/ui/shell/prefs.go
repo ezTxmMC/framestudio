@@ -3,17 +3,13 @@ package shell
 import (
 	"errors"
 	"fmt"
-	"framestudio-proto/src/ui/settingsui"
 	"maps"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 
-	"framestudio-proto/src/model"
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
 )
@@ -67,48 +63,6 @@ func (sh *Shell) saveLastOpen() {
 	if err := settings.Update(func(s *settings.Settings) { s.General.LastOpen = paths }); err != nil {
 		fyne.LogError("Geöffnete Projekte merken", err)
 	}
-}
-
-var templateIDPattern = regexp.MustCompile(`^(\d+)p(\d+(?:\.\d+)?)$`)
-
-// templateByID finds the new-project template of a settings ID: "1080p25" (landscape
-// height and frame rate) or "1080x1920@30" (width × height @ fps). Unknown IDs give the
-// first template.
-func templateByID(id string) Template {
-	id = strings.ToLower(strings.TrimSpace(id))
-	for _, st := range settingsui.Templates { // the IDs the settings window stores
-		if strings.EqualFold(st.ID, id) {
-			for _, t := range Templates {
-				if t.Width == st.Width && t.Height == st.Height && t.FPS.Equal(st.FPS) {
-					return t
-				}
-			}
-			return Template{Label: st.Label, Width: st.Width, Height: st.Height, FPS: st.FPS}
-		}
-	}
-	for _, t := range Templates {
-		if id == templateID(t) {
-			return t
-		}
-	}
-	if m := templateIDPattern.FindStringSubmatch(id); m != nil {
-		h, _ := strconv.Atoi(m[1])
-		fps, _ := model.ParseRate(m[2])
-		for _, t := range Templates {
-			if t.Height == h && t.FPS.Equal(fps) && t.Width > t.Height {
-				return t
-			}
-		}
-	}
-	return Templates[0]
-}
-
-// templateID is the settings ID of a template: "1080p25" for landscape, else "WxH@fps".
-func templateID(t Template) string {
-	if t.Width > t.Height {
-		return fmt.Sprintf("%dp%s", t.Height, t.FPS)
-	}
-	return fmt.Sprintf("%dx%d@%s", t.Width, t.Height, t.FPS)
 }
 
 func homeDir() string {

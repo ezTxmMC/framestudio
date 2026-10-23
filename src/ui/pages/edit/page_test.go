@@ -385,16 +385,7 @@ func TestProjectFPSChange(t *testing.T) {
 	p.AddMarker(50, "M")
 	f := newFixture(t, p)
 	f.s.Seek(50)
-	var rate *kit.Select
-	for _, s := range find[*kit.Select](f.pg.insp.box) {
-		if s.Selected == "25 fps" {
-			rate = s
-		}
-	}
-	if rate == nil {
-		t.Fatal("no frame rate select")
-	}
-	rate.SetSelected("50 fps")
+	f.pg.setFPS(model.Rate50)
 	title := clipNamed(t, f.s.Project, "Titel")
 	if !f.s.FPS().Equal(model.Rate50) || title.Start != 50 || title.Length != 100 || f.s.Project.Markers[0].Frame != 100 {
 		t.Fatalf("not rescaled: fps %v title %d+%d", f.s.FPS(), title.Start, title.Length)

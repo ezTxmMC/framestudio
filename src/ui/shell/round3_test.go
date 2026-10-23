@@ -468,10 +468,11 @@ func TestStartupModes(t *testing.T) {
 			t.Fatal("files on the command line must replace the startup mode")
 		}
 	})
-	for id, want := range map[string]string{"1080p25": "1080p HD · 25 fps", "2160p25": "4K UHD · 25 fps",
-		"1080x1920@30": "Hochkant 1080×1920 · 30 fps (Social)", "unsinn": Templates[0].Label} {
-		if got := templateByID(id); got.Label != want {
-			t.Errorf("template %q = %q", id, got.Label)
+	for id, want := range map[string][3]int{"1080p25": {1920, 1080, 25}, "2160p25": {3840, 2160, 25},
+		"1080x1920@30": {1080, 1920, 30}, "unsinn": {1920, 1080, 25}} {
+		got := settings.Get().TemplateOrDefault(id)
+		if got.Width != want[0] || got.Height != want[1] || !got.FPS.Equal(model.IntRate(want[2])) {
+			t.Errorf("template %q = %+v", id, got)
 		}
 	}
 }

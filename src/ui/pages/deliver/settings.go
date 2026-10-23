@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -18,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/export"
+	"framestudio-proto/src/model"
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -32,7 +32,8 @@ type resolution struct {
 const (
 	rangeAll  = "Gesamte Timeline"
 	rangeIO   = "In-Out-Bereich"
-	resCustom = "Benutzerdefiniert"
+	resCustom = kit.ResCustom
+	resSame   = "Wie Projekt"
 )
 
 // settingsForm is the "Render-Einstellungen" panel.
@@ -43,7 +44,12 @@ type settingsForm struct {
 	presetAt int // selected preset, -1 when the settings no longer match one
 
 	name, folder      *widget.Entry
-	width, height     *widget.Entry
+	size              *kit.ResolutionPicker
+	width, height     *widget.Entry // the entries of size
+	rate              *kit.RatePicker
+	rateRow           fyne.CanvasObject
+	rateNote          *widget.Label
+	evenNote          *widget.Label
 	ext               *canvas.Text
 	format            *kit.Select
 	res               *kit.Select
@@ -56,7 +62,10 @@ type settingsForm struct {
 	audioWanted       bool
 	sumPath, sumVideo *canvas.Text
 	sumAudio, sumTime *canvas.Text
+	sumFrames         *canvas.Text
+	sumFramesRow      fyne.CanvasObject
 	lastIn, lastOut   int
+	lastW, lastH      int // size of the last non-custom resolution choice
 	formBox, body     *fyne.Container
 	advanced          *collapsible
 	scroll            *container.Scroll
@@ -100,13 +109,18 @@ func newSettingsForm(pg *Page) *settingsForm {
 	f.format = kit.NewSelect(labels, func(string) { f.formatChanged() })
 
 	f.res = kit.NewSelect(nil, func(string) { f.resChanged() })
-	f.width, f.height = widget.NewEntry(), widget.NewEntry()
-	f.width.OnChanged = func(string) { f.changed() }
-	f.height.OnChanged = func(string) { f.changed() }
-	times := smallText("×", studiotheme.Muted, 13)
-	f.customRow = formRow("", container.NewBorder(nil, nil, nil, nil,
-		container.NewGridWithColumns(2, f.width, container.NewBorder(nil, nil, container.NewPadded(vcenter(times)), nil, f.height))))
+	pr := proj.Settings
+	f.size = kit.NewResolutionPicker(pr.Width, pr.Height, f.changed)
+	f.width, f.height = f.size.Width, f.size.Height
+	f.size.Relayout = func() { f.formBox.Refresh() }
+	f.size.HidePreset()
+	f.customRow = f.size.Object()
 	f.customRow.Hide()
+	f.evenNote = noteLabel(widget.LowImportance)
+	f.rate = kit.NewRatePicker(model.Rate{}, kit.RateOptions{SameLabel: sameRateLabel(proj.Rate(), export.FormatMP4)}, f.rateChanged)
+	f.rate.Relayout = func() { f.formBox.Refresh() }
+	f.rateRow = f.rate.Details()
+	f.rateNote = noteLabel(widget.LowImportance)
 
 	f.quality = newSegmented([]string{"Hoch", "Mittel", "Niedrig"},
 		[]string{string(export.QualityHigh), string(export.QualityMedium), string(export.QualityLow)},
@@ -135,10 +149,14 @@ func newSettingsForm(pg *Page) *settingsForm {
 	f.renderBtn = widget.NewButtonWithIcon("Jetzt rendern", theme.MediaPlayIcon(), func() { f.submit(true) })
 
 	sum := func() *canvas.Text { return kit.MonoText("", studiotheme.Text, 11) }
-	f.sumPath, f.sumVideo, f.sumAudio, f.sumTime = sum(), sum(), sum(), sum()
+	f.sumPath, f.sumVideo, f.sumAudio, f.sumTime, f.sumFrames = sum(), sum(), sum(), sum(), sum()
+	f.sumFramesRow = summaryRow("Bilder", f.sumFrames)
+	f.sumFramesRow.Hide()
 
 	// Auflösung and Qualität share one row; range and audio, rarely changed, sit in the
 	// collapsed "Erweitert" section whose heading summarises them.
+	formatRow := container.New(labelledColumns{ratio: 0.5},
+		stacked("Format", f.format), kit.Labeled("Bildrate", f.rate.Select()))
 	sizeRow := container.New(labelledColumns{ratio: 0.54},
 		stacked("Auflösung", f.res), stacked("Qualität", f.quality.content))
 	advanced := container.NewVBox(
@@ -157,16 +175,20 @@ func newSettingsForm(pg *Page) *settingsForm {
 		formRow("Dateiname", nameRow),
 		formRow("Ordner", folderRow),
 		section("VIDEO"),
-		formRow("Format", f.format),
+		formatRow,
+		f.rateRow,
 		sizeRow,
 		f.customRow,
+		f.evenNote,
+		f.rateNote,
 		f.advanced, advanced,
 		section("AUSGABE"),
 		container.New(layout.NewCustomPaddedVBoxLayout(1),
 			summaryRow("Ziel", f.sumPath),
 			summaryRow("Video", f.sumVideo),
 			summaryRow("Audio", f.sumAudio),
-			summaryRow("Dauer", f.sumTime)),
+			summaryRow("Dauer", f.sumTime),
+			f.sumFramesRow),
 	)
 	f.scroll = container.NewVScroll(f.formBox)
 	f.body = container.NewBorder(nil, container.NewVBox(f.errBox, f.addBtn, f.renderBtn), nil, nil, f.scroll)
@@ -183,6 +205,7 @@ func (f *settingsForm) applyPreset(i int) {
 	f.updating = true
 	f.format.SetSelectedIndex(formatIndex(o.Format))
 	f.selectSize(o.Width, o.Height)
+	f.rate.Set(o.FPS, false)
 	f.quality.Set(string(o.Quality))
 	f.audioWanted = o.IncludeAudio || o.Format == export.FormatGIF || o.Format == export.FormatPNG
 	f.updating = false
@@ -192,21 +215,28 @@ func (f *settingsForm) applyPreset(i int) {
 
 // selectSize picks the matching resolution entry, or custom with the given size.
 func (f *settingsForm) selectSize(w, h int) {
+	f.lastW, f.lastH = w, h
 	for i, r := range f.resolutions {
 		if r.w == w && r.h == h {
 			f.res.SetSelectedIndex(i)
 			return
 		}
 	}
-	f.width.SetText(strconv.Itoa(w))
-	f.height.SetText(strconv.Itoa(h))
+	f.size.Set(w, h)
 	f.res.SetSelected(resCustom)
 }
 
 // refreshProject rebuilds the project-dependent choices (resolutions, range).
 func (f *settingsForm) refreshProject() {
 	pw, ph := f.pg.ctx.Session.Project.Settings.Width, f.pg.ctx.Session.Project.Settings.Height
-	f.resolutions = []resolution{{fmt.Sprintf("Projekt  %d × %d", pw, ph), pw, ph}}
+	if f.lastW == 0 {
+		f.lastW, f.lastH = pw, ph
+	}
+	f.resolutions = []resolution{{fmt.Sprintf("%s  %d × %d", resSame, pw, ph), pw, ph}}
+	for _, pct := range []int{50, 25} {
+		w, h := scaleSize(pw, ph, pct)
+		f.resolutions = append(f.resolutions, resolution{fmt.Sprintf("%d %%  %d × %d", pct, w, h), w, h})
+	}
 	for _, h := range []int{2160, 1080, 720, 480} {
 		w, hh := export.SizeForHeight(pw, ph, h)
 		f.resolutions = append(f.resolutions, resolution{fmt.Sprintf("%dp  %d × %d", h, w, hh), w, hh})
@@ -223,6 +253,7 @@ func (f *settingsForm) refreshProject() {
 		f.res.SetSelectedIndex(sel)
 	}
 	f.updating = false
+	f.rate.SetSameLabel(sameRateLabel(f.pg.ctx.Session.Project.Rate(), f.currentFormat()))
 	f.refreshRange()
 }
 
@@ -275,6 +306,7 @@ func (f *settingsForm) updateSummary() {
 	if f.sumPath == nil {
 		return
 	}
+	f.updateNotes()
 	set := func(t *canvas.Text, s string) {
 		if t.Text != s {
 			t.Text = s
@@ -295,9 +327,44 @@ func (f *settingsForm) updateSummary() {
 	s := f.pg.ctx.Session
 	n := frameCount(s.Project, o)
 	set(f.sumPath, ellipsize(shortPath(o.Path), 40))
-	set(f.sumVideo, videoSummary(o, s.FPS()))
+	shown := o // the size that is written; the note above explains a rounding
+	shown.Width, shown.Height = export.EvenSize(o)
+	set(f.sumVideo, videoSummary(shown, s.FPS()))
 	set(f.sumAudio, audioSummary(o))
 	set(f.sumTime, fmt.Sprintf("%s · %d Frames", s.Project.Timecode(n), n))
+	conv := f.convertedFrames(s.Project, o, n)
+	set(f.sumFrames, conv)
+	setVisible(f.sumFramesRow, conv != "", f.formBox)
+}
+
+// convertedFrames is "90 Bilder bei 29,97 fps" when the export converts the frame rate,
+// else "".
+func (f *settingsForm) convertedFrames(p *model.Project, o export.Options, n int) string {
+	out := export.OutputRate(o, p.Rate())
+	if o.Format == export.FormatWAV || o.Format == export.FormatPNG || out.Equal(p.Rate()) {
+		return ""
+	}
+	return fmt.Sprintf("%d Bilder bei %s", model.ConvertFrames(n, p.Rate(), out), out.Label())
+}
+
+// updateNotes shows the frame rate conversion and even-size notes of the current options.
+func (f *settingsForm) updateNotes() {
+	o, err := f.options()
+	if err != nil {
+		setNote(f.rateNote, "", f.formBox)
+		setNote(f.evenNote, "", f.formBox)
+		return
+	}
+	proj := f.pg.ctx.Session.Project.Rate()
+	out := export.OutputRate(o, proj)
+	switch {
+	case o.Format == export.FormatWAV || o.Format == export.FormatPNG || out.Equal(proj):
+		setNote(f.rateNote, "", f.formBox)
+	default:
+		setNote(f.rateNote, fmt.Sprintf("Bilder werden beim Export umgerechnet: %s → %s. Bilder werden ausgelassen oder wiederholt, nicht überblendet.",
+			strings.TrimSuffix(proj.Label(), " fps"), out.Label()), f.formBox)
+	}
+	setNote(f.evenNote, export.EvenNote(o), f.formBox)
 }
 
 // advancedSummary describes the collapsed "Erweitert" settings, e.g.
@@ -358,22 +425,64 @@ func (f *settingsForm) formatChanged() {
 		f.audio.Enable()
 	}
 	setVisible(f.customRow, ft != export.FormatWAV && f.res.Selected == resCustom, f.scroll)
+	rateApplies := ft != export.FormatWAV && ft != export.FormatPNG
+	f.rate.SetDisabled(!rateApplies)
+	f.rate.SetSameLabel(sameRateLabel(f.pg.ctx.Session.Project.Rate(), ft))
 	f.updating = false
 	f.changed()
+}
+
+// rateChanged reacts to the frame rate picker.
+func (f *settingsForm) rateChanged() {
+	if f.updating {
+		return
+	}
+	f.changed()
+}
+
+// sameRateLabel is the "no rate of its own" entry of the export frame rate chooser.
+func sameRateLabel(project model.Rate, ft export.Format) string {
+	if ft == export.FormatGIF && project.Float() > 15 {
+		return "Wie Projekt (GIF höchstens 15 fps)"
+	}
+	return "Wie Projekt (" + project.Label() + ")"
+}
+
+// scaleSize is w × h scaled to pct percent, at least the smallest allowed size.
+func scaleSize(w, h, pct int) (int, int) {
+	sc := func(n int) int { return max(model.MinSize, (n*pct+50)/100) }
+	return sc(w), sc(h)
+}
+
+// noteLabel is a wrapping caption under a form row.
+func noteLabel(imp widget.Importance) *widget.Label {
+	l := widget.NewLabel("")
+	l.Wrapping = fyne.TextWrapWord
+	l.Importance = imp
+	l.SizeName = theme.SizeNameCaptionText
+	l.Hide()
+	return l
+}
+
+func setNote(l *widget.Label, text string, parent fyne.CanvasObject) {
+	if l.Text != text {
+		l.SetText(text)
+	}
+	if parent != nil && l.Visible() != (text != "") {
+		setVisible(l, text != "", parent)
+	}
 }
 
 func (f *settingsForm) resChanged() {
 	if f.updating {
 		return
 	}
+	i := f.res.SelectedIndex()
 	if f.res.Selected == resCustom {
-		if f.width.Text == "" {
-			pw, ph := f.pg.ctx.Session.Project.Settings.Width, f.pg.ctx.Session.Project.Settings.Height
-			f.updating = true
-			f.width.SetText(strconv.Itoa(pw))
-			f.height.SetText(strconv.Itoa(ph))
-			f.updating = false
-		}
+		// start from the size that was chosen before, so "Eigene…" edits it
+		f.size.Set(f.lastW, f.lastH)
+	} else if i >= 0 && i < len(f.resolutions) {
+		f.lastW, f.lastH = f.resolutions[i].w, f.resolutions[i].h
 	}
 	setVisible(f.customRow, f.res.Selected == resCustom, f.scroll)
 	f.changed()
@@ -397,7 +506,7 @@ func (f *settingsForm) changed() {
 	if o, err := f.options(); err == nil {
 		for i, ps := range f.presets {
 			po := ps.Options
-			if po.Format == o.Format && po.Quality == o.Quality &&
+			if po.Format == o.Format && po.Quality == o.Quality && po.FPS.Equal(o.FPS) &&
 				(o.Format == export.FormatWAV || po.Width == o.Width && po.Height == o.Height) &&
 				(po.IncludeAudio == o.IncludeAudio || !audioApplies(o.Format)) {
 				f.presetAt = i
@@ -447,14 +556,22 @@ func (f *settingsForm) options() (export.Options, error) {
 		}
 		r := f.resolutions[i]
 		if r.w == 0 {
-			w, errW := strconv.Atoi(strings.TrimSpace(f.width.Text))
-			h, errH := strconv.Atoi(strings.TrimSpace(f.height.Text))
-			if errW != nil || errH != nil || w <= 0 || h <= 0 {
-				return o, errors.New("Die eigene Auflösung ist ungültig. Gib Breite und Höhe als ganze Pixelzahlen an, z. B. 1280 × 720.")
+			w, h, err := f.size.Value()
+			if err != nil {
+				return o, fmt.Errorf("Die eigene Auflösung ist ungültig. %w", err)
 			}
 			r.w, r.h = w, h
 		}
 		o.Width, o.Height = r.w, r.h
+	}
+	if ft != export.FormatWAV && ft != export.FormatPNG {
+		r, _, same, err := f.rate.Value()
+		if err != nil {
+			return o, fmt.Errorf("Die Export-Bildrate ist ungültig. %w", err)
+		}
+		if !same && !r.Equal(s.FPS()) {
+			o.FPS = r
+		}
 	}
 	o.IncludeAudio = ft == export.FormatWAV || (audioApplies(ft) && f.audio.Checked)
 	if f.rng.Selected == rangeIO && s.HasRange() {

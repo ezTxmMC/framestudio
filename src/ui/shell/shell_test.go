@@ -15,6 +15,7 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
@@ -190,7 +191,7 @@ func TestDirtyTitleAndStatus(t *testing.T) {
 
 func TestSaveWithoutPathWritesIntoLibrary(t *testing.T) {
 	sh, w, _ := newTestShell(t)
-	sh.newProject("Mein Film", Templates[5])
+	sh.newProject("Mein Film", settings.Get().TemplateOrDefault("vertical30"))
 	s := sh.Active()
 	if s.Project.Settings.Width != 1080 || s.Project.Settings.Height != 1920 || !s.Project.Settings.FPS.Equal(model.Rate30) {
 		t.Fatalf("template not applied: %+v", s.Project.Settings)

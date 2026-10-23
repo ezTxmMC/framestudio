@@ -6,12 +6,10 @@
 package settingsui
 
 import (
-	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2"
 
-	"framestudio-proto/src/model"
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/command"
 )
@@ -157,34 +155,4 @@ func Close() {
 // Categories lists the category IDs in display order.
 func Categories() []string {
 	return []string{catGeneral, catPlayback, catAudio, catTimeline, catMedia, catExport, catDisplay, catMonitors, catKeymap}
-}
-
-// Template is a project preset offered for new projects (settings.General.DefaultTemplate).
-type Template struct {
-	ID            string
-	Label         string
-	Width, Height int
-	FPS           model.Rate
-}
-
-// Templates are the choices for "Vorlage für neue Projekte". The IDs are what
-// settings.General.DefaultTemplate stores; the shell maps them to its project templates.
-var Templates = []Template{
-	{"1080p25", "1080p HD · 25 fps", 1920, 1080, model.IntRate(25)},
-	{"720p25", "720p HD · 25 fps", 1280, 720, model.IntRate(25)},
-	{"2160p25", "4K UHD · 25 fps", 3840, 2160, model.IntRate(25)},
-	{"1080p30", "1080p HD · 30 fps", 1920, 1080, model.IntRate(30)},
-	{"1080p60", "1080p HD · 60 fps", 1920, 1080, model.IntRate(60)},
-	{"vertical30", "Hochkant 1080×1920 · 30 fps", 1080, 1920, model.IntRate(30)},
-	{"square30", "Quadrat 1080×1080 · 30 fps", 1080, 1080, model.IntRate(30)},
-}
-
-// TemplateByID returns the template with id (the first one for unknown IDs).
-func TemplateByID(id string) Template {
-	for _, t := range Templates {
-		if strings.EqualFold(t.ID, id) {
-			return t
-		}
-	}
-	return Templates[0]
 }

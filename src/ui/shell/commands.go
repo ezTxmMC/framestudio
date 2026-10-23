@@ -436,18 +436,6 @@ func (sh *Shell) closeAll() {
 	next()
 }
 
-// projectSettings shows the project settings: the inspector of the edit page shows them
-// while no clip is selected.
-func (sh *Shell) projectSettings() {
-	p := sh.active
-	if p == nil {
-		return
-	}
-	p.sess.SelectClip("")
-	sh.showPage(p, page.Edit)
-	sh.toast.show("Projekteinstellungen", "Name, Auflösung und Bildrate im Inspector rechts ändern.", false)
-}
-
 func (sh *Shell) cycleProject(dir int) {
 	n := len(sh.projects)
 	if n == 0 {
