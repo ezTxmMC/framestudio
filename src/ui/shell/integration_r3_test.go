@@ -568,3 +568,16 @@ func windowTitled(a fyne.App, prefix string) fyne.Window {
 	}
 	return nil
 }
+
+func TestParseDebugMultimon(t *testing.T) {
+	got := parseDebugMultimon("1")
+	want := []debugPlacement{{"cleanfeed", "HDMI-A-1", "fullscreen"}, {"timeline", "DP-3", "window"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v", got)
+	}
+	got = parseDebugMultimon(" program=DP-2:maximized, scopes=DP-3 ,bogus")
+	want = []debugPlacement{{"program", "DP-2", "maximized"}, {"scopes", "DP-3", "window"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v", got)
+	}
+}

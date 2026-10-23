@@ -345,6 +345,11 @@ func (m *Manager) Apply(l layout.Layout) {
 			main.Rect = m.defaultRect(mainMon, 0)
 		}
 	}
+	if mainMon == "" && main.Mode != layout.ModeWindow {
+		// A layout without a monitor (the default) starts on the primary monitor, not
+		// wherever the window system first put the window.
+		mainMon = m.firstUsable()
+	}
 	if w := m.host.MainWindow(); w != nil {
 		m.place(w, mainMon, main.Mode, main.Rect)
 	}

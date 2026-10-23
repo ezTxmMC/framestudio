@@ -14,7 +14,7 @@ import (
 
 func init() {
 	page.RegisterPanel(page.PanelInfo{
-		ID: page.PanelQueue, Title: "Render-Warteschlange", Icon: theme.UploadIcon(),
+		ID: page.PanelQueue, Title: "Render-Warteschlange", Icon: page.LazyIcon(theme.UploadIcon),
 		New: func(ctx *page.Context) page.Panel { return newQueuePanel(ctx) },
 	})
 }

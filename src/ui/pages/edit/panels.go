@@ -15,16 +15,16 @@ import (
 func init() {
 	for _, p := range []struct {
 		id, title string
-		icon      fyne.Resource
+		icon      func() fyne.Resource
 	}{
-		{page.PanelProgram, "Programm-Monitor", theme.MediaVideoIcon()},
-		{page.PanelCleanFeed, "Clean-Feed", theme.ComputerIcon()},
-		{page.PanelTimeline, "Timeline", theme.ViewRestoreIcon()},
-		{page.PanelInspector, "Inspector", theme.InfoIcon()},
-		{page.PanelLibrary, "Bibliothek", theme.FolderIcon()},
+		{page.PanelProgram, "Programm-Monitor", theme.MediaVideoIcon},
+		{page.PanelCleanFeed, "Clean-Feed", theme.ComputerIcon},
+		{page.PanelTimeline, "Timeline", theme.ViewRestoreIcon},
+		{page.PanelInspector, "Inspector", theme.InfoIcon},
+		{page.PanelLibrary, "Bibliothek", theme.FolderIcon},
 	} {
 		id := p.id
-		page.RegisterPanel(page.PanelInfo{ID: id, Title: p.title, Icon: p.icon,
+		page.RegisterPanel(page.PanelInfo{ID: id, Title: p.title, Icon: page.LazyIcon(p.icon),
 			New: func(ctx *page.Context) page.Panel { return NewPanel(ctx, id) }})
 	}
 }

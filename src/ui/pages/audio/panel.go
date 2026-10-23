@@ -17,7 +17,7 @@ import (
 
 func init() {
 	page.RegisterPanel(page.PanelInfo{
-		ID: page.PanelMixer, Title: "Mixer", Icon: theme.VolumeUpIcon(),
+		ID: page.PanelMixer, Title: "Mixer", Icon: page.LazyIcon(theme.VolumeUpIcon),
 		New: func(ctx *page.Context) page.Panel { return newMixerPanel(ctx) },
 	})
 }

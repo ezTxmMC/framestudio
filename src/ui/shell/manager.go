@@ -87,12 +87,11 @@ var sortLabels = []string{"Zuletzt geändert", "Name"}
 func newManager(sh *Shell) *manager {
 	m := &manager{sh: sh, thumbs: map[string]cardThumb{}}
 
-	brand := text("Frame Studio", studiotheme.Text, 14, true)
-	title := text("Projektmanager", studiotheme.Muted, 13, false)
+	title := text("Projektmanager", studiotheme.Text, 13, true)
 	m.back = widget.NewButtonWithIcon("Zurück zu den Projekten", theme.NavigateBackIcon(), sh.leaveManager)
 	m.back.Importance = widget.LowImportance
-	header := bar(44, studiotheme.Lane, false, container.NewBorder(nil, nil,
-		container.NewHBox(strut(8, 0), container.NewCenter(brand), strut(4, 0), vline(18), strut(4, 0), container.NewCenter(title)),
+	header := bar(topBarHeight, studiotheme.Lane, false, container.NewBorder(nil, nil,
+		container.NewHBox(strut(12, 0), container.NewCenter(title)),
 		container.NewHBox(container.NewCenter(m.back), strut(6, 0))))
 
 	m.grid = container.NewGridWrap(cardSize)

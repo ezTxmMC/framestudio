@@ -13,7 +13,7 @@ import (
 
 func init() {
 	page.RegisterPanel(page.PanelInfo{
-		ID: page.PanelMediaPool, Title: "Medienpool", Icon: theme.FolderIcon(),
+		ID: page.PanelMediaPool, Title: "Medienpool", Icon: page.LazyIcon(theme.FolderIcon),
 		New: func(ctx *page.Context) page.Panel { return newPoolPanel(ctx) },
 	})
 }

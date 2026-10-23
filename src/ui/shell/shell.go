@@ -62,6 +62,7 @@ func Run(a fyne.App, files []string) {
 		if loadErr != nil {
 			sh.showErr(errSettingsLoad(loadErr))
 		}
+		sh.startDebugHooks()
 	})
 	settingsui.Restart = sh.restart
 	defer func() { settingsui.Restart = nil }()
@@ -216,7 +217,8 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh.mgr = newManager(sh)
 	sh.root = container.NewStack()
 	w.SetPadded(false)
-	w.SetContent(sh.root)
+	// The menu row stays on top of the workspace and the project manager alike.
+	w.SetContent(container.NewBorder(sh.bars.menuRow, nil, nil, nil, sh.root))
 	sh.installKeys()
 	sh.disposers = append(sh.disposers,
 		sh.reg.Subscribe(sh.registerShortcuts),

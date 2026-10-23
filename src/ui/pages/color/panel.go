@@ -16,7 +16,7 @@ import (
 
 func init() {
 	page.RegisterPanel(page.PanelInfo{
-		ID: page.PanelScopes, Title: "Scopes", Icon: theme.ColorChromaticIcon(),
+		ID: page.PanelScopes, Title: "Scopes", Icon: page.LazyIcon(theme.ColorChromaticIcon),
 		New: func(ctx *page.Context) page.Panel { return newScopesPanel(ctx) },
 	})
 }

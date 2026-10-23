@@ -133,3 +133,22 @@ func PanelByID(id string) (PanelInfo, bool) {
 	}
 	return PanelInfo{}, false
 }
+
+// LazyIcon is a resource that asks get for the real one each time it is used. Panels
+// register from init(), before the Fyne app exists, when theme icons cannot be looked
+// up yet: Icon: page.LazyIcon(theme.FolderIcon). It is a pointer, so widgets can compare
+// it.
+func LazyIcon(get func() fyne.Resource) fyne.Resource { return &lazyIcon{get} }
+
+type lazyIcon struct{ get func() fyne.Resource }
+
+func (l *lazyIcon) Name() string    { return l.get().Name() }
+func (l *lazyIcon) Content() []byte { return l.get().Content() }
+
+// ThemeColorName keeps theme icons recoloured like the resource they stand for.
+func (l *lazyIcon) ThemeColorName() fyne.ThemeColorName {
+	if t, ok := l.get().(fyne.ThemedResource); ok {
+		return t.ThemeColorName()
+	}
+	return ""
+}

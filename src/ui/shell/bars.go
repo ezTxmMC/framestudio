@@ -42,7 +42,8 @@ type menuOpener interface {
 // duration). Display.PageBar and Display.StatusBar switch the parts of the bottom bar.
 type bars struct {
 	sh          *Shell
-	top, bottom *fyne.Container
+	top, bottom *fyne.Container   // project tabs; page bar and status line
+	menuRow     fyne.CanvasObject // wordmark, menu bar and project name, above everything
 	menu        *menubar.MenuBar
 	project     *canvas.Text // active project name at the right of the menu row
 	tabs        *fyne.Container
@@ -62,7 +63,7 @@ func newBars(sh *Shell) *bars {
 	b.menu = menubar.New(sh.win, sh.reg, command.MenuBar)
 	sh.menuBar = b.menu
 	b.project = text("", studiotheme.Faint, 11, false)
-	menuRow := bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
+	b.menuRow = bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
 		container.NewHBox(strut(10, 0), container.NewCenter(wordmark()), strut(10, 0)),
 		container.NewHBox(container.NewCenter(b.project), strut(12, 0)),
 		b.menu))
@@ -76,7 +77,7 @@ func newBars(sh *Shell) *bars {
 	right := container.NewHBox(container.NewCenter(b.status), strut(10, 0), vline(18), strut(4, 0),
 		container.NewCenter(b.undo), container.NewCenter(b.redo), strut(2, 0))
 	tabRow := bar(topBarHeight, studiotheme.Lane, false, container.NewBorder(nil, nil, nil, right, center))
-	b.top = container.New(layout.NewCustomPaddedVBoxLayout(0), menuRow, tabRow)
+	b.top = container.New(layout.NewCustomPaddedVBoxLayout(0), tabRow)
 
 	// Bottom: page buttons, status line, project manager.
 	row := container.NewHBox()
