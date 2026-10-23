@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/chrome"
 	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/menubar"
@@ -21,7 +22,6 @@ import (
 )
 
 const (
-	menuBarHeight   = 28
 	topBarHeight    = 32
 	pageBarHeight   = 52
 	statusBarHeight = 24
@@ -45,7 +45,7 @@ type bars struct {
 	sh          *Shell
 	top, bottom *fyne.Container // project tabs; page bar and status line
 	menu        *menubar.MenuBar
-	project     *canvas.Text // active project name (right of the menu row, centred in the title bar)
+	project     *chrome.TitleText // active project name (right of the menu row, centred in the title bar)
 	tabs        *fyne.Container
 	status      *canvas.Text
 	undo, redo  *widget.Button
@@ -66,8 +66,9 @@ func newBars(sh *Shell) *bars {
 			sh.combo(k, m)
 		}
 	}
+	b.menu.SetHeight(chrome.BarHeight(false))
 	sh.menuBar = b.menu
-	b.project = text("", studiotheme.Faint, 11, false)
+	b.project = chrome.NewTitleText(12)
 
 	// Row 2: project tabs, save status, undo/redo.
 	plus := newIconTap(theme.ContentAddIcon(), 14, sh.ShowManager)
@@ -100,29 +101,81 @@ func newBars(sh *Shell) *bars {
 
 // systemRow is the menu row below the system title bar: wordmark, menu bar and the
 // project name at the right. It is the same menu bar widget the title bar holds in the
-// custom chrome, so only one of the two is shown at a time.
+// custom chrome, so only one of the two is shown at a time. It uses the same surface
+// (Panel) and rhythm as the custom title bar.
 func (b *bars) systemRow() fyne.CanvasObject {
-	b.project.Color = studiotheme.Faint
-	return bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
-		container.NewHBox(strut(10, 0), container.NewCenter(wordmark()), strut(10, 0)),
-		container.NewHBox(container.NewCenter(b.project), strut(12, 0)),
-		b.menu))
+	b.project.SetColor(studiotheme.Muted)
+	return bar(chrome.BarHeight(false), studiotheme.Panel, false, container.NewBorder(nil, nil,
+		b.titleLead(), container.NewHBox(container.NewCenter(b.project), strut(12, 0)), nil))
 }
 
-// titleParts are the areas of the custom title bar: wordmark and menu bar after the
-// window buttons, the project name in the middle, nothing at the right.
+// titleParts are the areas of the custom title bar: app glyph, wordmark, divider and menu
+// bar after the window buttons, the project name centred on the window, nothing at the
+// right.
 func (b *bars) titleParts() winchrome.Parts {
-	b.project.Color = studiotheme.Muted
-	return winchrome.Parts{
-		Leading: container.NewHBox(strut(6, 0), container.NewCenter(wordmark()), strut(10, 0), b.menu),
-		Center:  container.NewCenter(b.project),
-	}
+	b.project.SetColor(studiotheme.Muted)
+	return winchrome.Parts{Leading: b.titleLead(), Center: b.project}
 }
 
-// wordmark is the app name with a small frame glyph in the accent colour.
-func wordmark() fyne.CanvasObject {
-	name := text("Frame Studio", studiotheme.Text, 12, true)
-	return container.NewHBox(container.NewCenter(newMarkGlyph()), strut(1, 0), container.NewCenter(name))
+// titleLead is [8 pad][glyph 16][8][wordmark][12][divider 1x14][8][menu titles]. Every
+// child is centred in the bar height with the same helper (kit.CenterY), so the text
+// baselines of wordmark, titles and project name match.
+func (b *bars) titleLead() fyne.CanvasObject {
+	word := text("Frame Studio", studiotheme.Text, 13, true)
+	div := canvas.NewRectangle(studiotheme.MenuSep)
+	div.SetMinSize(fyne.NewSize(1, 14))
+	return container.New(&leadLayout{pad: leadPad}, newMarkGlyph(), word, div, b.menu)
+}
+
+// leadPad is the space before the app glyph: 8, or nothing after the mac traffic lights
+// (their zone already ends 12 after the last light).
+func leadPad() float32 {
+	if winchrome.Style(settings.Get().Display) == chrome.StyleMac {
+		return 0
+	}
+	return 8
+}
+
+// leadLayout places glyph, wordmark, divider and menu bar (in this order) left to right.
+type leadLayout struct{ pad func() float32 }
+
+const (
+	glyphSize = 16
+	gapGlyph  = 8
+	gapWord   = 12
+	gapDiv    = 8
+)
+
+func (l *leadLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	if len(objs) != 4 {
+		return
+	}
+	s := kit.ScaleOf(objs[0])
+	x := l.pad()
+	put := func(o fyne.CanvasObject, w float32) {
+		h := o.MinSize().Height
+		if h > size.Height {
+			h = size.Height
+		}
+		o.Resize(fyne.NewSize(w, h))
+		o.Move(fyne.NewPos(kit.Snap(x, s), kit.CenterY(size.Height, h, s)))
+		x += w
+	}
+	put(objs[0], glyphSize)
+	x += gapGlyph
+	put(objs[1], objs[1].MinSize().Width)
+	x += gapWord
+	put(objs[2], 1)
+	x += gapDiv
+	put(objs[3], objs[3].MinSize().Width)
+}
+
+func (l *leadLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	if len(objs) != 4 {
+		return fyne.Size{}
+	}
+	w := l.pad() + glyphSize + gapGlyph + objs[1].MinSize().Width + gapWord + 1 + gapDiv + objs[3].MinSize().Width
+	return fyne.NewSize(w, chrome.BarHeight(false))
 }
 
 // markGlyph is the wordmark's frame glyph. It reads the accent when painting, so a
@@ -135,7 +188,7 @@ func newMarkGlyph() *markGlyph {
 	return g
 }
 
-func (g *markGlyph) MinSize() fyne.Size { return fyne.NewSize(14, 11) }
+func (g *markGlyph) MinSize() fyne.Size { return fyne.NewSize(glyphSize, glyphSize) }
 
 func (g *markGlyph) CreateRenderer() fyne.WidgetRenderer {
 	frame := canvas.NewRectangle(color.Transparent)
@@ -151,11 +204,13 @@ func (g *markGlyph) CreateRenderer() fyne.WidgetRenderer {
 type markRenderer struct{ frame, dot *canvas.Rectangle }
 
 func (r *markRenderer) Layout(s fyne.Size) {
-	r.frame.Resize(s)
-	r.dot.Move(fyne.NewPos((s.Width-4)/2, (s.Height-3)/2))
-	r.dot.Resize(fyne.NewSize(4, 3))
+	fh := s.Height * 12 / 16 // frame 16x12 in the 16x16 box
+	r.frame.Move(fyne.NewPos(0, (s.Height-fh)/2))
+	r.frame.Resize(fyne.NewSize(s.Width, fh))
+	r.dot.Move(fyne.NewPos((s.Width-5)/2, (s.Height-4)/2))
+	r.dot.Resize(fyne.NewSize(5, 4))
 }
-func (r *markRenderer) MinSize() fyne.Size { return fyne.NewSize(14, 11) }
+func (r *markRenderer) MinSize() fyne.Size { return fyne.NewSize(glyphSize, glyphSize) }
 func (r *markRenderer) Refresh() {
 	r.frame.StrokeColor, r.dot.FillColor = studiotheme.Steel, studiotheme.Steel
 	r.frame.Refresh()
@@ -229,11 +284,11 @@ func (b *bars) refresh() {
 
 	p := sh.active
 	b.status.Text = statusText(p, sh.now())
-	b.project.Text = ""
+	name := ""
 	if p != nil && !sh.showManager {
-		b.project.Text = ellipsize(p.sess.Project.Name, 40)
+		name = p.sess.Project.Name // the title shortens itself in the middle
 	}
-	b.project.Refresh()
+	b.project.SetText(name)
 	if p == nil {
 		b.undo.Disable()
 		b.redo.Disable()

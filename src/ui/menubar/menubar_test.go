@@ -33,9 +33,9 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	a := test.NewTempApp(t)
 	a.Settings().SetTheme(studiotheme.New())
-	oldOpen, oldSafe := openDelay, safeDelay
-	openDelay, safeDelay = 0, 0
-	t.Cleanup(func() { openDelay, safeDelay = oldOpen, oldSafe; mru = nil })
+	oldOpen, oldSafe, oldIgn := openDelay, safeDelay, ignoreUpWithin
+	openDelay, safeDelay, ignoreUpWithin = 0, 0, 0
+	t.Cleanup(func() { openDelay, safeDelay, ignoreUpWithin = oldOpen, oldSafe, oldIgn; mru = nil })
 
 	h := &harness{t: t, reg: command.NewRegistry(), col: 2}
 	run := func(id string) func() { return func() { h.ran = append(h.ran, id) } }
@@ -119,7 +119,7 @@ func (h *harness) rowIndex(d int, label string) int {
 func (h *harness) rowPos(d int, label string) fyne.Position {
 	p := h.pane(d)
 	i := h.rowIndex(d, label)
-	return p.Position().Add(fyne.NewPos(60, p.tops[i]+rowHeight/2))
+	return p.Position().Add(fyne.NewPos(60, p.tops[i]+menustyle.RowH/2))
 }
 
 func (h *harness) openTitle(title string) {
@@ -389,9 +389,13 @@ func TestKeyboardNavigation(t *testing.T) {
 	if p.hover < 0 || p.rows[p.hover].label != "Umbenennen…" {
 		t.Fatal("letter did not jump")
 	}
+	h.key(fyne.KeyEscape) // menu -> keyboard mode on the bar
+	if !h.bar.IsOpen() || len(h.bar.layer.panes) != 0 {
+		t.Fatal("Esc did not leave the menu for the bar")
+	}
 	h.key(fyne.KeyEscape)
 	if h.bar.IsOpen() {
-		t.Fatal("Esc did not close")
+		t.Fatal("second Esc did not close")
 	}
 }
 
@@ -409,6 +413,7 @@ func TestF10AndAltFocusTheBar(t *testing.T) {
 	if len(h.bar.layer.panes) != 1 || h.bar.active != 2 {
 		t.Fatal("Down did not open the focused menu")
 	}
+	h.key(fyne.KeyEscape)
 	h.key(fyne.KeyEscape)
 	if h.bar.HandleKey(&fyne.KeyEvent{Name: fyne.KeyA}) {
 		t.Fatal("plain keys must pass through")

@@ -12,13 +12,11 @@ import (
 	"sync"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/chrome"
 	"framestudio-proto/src/ui/display"
-	studiotheme "framestudio-proto/src/ui/theme"
 )
 
 // Bar heights.
@@ -175,10 +173,8 @@ func Build(w fyne.Window, o chrome.Options, p Parts, body fyne.CanvasObject) (fy
 		o.Backend = Sys
 	}
 	c := &Chrome{Bar: chrome.NewTitlebar(w, o, p.Leading, p.Center, p.Trailing)}
-	line := canvas.NewRectangle(studiotheme.Border)
-	line.SetMinSize(fyne.NewSize(1, 1))
-	bar := container.NewBorder(nil, line, nil, nil, c.Bar)
-	c.Frame = chrome.NewFrame(w, o.Backend, container.NewBorder(bar, nil, nil, nil, body))
+	// the title bar draws its own 1 px bottom line inside its height
+	c.Frame = chrome.NewFrame(w, o.Backend, container.NewBorder(c.Bar, nil, nil, nil, body))
 	return c.Frame, c
 }
 

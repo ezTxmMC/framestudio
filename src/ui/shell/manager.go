@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"framestudio-proto/src/ui/menubar"
 	"image"
 	"os"
 	"path/filepath"
@@ -410,7 +411,7 @@ func (m *manager) showMenu(path string, at fyne.Position) {
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Löschen…", m.deleteSelected),
 	)
-	widget.ShowPopUpMenuAtPosition(menu, m.sh.win.Canvas(), at)
+	menubar.ShowContextMenu(m.sh.win.Canvas(), at, menubar.FromFyneMenu(menu))
 }
 
 func (m *manager) renameSelected() {

@@ -30,13 +30,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/ui/command"
+	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
-)
-
-const (
-	barHeight = 27
-	titleSize = 12.5
-	titlePadX = 9
 )
 
 type MenuBar struct {
@@ -49,8 +44,10 @@ type MenuBar struct {
 	titleX    []float32
 	titleW    []float32
 
-	hover   int // title under the mouse while no menu is open
-	active  int // open menu or keyboard-focused title, -1 when closed
+	height  float32 // bar height the host gave (28, compact 24)
+	hover   int     // title under the mouse while no menu is open
+	pressed int     // title with the primary button down while closed
+	active  int     // open menu or keyboard-focused title, -1 when closed
 	altHeld bool
 	altSolo bool // Alt went down and no other key followed yet
 
@@ -66,7 +63,7 @@ type MenuBar struct {
 // New builds the bar for window w. Leading/trailing objects (logo, tabs, status) are
 // placed by the shell around it.
 func New(w fyne.Window, reg *command.Registry, menus []command.Menu) *MenuBar {
-	m := &MenuBar{reg: reg, menus: menus, win: w, hover: -1, active: -1}
+	m := &MenuBar{reg: reg, menus: menus, win: w, hover: -1, active: -1, pressed: -1, height: 28}
 	m.mnemonics = mnemonics(menus)
 	m.measure()
 	m.ExtendBaseWidget(m)
@@ -90,15 +87,35 @@ func mnemonics(menus []command.Menu) []rune {
 	return out
 }
 
+// titleMetrics are the title text size and side padding for the current bar height.
+func (m *MenuBar) titleMetrics() (size, padX float32) {
+	if m.height <= compactBar {
+		return menustyle.CompactTitle, menustyle.CompactPadX
+	}
+	return menustyle.TitleSize, menustyle.TitlePadX
+}
+
 func (m *MenuBar) measure() {
 	m.titleX = make([]float32, len(m.menus))
 	m.titleW = make([]float32, len(m.menus))
+	size, padX := m.titleMetrics()
 	x := float32(0)
 	for i, mn := range m.menus {
-		w := fyne.MeasureText(mn.Title, titleSize, fyne.TextStyle{}).Width + 2*titlePadX
+		w := fyne.MeasureText(mn.Title, size, fyne.TextStyle{}).Width + 2*padX
 		m.titleX[i], m.titleW[i] = x, w
 		x += w
 	}
+}
+
+// SetHeight sets the bar height (chrome.BarHeight: 28, or 24 compact). The titles, pills
+// and MinSize follow it.
+func (m *MenuBar) SetHeight(h float32) {
+	if h <= 0 || h == m.height {
+		return
+	}
+	m.height = h
+	m.measure()
+	m.Refresh()
 }
 
 func (m *MenuBar) indexAt(x float32) int {
@@ -229,7 +246,7 @@ func (m *MenuBar) ensureLayer() *layer {
 		return m.layer
 	}
 	c := m.canvas()
-	l := newLayer(m)
+	l := newLayer(m, c)
 	m.layer = l
 	c.Overlays().Add(l)
 	l.Move(fyne.NewPos(0, 0))
@@ -251,7 +268,9 @@ func (m *MenuBar) openMenu(i int, keyboard bool) {
 	m.active = i
 	m.hover = -1
 	l.keyboard = keyboard
-	l.setRoot(m.menus[i].Items, keyboard)
+	items := m.menus[i].Items
+	l.root = func() []row { return buildRows(m.reg, items) }
+	l.setRoot(keyboard)
 	m.Refresh()
 }
 
@@ -269,14 +288,12 @@ func (m *MenuBar) closeAll() {
 		return
 	}
 	m.layer = nil
-	l.closed = true
-	l.cancel()
+	l.shut(false)
 	if m.unsub != nil {
 		m.unsub()
 		m.unsub = nil
 	}
-	m.canvas().Overlays().Remove(l)
-	m.active, m.hover = -1, -1
+	m.active, m.hover, m.pressed = -1, -1, -1
 	m.Refresh()
 }
 
@@ -293,76 +310,108 @@ func (m *MenuBar) setHover(i int) {
 }
 
 func (m *MenuBar) Tapped(ev *fyne.PointEvent) {
+	m.pressed = -1
 	if i := m.indexAt(ev.Position.X); i >= 0 {
 		m.openMenu(i, false)
 	}
 }
 
+// MouseDown/MouseUp show the pressed look of a closed title.
+func (m *MenuBar) MouseDown(ev *desktop.MouseEvent) {
+	if ev.Button != desktop.MouseButtonPrimary || m.layer != nil {
+		return
+	}
+	if i := m.indexAt(ev.Position.X); i >= 0 && i != m.pressed {
+		m.pressed = i
+		m.Refresh()
+	}
+}
+
+func (m *MenuBar) MouseUp(*desktop.MouseEvent) {
+	if m.pressed >= 0 {
+		m.pressed = -1
+		m.Refresh()
+	}
+}
+
 func (m *MenuBar) MouseIn(ev *desktop.MouseEvent)    { m.setHover(m.indexAt(ev.Position.X)) }
 func (m *MenuBar) MouseMoved(ev *desktop.MouseEvent) { m.setHover(m.indexAt(ev.Position.X)) }
-func (m *MenuBar) MouseOut()                         { m.setHover(-1) }
+func (m *MenuBar) MouseOut() {
+	m.setHover(-1)
+	if m.pressed >= 0 {
+		m.pressed = -1
+		m.Refresh()
+	}
+}
 
+// MinSize is the width of all titles at the height the host set with SetHeight.
 func (m *MenuBar) MinSize() fyne.Size {
 	w := float32(0)
 	if n := len(m.titleX); n > 0 {
 		w = m.titleX[n-1] + m.titleW[n-1]
 	}
-	return fyne.NewSize(w, barHeight)
+	return fyne.NewSize(w, m.height)
 }
 
 func (m *MenuBar) CreateRenderer() fyne.WidgetRenderer {
-	r := &barRenderer{m: m, bg: canvas.NewRectangle(studiotheme.Gap)}
+	size, _ := m.titleMetrics()
+	r := &barRenderer{m: m}
 	for _, mn := range m.menus {
 		hl := canvas.NewRectangle(color.Transparent)
-		hl.CornerRadius = 3
-		t := canvas.NewText(mn.Title, studiotheme.Text)
-		t.TextSize = titleSize
-		u := canvas.NewRectangle(studiotheme.Text)
+		hl.CornerRadius = menustyle.PillRadius
+		t := canvas.NewText(mn.Title, studiotheme.MenuText)
+		t.TextSize = size
+		u := canvas.NewRectangle(studiotheme.MenuText)
 		u.Hide()
 		r.hl, r.text, r.under = append(r.hl, hl), append(r.text, t), append(r.under, u)
 	}
+	r.focus = canvas.NewRectangle(color.Transparent)
+	r.focus.CornerRadius = menustyle.PillRadius
+	r.focus.StrokeWidth = 1
+	r.focus.Hide()
 	r.update()
 	return r
 }
 
-// openTint is Raised tinted towards the accent: the title whose menu is open. Computed
-// when painting, so a changed accent shows at once.
-func openTint() color.NRGBA { return mix(studiotheme.Raised, studiotheme.Steel, 0.3) }
-
-func mix(a, b color.NRGBA, t float32) color.NRGBA {
-	f := func(x, y uint8) uint8 { return uint8(float32(x)*(1-t) + float32(y)*t + 0.5) }
-	return color.NRGBA{f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), 0xFF}
-}
-
 type barRenderer struct {
 	m     *MenuBar
-	bg    *canvas.Rectangle
 	hl    []*canvas.Rectangle
 	text  []*canvas.Text
 	under []*canvas.Rectangle
+	focus *canvas.Rectangle // keyboard focus outline of the bar
 }
 
 func (r *barRenderer) Layout(size fyne.Size) {
 	m := r.m
-	r.bg.Resize(size)
+	s := kit.ScaleOf(m)
+	tsize, padX := m.titleMetrics()
 	h := size.Height
+	pillY := kit.Snap(menustyle.PillInsetY, s)
+	pillH := kit.Snap(h-2*menustyle.PillInsetY, s)
 	for i := range r.text {
 		x, w := m.titleX[i], m.titleW[i]
-		r.hl[i].Move(fyne.NewPos(x+1, 3))
-		r.hl[i].Resize(fyne.NewSize(w-2, h-6))
+		r.hl[i].Move(fyne.NewPos(kit.Snap(x+1, s), pillY))
+		r.hl[i].Resize(fyne.NewSize(kit.Snap(w-2, s), pillH))
+		r.text[i].TextSize = tsize
 		ts := r.text[i].MinSize()
-		ty := (h - ts.Height) / 2
-		r.text[i].Move(fyne.NewPos(x+titlePadX, ty))
+		ty := kit.CenterY(h, ts.Height, s)
+		r.text[i].Move(fyne.NewPos(kit.Snap(x+padX, s), ty))
 		r.text[i].Resize(ts)
-		// mnemonic underline under its letter
+		// mnemonic underline under its letter, one pixel below the baseline
 		title := m.menus[i].Title
 		pos := strings.IndexFunc(strings.ToLower(title), func(c rune) bool { return c == m.mnemonics[i] })
 		if pos >= 0 {
 			_, n := firstRune(title[pos:])
-			pre := fyne.MeasureText(title[:pos], titleSize, fyne.TextStyle{}).Width
-			lw := fyne.MeasureText(title[pos:pos+n], titleSize, fyne.TextStyle{}).Width
-			r.under[i].Move(fyne.NewPos(x+titlePadX+pre, ty+ts.Height-3))
-			r.under[i].Resize(fyne.NewSize(lw, 1))
+			pre := fyne.MeasureText(title[:pos], tsize, fyne.TextStyle{}).Width
+			lw := fyne.MeasureText(title[pos:pos+n], tsize, fyne.TextStyle{}).Width
+			_, base := fyne.CurrentApp().Driver().RenderedTextSize(title, tsize, fyne.TextStyle{}, nil)
+			r.under[i].Move(fyne.NewPos(kit.Snap(x+padX+pre, s), kit.Snap(ty+base+1, s)))
+			r.under[i].Resize(fyne.NewSize(kit.Snap(lw, s), kit.Hair(s)))
+		}
+		if i == m.active {
+			r.focus.Move(r.hl[i].Position())
+			r.focus.Resize(r.hl[i].Size())
+			r.focus.StrokeWidth = kit.Hair(s)
 		}
 	}
 }
@@ -379,24 +428,33 @@ func firstRune(s string) (rune, int) {
 
 func (r *barRenderer) MinSize() fyne.Size { return r.m.MinSize() }
 
+// update sets the fills of the pills: hover, pressed and open use the white-alpha menu
+// tokens; the text never changes colour. Keyboard focus without an open menu adds an
+// accent outline.
 func (r *barRenderer) update() {
 	m := r.m
-	showMnemonic := m.altHeld || (m.layer != nil && m.layer.keyboard)
+	open := m.layer != nil && len(m.layer.panes) > 0
+	kbd := m.layer != nil && m.layer.keyboard
+	showMnemonic := (m.altHeld || kbd) && runtimeGOOS != "darwin"
+	r.focus.Hide()
 	for i := range r.text {
 		switch {
-		case i == m.active:
-			r.hl[i].FillColor = openTint()
+		case i == m.active && open:
+			r.hl[i].FillColor = studiotheme.MenuOpen
+		case i == m.active && m.layer != nil: // bar focused by keyboard
+			r.hl[i].FillColor = studiotheme.MenuHoverBar
+			r.focus.StrokeColor = studiotheme.Steel
+			r.focus.Show()
+		case i == m.pressed:
+			r.hl[i].FillColor = studiotheme.MenuOpen
 		case i == m.hover:
-			r.hl[i].FillColor = studiotheme.Raised
+			r.hl[i].FillColor = studiotheme.MenuHoverBar
 		default:
 			r.hl[i].FillColor = color.Transparent
 		}
-		r.text[i].Color = studiotheme.Text
-		if i == m.active {
-			r.text[i].Color = color.White
-		}
+		r.text[i].Color = studiotheme.MenuText
 		if showMnemonic && m.mnemonics[i] != 0 {
-			r.under[i].FillColor = r.text[i].Color
+			r.under[i].FillColor = studiotheme.MenuText
 			r.under[i].Show()
 		} else {
 			r.under[i].Hide()
@@ -411,11 +469,11 @@ func (r *barRenderer) Refresh() {
 }
 
 func (r *barRenderer) Objects() []fyne.CanvasObject {
-	objs := []fyne.CanvasObject{r.bg}
+	var objs []fyne.CanvasObject
 	for i := range r.text {
 		objs = append(objs, r.hl[i], r.text[i], r.under[i])
 	}
-	return objs
+	return append(objs, r.focus)
 }
 
 func (r *barRenderer) Destroy() {}
@@ -442,7 +500,7 @@ func (m *MenuBar) ItemPos(label string) (fyne.Position, bool) {
 		p := m.layer.panes[d]
 		for i, r := range p.rows {
 			if !r.sep && r.label == label {
-				return p.Position().Add(fyne.NewPos(60, p.tops[i]+rowHeight/2)), true
+				return p.Position().Add(fyne.NewPos(60, p.tops[i]+menustyle.RowH/2-p.offset())), true
 			}
 		}
 	}

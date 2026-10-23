@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"framestudio-proto/src/ui/menubar"
 	"image/color"
 	"time"
 
@@ -393,7 +394,7 @@ func (d *detached) showMonitorMenu(anchor fyne.CanvasObject) {
 		items = append(items, it)
 	}
 	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor).Add(fyne.NewPos(0, anchor.Size().Height))
-	widget.ShowPopUpMenuAtPosition(fyne.NewMenu("", items...), d.win.Canvas(), pos)
+	menubar.ShowContextMenu(d.win.Canvas(), pos, menubar.FromFyneMenu(fyne.NewMenu("", items...)))
 }
 
 // close closes the window (the panel goes back into the main window).

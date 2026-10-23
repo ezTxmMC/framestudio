@@ -2,7 +2,6 @@ package menubar
 
 import (
 	"image/color"
-	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -14,13 +13,14 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/ui/command"
+	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
 const (
-	paletteW     = 620
-	paletteListH = 380
+	paletteListH = 380 // visible list height at most
 	paletteRowH  = 28
+	paletteSepH  = 9
 	mruMax       = 8
 )
 
@@ -57,52 +57,158 @@ type paletteEntry struct {
 type palette struct {
 	w       fyne.Window
 	reg     *command.Registry
-	pop     *widget.PopUp
+	pop     *popup
 	entry   *searchEntry
 	list    *fyne.Container
 	scroll  *container.Scroll
-	count   *canvas.Text
 	entries []paletteEntry
 	rows    []*paletteRow
 	sel     int
 }
 
+// popup is the palette's overlay: the menu surface (same fill, edge, radius and shadow as
+// the menus) at 12 % of the canvas height, with a transparent catcher around it that
+// closes the palette on a click outside.
+type popup struct {
+	widget.BaseWidget
+	cv      fyne.Canvas
+	content fyne.CanvasObject
+	shadow  []*canvas.Rectangle
+	bg      *canvas.Rectangle
+	pos     fyne.Position
+	size    fyne.Size
+	shown   bool
+}
+
+func newPopup(cv fyne.Canvas, content fyne.CanvasObject, size fyne.Size) *popup {
+	st := menustyle
+	s := kit.CanvasScale(cv)
+	cs := cv.Size()
+	if size.Width > cs.Width-4*st.ScreenMargin {
+		size.Width = cs.Width - 4*st.ScreenMargin
+	}
+	pp := &popup{cv: cv, content: content, size: size}
+	pp.pos = fyne.NewPos(kit.Snap((cs.Width-size.Width)/2, s), kit.Snap(cs.Height*0.12, s))
+	if pp.pos.Y+size.Height > cs.Height-st.ScreenMargin {
+		pp.pos.Y = st.ScreenMargin
+	}
+	for i := st.ShadowLayers; i >= 1; i-- {
+		g := float32(i) * 2
+		sh := canvas.NewRectangle(color.NRGBA{0, 0, 0, st.ShadowAlpha[i-1]})
+		sh.CornerRadius = st.PaneRadius + g
+		sh.Move(pp.pos.Add(fyne.NewPos(kit.Snap(-g, s), kit.Snap(-g+float32(i)*1.5, s))))
+		sh.Resize(fyne.NewSize(kit.Snap(size.Width+2*g, s), kit.Snap(size.Height+2*g, s)))
+		pp.shadow = append(pp.shadow, sh)
+	}
+	pp.bg = canvas.NewRectangle(studiotheme.MenuSurface)
+	pp.bg.CornerRadius = st.PaneRadius
+	pp.bg.StrokeColor = studiotheme.MenuEdge
+	pp.bg.StrokeWidth = kit.Hair(s)
+	pp.bg.Move(pp.pos)
+	pp.bg.Resize(size)
+	content.Move(pp.pos)
+	content.Resize(size)
+	pp.ExtendBaseWidget(pp)
+	return pp
+}
+
+func (pp *popup) Show() {
+	pp.shown = true
+	pp.cv.Overlays().Add(pp)
+	pp.Move(fyne.NewPos(0, 0))
+	pp.Resize(pp.cv.Size())
+}
+
+// Hide removes the palette from the canvas.
+func (pp *popup) Hide() {
+	if !pp.shown {
+		return
+	}
+	pp.shown = false
+	pp.cv.Overlays().Remove(pp)
+}
+
+// Visible reports whether the palette is open.
+func (pp *popup) Visible() bool { return pp.shown }
+
+func (pp *popup) Tapped(ev *fyne.PointEvent) {
+	p := ev.Position
+	if p.X >= pp.pos.X && p.Y >= pp.pos.Y && p.X < pp.pos.X+pp.size.Width && p.Y < pp.pos.Y+pp.size.Height {
+		return
+	}
+	pp.Hide()
+}
+
+func (pp *popup) CreateRenderer() fyne.WidgetRenderer { return &popupRenderer{pp: pp} }
+
+type popupRenderer struct{ pp *popup }
+
+func (r *popupRenderer) Layout(fyne.Size)   {}
+func (r *popupRenderer) MinSize() fyne.Size { return fyne.NewSize(0, 0) }
+func (r *popupRenderer) Refresh()           { canvas.Refresh(r.pp) }
+func (r *popupRenderer) Destroy()           {}
+func (r *popupRenderer) Objects() []fyne.CanvasObject {
+	objs := make([]fyne.CanvasObject, 0, 6)
+	for _, s := range r.pp.shadow {
+		objs = append(objs, s)
+	}
+	return append(objs, r.pp.bg, r.pp.content)
+}
+
+// searchTheme makes the search entry a plain text field inside the palette surface:
+// no field fill, no border, 14 px text.
+type searchTheme struct{ fyne.Theme }
+
+func (t searchTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	switch n {
+	case theme.ColorNameInputBackground, theme.ColorNameInputBorder, theme.ColorNameFocus:
+		return color.Transparent
+	}
+	return t.Theme.Color(n, v)
+}
+
+func (t searchTheme) Size(n fyne.ThemeSizeName) float32 {
+	switch n {
+	case theme.SizeNameText:
+		return 14
+	case theme.SizeNameInputBorder:
+		return 0
+	}
+	return t.Theme.Size(n)
+}
+
 func showPalette(w fyne.Window, reg *command.Registry) *palette {
+	st := menustyle
 	p := &palette{w: w, reg: reg, sel: -1}
 	p.entry = newSearchEntry(p)
 	p.entry.SetPlaceHolder("Befehl suchen…")
 	p.entry.OnChanged = func(string) { p.filter() }
 	p.list = container.New(&listLayout{})
-	p.scroll = container.NewVScroll(p.list)
-	p.scroll.SetMinSize(fyne.NewSize(paletteW, paletteListH))
-	p.count = canvas.NewText("", studiotheme.Faint)
-	p.count.TextSize = 11
-	hint := canvas.NewText("Pfeiltasten wählen  ·  Eingabe führt aus  ·  Esc schließt", studiotheme.Faint)
-	hint.TextSize = 11
-	line := canvas.NewRectangle(studiotheme.Border)
+	p.scroll = container.NewVScroll(container.New(layout.NewCustomPaddedLayout(st.PanePad, st.PanePad, 0, 0), p.list))
+
+	icon := canvas.NewImageFromResource(theme.NewColoredResource(theme.SearchIcon(), studiotheme.ColorNameMuted))
+	icon.FillMode = canvas.ImageFillContain
+	icon.SetMinSize(fyne.NewSquareSize(st.IconSize))
+	strut := canvas.NewRectangle(color.Transparent)
+	strut.SetMinSize(fyne.NewSize(1, st.PaletteSearchH))
+	fieldTheme := searchTheme{theme.Current()}
+	field := container.NewThemeOverride(p.entry, fieldTheme)
+	search := container.NewStack(strut, container.NewBorder(nil, nil,
+		container.New(layout.NewCustomPaddedLayout(0, 0, 16, 4), container.NewCenter(icon)), nil, field))
+	line := canvas.NewRectangle(studiotheme.MenuSep)
 	line.SetMinSize(fyne.NewSize(1, 1))
-	line2 := canvas.NewRectangle(studiotheme.Border)
-	line2.SetMinSize(fyne.NewSize(1, 1))
-	footerBg := canvas.NewRectangle(studiotheme.Panel)
-	footer := container.NewStack(footerBg, container.New(layout.NewCustomPaddedLayout(5, 5, 12, 12),
-		container.NewHBox(hint, layout.NewSpacer(), p.count)))
-	top := container.New(layout.NewCustomPaddedLayout(8, 8, 8, 8), p.entry)
-	content := container.NewBorder(
-		container.New(layout.NewCustomPaddedVBoxLayout(0), top, line),
-		container.New(layout.NewCustomPaddedVBoxLayout(0), line2, footer), nil, nil, p.scroll)
-	p.pop = widget.NewPopUp(content, w.Canvas())
+	content := container.NewBorder(container.New(layout.NewCustomPaddedVBoxLayout(0), search, line),
+		nil, nil, nil, p.scroll)
+
 	p.filter()
-	cs := w.Canvas().Size()
-	size := fyne.NewSize(paletteW, content.MinSize().Height)
-	if size.Width > cs.Width-20 {
-		size.Width = cs.Width - 20
+	listH := float32(paletteListH)
+	if max := w.Canvas().Size().Height * 0.6; listH > max {
+		listH = max
 	}
-	p.pop.Resize(size)
-	y := cs.Height * 0.14
-	if y+size.Height > cs.Height {
-		y = 0
-	}
-	p.pop.ShowAtPosition(fyne.NewPos((cs.Width-size.Width)/2, y))
+	p.scroll.SetMinSize(fyne.NewSize(st.PaletteW, listH))
+	size := fyne.NewSize(st.PaletteW, st.PaletteSearchH+1+listH)
+	p.pop = newPopup(w.Canvas(), content, size)
+	p.pop.Show()
 	w.Canvas().Focus(p.entry)
 	return p
 }
@@ -150,14 +256,6 @@ func (p *palette) filter() {
 	if len(p.entries) == 0 {
 		p.entries = append(p.entries, paletteEntry{kind: kindHeader, header: "Kein Befehl gefunden"})
 	}
-	n := len(recent) + len(prefix) + len(rest)
-	switch n {
-	case 1:
-		p.count.Text = "1 Befehl"
-	default:
-		p.count.Text = strconv.Itoa(n) + " Befehle"
-	}
-	p.count.Refresh()
 	p.sel = -1 // before the rows exist: new renderers read it
 	p.rows = make([]*paletteRow, len(p.entries))
 	objs := make([]fyne.CanvasObject, len(p.entries))
@@ -278,7 +376,8 @@ func (e *searchEntry) TypedKey(ev *fyne.KeyEvent) {
 	}
 }
 
-// listLayout stacks rows without gaps (headers are shorter than command rows).
+// listLayout stacks rows without gaps (group headers are higher than they look: the
+// first one is a row, later ones carry the 9 px separator slot).
 type listLayout struct{}
 
 func (listLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
@@ -296,7 +395,7 @@ func (listLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
 	for _, o := range objs {
 		h += o.MinSize().Height
 	}
-	return fyne.NewSize(paletteW-20, h)
+	return fyne.NewSize(menustyle.PaletteW, h)
 }
 
 type paletteRow struct {
@@ -329,41 +428,41 @@ func (r *paletteRow) MouseOut()                      {}
 
 func (r *paletteRow) MinSize() fyne.Size {
 	if r.e.kind == kindHeader {
-		return fyne.NewSize(100, 24)
+		if r.i > 0 {
+			return fyne.NewSize(100, paletteRowH+paletteSepH)
+		}
+		return fyne.NewSize(100, paletteRowH)
 	}
 	return fyne.NewSize(100, paletteRowH)
 }
 
 func (r *paletteRow) CreateRenderer() fyne.WidgetRenderer {
+	st := menustyle
 	pr := &paletteRowRenderer{r: r, bg: canvas.NewRectangle(color.Transparent)}
-	pr.bg.CornerRadius = 3
+	pr.bg.CornerRadius = st.ItemRadius
 	if r.e.kind == kindHeader {
-		pr.label = canvas.NewText(strings.ToUpper(r.e.header), studiotheme.Muted)
-		pr.label.TextSize = 10.5
-		pr.label.TextStyle = fyne.TextStyle{Bold: true}
+		pr.label = canvas.NewText(r.e.header, studiotheme.Muted)
+		pr.label.TextSize = st.ShortcutSize
+		if r.i > 0 {
+			pr.sep = canvas.NewRectangle(studiotheme.MenuSep)
+		}
 	} else {
-		pr.label = canvas.NewText(r.e.cmd.Label, studiotheme.Text)
-		pr.label.TextSize = labelSize
+		pr.label = canvas.NewText(r.e.cmd.Label, studiotheme.MenuText)
+		pr.label.TextSize = st.LabelSize
 		pr.cat = canvas.NewText(r.e.cmd.Category, studiotheme.Muted)
-		pr.cat.TextSize = 11
+		pr.cat.TextSize = st.ShortcutSize
 		if r.e.cmd.Toggle { // on/off state like the menus: a check mark, or an empty box
 			if r.e.cmd.Checked {
-				pr.check = canvas.NewImageFromResource(theme.ConfirmIcon())
-				pr.check.FillMode = canvas.ImageFillContain
+				pr.check = newGlyph(10, 8, 1.5, [][2]float64{{0.8, 4.4}, {3.8, 7.2}, {9.2, 0.8}})
 			} else {
 				pr.box = canvas.NewRectangle(color.Transparent)
 				pr.box.StrokeWidth = 1
 				pr.box.CornerRadius = 2
 			}
 		}
-		if sc := command.Display(r.e.cmd.Shortcut); sc != "" {
-			pr.sc = canvas.NewText(sc, studiotheme.Muted)
-			pr.sc.TextSize = scSize
-			pr.sc.TextStyle = fyne.TextStyle{Monospace: true}
-			pr.chip = canvas.NewRectangle(studiotheme.Lane)
-			pr.chip.CornerRadius = 3
-			pr.chip.StrokeColor = studiotheme.Border
-			pr.chip.StrokeWidth = 1
+		if sc := ShortcutText(command.Display(r.e.cmd.Shortcut), runtimeGOOS); sc != "" {
+			pr.sc = canvas.NewText(sc, studiotheme.MenuShortcut)
+			pr.sc.TextSize = st.ShortcutSize
 		}
 	}
 	pr.update()
@@ -373,47 +472,55 @@ func (r *paletteRow) CreateRenderer() fyne.WidgetRenderer {
 type paletteRowRenderer struct {
 	r          *paletteRow
 	bg         *canvas.Rectangle
+	sep        *canvas.Rectangle // group separator above a later header
 	label, cat *canvas.Text
 	sc         *canvas.Text
-	chip       *canvas.Rectangle
-	check      *canvas.Image     // toggle that is on
+	check      *glyph            // toggle that is on
 	box        *canvas.Rectangle // toggle that is off
 }
 
 const (
 	catColW   = 120
-	checkColW = 22 // state column of toggles, kept for every row so labels align
+	checkColW = 24 // state column of toggles, kept for every row so labels align
 )
 
 func (pr *paletteRowRenderer) Layout(size fyne.Size) {
-	pr.bg.Move(fyne.NewPos(6, 1))
-	pr.bg.Resize(fyne.NewSize(size.Width-12, size.Height-2))
+	st := menustyle
+	s := kit.ScaleOf(pr.r)
+	top := float32(0)
+	if pr.sep != nil {
+		top = paletteSepH
+		pr.sep.Move(fyne.NewPos(st.SepInset, kit.Snap(4, s)))
+		pr.sep.Resize(fyne.NewSize(size.Width-2*st.SepInset, kit.Hair(s)))
+	}
+	band := size.Height - top
+	pr.bg.Move(fyne.NewPos(st.PanePad, top))
+	pr.bg.Resize(fyne.NewSize(size.Width-2*st.PanePad, band))
 	ls := pr.label.MinSize()
 	if pr.r.e.kind == kindHeader {
-		pr.label.Move(fyne.NewPos(14, size.Height-ls.Height-3))
+		pr.label.Move(fyne.NewPos(st.PanePad+st.PadSide, top+kit.CenterY(band, ls.Height, s)))
 		pr.label.Resize(ls)
 		return
 	}
+	left := st.PanePad + st.PadSide
 	cs := pr.cat.MinSize()
-	pr.cat.Move(fyne.NewPos(16, (size.Height-cs.Height)/2))
+	pr.cat.Move(fyne.NewPos(left, top+kit.CenterY(band, cs.Height, s)))
 	pr.cat.Resize(cs)
-	pr.label.Move(fyne.NewPos(16+catColW+checkColW, (size.Height-ls.Height)/2))
+	pr.label.Move(fyne.NewPos(left+catColW+checkColW, top+kit.CenterY(band, ls.Height, s)))
 	pr.label.Resize(ls)
 	if pr.check != nil {
-		pr.check.Move(fyne.NewPos(16+catColW, (size.Height-14)/2))
-		pr.check.Resize(fyne.NewSquareSize(14))
+		pr.check.obj.Resize(fyne.NewSize(10, 8))
+		pr.check.obj.Move(fyne.NewPos(kit.Snap(left+catColW, s), top+kit.CenterY(band, 8, s)))
 	}
 	if pr.box != nil {
-		pr.box.Move(fyne.NewPos(16+catColW+2, (size.Height-11)/2))
-		pr.box.Resize(fyne.NewSquareSize(11))
+		pr.box.StrokeWidth = kit.Hair(s)
+		pr.box.Resize(fyne.NewSquareSize(10))
+		pr.box.Move(fyne.NewPos(kit.Snap(left+catColW, s), top+kit.CenterY(band, 10, s)))
 	}
 	if pr.sc != nil {
 		ss := pr.sc.MinSize()
-		x := size.Width - 16 - ss.Width
-		pr.sc.Move(fyne.NewPos(x, (size.Height-ss.Height)/2))
+		pr.sc.Move(fyne.NewPos(kit.Snap(size.Width-st.PanePad-st.PadSide-ss.Width, s), top+kit.CenterY(band, ss.Height, s)))
 		pr.sc.Resize(ss)
-		pr.chip.Move(fyne.NewPos(x-6, (size.Height-ss.Height)/2-2))
-		pr.chip.Resize(fyne.NewSize(ss.Width+12, ss.Height+4))
 	}
 }
 
@@ -424,43 +531,30 @@ func (pr *paletteRowRenderer) update() {
 	}
 	sel := r.p.sel == r.i
 	enabled := r.e.cmd.Enabled
-	pr.label.Color, pr.cat.Color = studiotheme.Text, studiotheme.Muted
+	pr.label.Color, pr.cat.Color = studiotheme.MenuText, studiotheme.Muted
 	if !enabled {
-		pr.label.Color, pr.cat.Color = studiotheme.Faint, studiotheme.Faint
+		pr.label.Color, pr.cat.Color = studiotheme.MenuDisabled, studiotheme.MenuDisabled
 	}
 	pr.bg.FillColor = color.Transparent
 	if sel {
-		if enabled {
-			pr.bg.FillColor = studiotheme.Steel
-			pr.label.Color = color.White
-			pr.cat.Color = color.NRGBA{0xFF, 0xFF, 0xFF, 0xB0}
-		} else {
-			pr.bg.FillColor = studiotheme.Raised
+		pr.bg.FillColor = studiotheme.MenuAccentRow()
+		if !enabled {
+			pr.bg.FillColor = studiotheme.MenuHover
 		}
 	}
 	if pr.box != nil {
-		pr.box.StrokeColor = studiotheme.Faint
-		if sel && enabled {
-			pr.box.StrokeColor = color.NRGBA{0xFF, 0xFF, 0xFF, 0xB0}
+		pr.box.StrokeColor = studiotheme.Muted
+		if !enabled {
+			pr.box.StrokeColor = studiotheme.MenuDisabled
 		}
 	}
 	if pr.check != nil {
-		res := theme.ConfirmIcon()
-		if !enabled {
-			res = theme.NewDisabledResource(res)
-		}
-		pr.check.Resource = res
+		pr.check.setColor(pr.label.Color)
 	}
 	if pr.sc != nil {
-		pr.sc.Color = studiotheme.Muted
-		pr.chip.FillColor, pr.chip.StrokeColor = studiotheme.Lane, studiotheme.Border
+		pr.sc.Color = studiotheme.MenuShortcut
 		if !enabled {
-			pr.sc.Color = studiotheme.Faint
-		}
-		if sel && enabled {
-			pr.sc.Color = color.White
-			pr.chip.FillColor = color.NRGBA{0xFF, 0xFF, 0xFF, 0x22}
-			pr.chip.StrokeColor = color.NRGBA{0xFF, 0xFF, 0xFF, 0x40}
+			pr.sc.Color = studiotheme.MenuDisabled
 		}
 	}
 }
@@ -473,15 +567,18 @@ func (pr *paletteRowRenderer) Refresh() {
 func (pr *paletteRowRenderer) Destroy() {}
 func (pr *paletteRowRenderer) Objects() []fyne.CanvasObject {
 	objs := []fyne.CanvasObject{pr.bg}
-	if pr.chip != nil {
-		objs = append(objs, pr.chip, pr.sc)
+	if pr.sep != nil {
+		objs = append(objs, pr.sep)
+	}
+	if pr.sc != nil {
+		objs = append(objs, pr.sc)
 	}
 	objs = append(objs, pr.label)
 	if pr.cat != nil {
 		objs = append(objs, pr.cat)
 	}
 	if pr.check != nil {
-		objs = append(objs, pr.check)
+		objs = append(objs, pr.check.obj)
 	}
 	if pr.box != nil {
 		objs = append(objs, pr.box)

@@ -26,17 +26,16 @@ const (
 
 // Geometry of the mac traffic lights (points).
 const (
-	macDiameter = 12.5
+	macDiameter = 12.0
 	macGap      = 8.0
 	macPadLeft  = 12.0
 	macPadRight = 12.0
-	winButtonW  = 46.0
 
-	// linux (Adwaita / Breeze like): round hover discs with symbolic icons
-	linDisc     = 24.0
-	linGap      = 4.0
-	linPadLeft  = 4.0
-	linPadRight = 8.0
+	// linux (Breeze like): round hover discs with symbolic icons; the disc is 18 (16 in
+	// the compact bar)
+	linGap      = 6.0
+	linPadLeft  = 6.0
+	linPadRight = 10.0
 )
 
 // styleSpec describes one button style; everything that differs per platform is data.
@@ -46,23 +45,16 @@ type styleSpec struct {
 	zoomFull   bool          // the zoom button is fullscreen (Alt: maximize), else maximize
 	perButton  bool          // hover/press is per button (else the group hovers as a whole)
 	kinds      [3]buttonKind // buttons left to right
-	width      float32
-	slotStart  float64 // left edge of the first hit area
-	slotStep   float64 // distance between hit areas
-	slotW      float64 // width of a hit area (full bar height)
 }
 
 var styles = map[string]styleSpec{
 	StyleMac: {right: false, centreText: true, zoomFull: true, perButton: false,
 		kinds: [3]buttonKind{kindClose, kindMinimize, kindZoom},
-		width: float32(macPadLeft + 3*macDiameter + 2*macGap + macPadRight)},
+	},
 	StyleWin: {right: true, centreText: false, perButton: true,
-		kinds: [3]buttonKind{kindMinimize, kindZoom, kindClose},
-		width: 3 * winButtonW, slotStart: 0, slotStep: winButtonW, slotW: winButtonW},
+		kinds: [3]buttonKind{kindMinimize, kindZoom, kindClose}},
 	StyleLinux: {right: true, centreText: true, perButton: true,
-		kinds:     [3]buttonKind{kindMinimize, kindZoom, kindClose},
-		width:     linPadLeft + 3*linDisc + 2*linGap + linPadRight,
-		slotStart: linPadLeft - linGap/2, slotStep: linDisc + linGap, slotW: linDisc + linGap},
+		kinds: [3]buttonKind{kindMinimize, kindZoom, kindClose}},
 }
 
 func (c *Controls) spec() styleSpec { return styles[c.style] }
@@ -173,17 +165,41 @@ func (c *Controls) SetAlt(on bool) {
 	}
 }
 
-func barHeight(compact bool) float32 {
+// BarHeight is the one source of the title bar height: 28, or 24 for the compact bar of
+// secondary windows. The menu bar, the window buttons and the title bar all use it.
+func BarHeight(compact bool) float32 {
 	if compact {
 		return 24
 	}
 	return 28
 }
 
-func (c *Controls) height() float32 { return barHeight(c.compact) }
+func (c *Controls) height() float32 { return BarHeight(c.compact) }
+
+// winW is the width of a Windows style button (full bar height).
+func (c *Controls) winW() float64 {
+	if c.compact {
+		return 40
+	}
+	return 46
+}
+
+// linDisc is the diameter of a linux style disc.
+func (c *Controls) linDisc() float64 {
+	if c.compact {
+		return 16
+	}
+	return 18
+}
 
 func (c *Controls) width() float32 {
-	return c.spec().width
+	switch c.style {
+	case StyleWin:
+		return float32(3 * c.winW())
+	case StyleLinux:
+		return float32(linPadLeft + 3*c.linDisc() + 2*linGap + linPadRight)
+	}
+	return float32(macPadLeft + 3*macDiameter + 2*macGap + macPadRight)
 }
 
 func (c *Controls) MinSize() fyne.Size { return fyne.NewSize(c.width(), c.height()) }
@@ -219,14 +235,19 @@ func (c *Controls) kinds() [3]buttonKind { return c.spec().kinds }
 
 // slot returns the horizontal hit area of the i-th button (per button styles).
 func (c *Controls) slot(i int) (x0, x1 float64) {
-	sp := c.spec()
-	x0 = sp.slotStart + float64(i)*sp.slotStep
-	return x0, x0 + sp.slotW
+	if c.style == StyleWin {
+		x0 = float64(i) * c.winW()
+		return x0, x0 + c.winW()
+	}
+	d := c.linDisc()
+	x0 = linPadLeft - linGap/2 + float64(i)*(d+linGap)
+	return x0, x0 + d + linGap
 }
 
 // discCentre is the centre of the i-th linux disc.
 func (c *Controls) discCentre(i int) (float64, float64) {
-	return linPadLeft + linDisc/2 + float64(i)*(linDisc+linGap), float64(c.height()-1) / 2
+	d := c.linDisc()
+	return linPadLeft + d/2 + float64(i)*(d+linGap), float64(c.height()) / 2
 }
 
 // macCentre returns the centre of the i-th traffic light.
@@ -468,7 +489,8 @@ func (c *Controls) drawWin(p *painter) {
 		dim = 0.5
 	}
 	for i, k := range c.kinds() {
-		x0 := float64(i) * winButtonW
+		x0 := float64(i) * c.winW()
+		bw := c.winW()
 		over := c.hover && c.hit(c.pos) == k
 		down := c.isDown(k)
 		ic := withAlpha(winIcon, dim)
@@ -478,51 +500,55 @@ func (c *Controls) drawWin(p *painter) {
 				if down {
 					bg = winClosePress
 				}
-				p.rect(x0, 0, x0+winButtonW, h, bg)
+				p.rect(x0, 0, x0+bw, h, bg)
 				ic = color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}
 			} else if down {
-				p.rect(x0, 0, x0+winButtonW, h, winPressed)
+				p.rect(x0, 0, x0+bw, h, winPressed)
 			} else if over {
-				p.rect(x0, 0, x0+winButtonW, h, winHover)
+				p.rect(x0, 0, x0+bw, h, winHover)
 			}
 		} else {
 			ic = withAlpha(winIcon, 0.3)
 		}
-		cx := x0 + winButtonW/2
+		cx := x0 + bw/2
 		cy := math.Floor(h / 2)
 		c.drawWinIcon(p, k, cx, cy, ic)
 	}
 }
 
-// drawWinIcon draws a 10 point line icon; coordinates sit on pixel centres at 1x.
+// drawWinIcon draws the 10 point line icon (9 in the compact bar); coordinates sit on
+// pixel centres at 1x.
 func (c *Controls) drawWinIcon(p *painter, k buttonKind, cx, cy float64, ic color.NRGBA) {
+	a := 5.0 // half the glyph size
+	if c.compact {
+		a = 4.5
+		cx, cy = cx+0.5, cy+0.5
+	}
 	switch k {
 	case kindMinimize:
-		p.rect(cx-5, cy, cx+5, cy+1, ic)
+		p.rect(cx-a, cy, cx+a, cy+1, ic)
 	case kindClose:
-		// corner pixels of the 10x10 box: pixel centres run from -4.5 to +4.5
-		p.line(cx-4.5, cy-4.5, cx+4.5, cy+4.5, 1, ic)
-		p.line(cx-4.5, cy+4.5, cx+4.5, cy-4.5, 1, ic)
+		// corner pixels of the box: pixel centres run from -(a-0.5) to +(a-0.5)
+		e := a - 0.5
+		p.line(cx-e, cy-e, cx+e, cy+e, 1, ic)
+		p.line(cx-e, cy+e, cx+e, cy-e, 1, ic)
 	case kindZoom:
+		box := func(x0, y0, x1, y1 float64) {
+			p.rect(x0, y0, x1, y0+1, ic)
+			p.rect(x0, y1-1, x1, y1, ic)
+			p.rect(x0, y0, x0+1, y1, ic)
+			p.rect(x1-1, y0, x1, y1, ic)
+		}
 		if c.state.Maximized || c.state.Fullscreen {
-			// front square 8x8, back square peeking out at the top right
-			box := func(x0, y0, x1, y1 float64) {
-				p.rect(x0, y0, x1, y0+1, ic)
-				p.rect(x0, y1-1, x1, y1, ic)
-				p.rect(x0, y0, x0+1, y1, ic)
-				p.rect(x1-1, y0, x1, y1, ic)
-			}
-			box(cx-5, cy-3, cx+3, cy+5)
-			p.rect(cx-3, cy-5, cx+5, cy-4, ic)
-			p.rect(cx+4, cy-5, cx+5, cy+3, ic)
-			p.rect(cx-3, cy-5, cx-2, cy-3, ic)
-			p.rect(cx+3, cy+2, cx+5, cy+3, ic)
+			// front square, back square peeking out at the top right
+			box(cx-a, cy-a+2, cx+a-2, cy+a)
+			p.rect(cx-a+2, cy-a, cx+a, cy-a+1, ic)
+			p.rect(cx+a-1, cy-a, cx+a, cy+a-2, ic)
+			p.rect(cx-a+2, cy-a, cx-a+3, cy-a+2, ic)
+			p.rect(cx+a-2, cy+a-3, cx+a, cy+a-2, ic)
 			return
 		}
-		p.rect(cx-5, cy-5, cx+5, cy-4, ic)
-		p.rect(cx-5, cy+4, cx+5, cy+5, ic)
-		p.rect(cx-5, cy-5, cx-4, cy+5, ic)
-		p.rect(cx+4, cy-5, cx+5, cy+5, ic)
+		box(cx-a, cy-a, cx+a, cy+a)
 	}
 }
 
@@ -532,7 +558,7 @@ func (c *Controls) drawLinux(p *painter) {
 	if !c.state.Focused {
 		dim = 0.5
 	}
-	r := math.Min(linDisc, float64(c.height())-2) / 2
+	r := math.Min(c.linDisc(), float64(c.height())-2) / 2
 	for i, k := range c.kinds() {
 		cx, cy := c.discCentre(i)
 		ic := withAlpha(linIcon, dim)
