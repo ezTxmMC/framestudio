@@ -272,9 +272,14 @@ func (c *Controls) MouseIn(e *desktop.MouseEvent) { c.track(e) }
 func (c *Controls) MouseMoved(e *desktop.MouseEvent) {
 	c.track(e)
 }
+
+// isDown reports whether button k is drawn pressed: held and still under the pointer.
+func (c *Controls) isDown(k buttonKind) bool { return c.pressed == k && c.hit(c.pos) == k }
+
 func (c *Controls) MouseOut() {
 	c.hover = false
 	c.alt = false
+	c.pos = fyne.NewPos(-1, -1) // the pointer is away: a pressed button un-presses visually
 	c.Refresh()
 }
 
@@ -465,16 +470,17 @@ func (c *Controls) drawWin(p *painter) {
 	for i, k := range c.kinds() {
 		x0 := float64(i) * winButtonW
 		over := c.hover && c.hit(c.pos) == k
+		down := c.isDown(k)
 		ic := withAlpha(winIcon, dim)
 		if c.enabled(k) {
-			if k == kindClose && (over || c.pressed == k) {
+			if k == kindClose && (over || down) {
 				bg := winCloseHover
-				if c.pressed == k {
+				if down {
 					bg = winClosePress
 				}
 				p.rect(x0, 0, x0+winButtonW, h, bg)
 				ic = color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}
-			} else if c.pressed == k {
+			} else if down {
 				p.rect(x0, 0, x0+winButtonW, h, winPressed)
 			} else if over {
 				p.rect(x0, 0, x0+winButtonW, h, winHover)
@@ -532,15 +538,16 @@ func (c *Controls) drawLinux(p *painter) {
 		ic := withAlpha(linIcon, dim)
 		if c.enabled(k) {
 			over := c.hover && c.hit(c.pos) == k
+			down := c.isDown(k)
 			switch {
-			case k == kindClose && (over || c.pressed == k):
+			case k == kindClose && (over || down):
 				bg := studiotheme.Tally
-				if c.pressed == k {
+				if down {
 					bg = darken(bg, 0.8)
 				}
 				p.disc(cx, cy, r, bg)
 				ic = color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}
-			case c.pressed == k:
+			case down:
 				p.disc(cx, cy, r, linPressed)
 			case over:
 				p.disc(cx, cy, r, linHover)

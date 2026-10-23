@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -173,5 +174,27 @@ func TestStylesDrawInAllStates(t *testing.T) {
 			c.MouseIn(down(0, 0, pt(10, 14)))
 			c.draw(300, 56)
 		}
+	}
+}
+
+func TestPressedLookFollowsPointer(t *testing.T) {
+	for _, style := range []string{StyleWin, StyleLinux} {
+		tb, _ := styleBar(t, style, State{Focused: true})
+		c := tb.Controls()
+		p := c.centreOf(2)
+		c.MouseIn(down(0, 0, p))
+		c.MouseDown(down(desktop.MouseButtonPrimary, 0, p))
+		if !c.isDown(kindClose) {
+			t.Fatalf("%s: not pressed over the button", style)
+		}
+		c.MouseOut()
+		if c.isDown(kindClose) {
+			t.Fatalf("%s: pressed look stays after leaving", style)
+		}
+		c.MouseMoved(down(0, 0, p))
+		if !c.isDown(kindClose) {
+			t.Fatalf("%s: pressed look not restored on return", style)
+		}
+		c.MouseUp(down(desktop.MouseButtonPrimary, 0, pt(-1, -1)))
 	}
 }
