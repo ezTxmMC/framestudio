@@ -80,11 +80,16 @@ type importPlan struct {
 	files       []string
 	unsupported []string // base names
 	duplicates  int      // already in the project
+	truncated   int      // supported files left out beyond maxImport
 }
 
-// planImport expands folders (top level only, sorted), skips unsupported files and
-// files the project already contains.
-func planImport(paths []string, existing map[string]bool) importPlan {
+// maxImport bounds one import, so a folder tree picked by mistake does not flood the pool.
+const maxImport = 1000
+
+// planImport expands folders (sorted, files before subfolders; with recursive also all
+// visible subfolders), skips unsupported files and files the project already contains.
+// It touches the file system; call it off the UI thread.
+func planImport(paths []string, existing map[string]bool, recursive bool) importPlan {
 	var plan importPlan
 	seen := map[string]bool{}
 	add := func(path string) {
@@ -101,9 +106,49 @@ func planImport(paths []string, existing map[string]bool) importPlan {
 				plan.unsupported = append(plan.unsupported, filepath.Base(abs))
 				break
 			}
+			if len(plan.files) >= maxImport {
+				plan.truncated++
+				break
+			}
 			plan.files = append(plan.files, abs)
 		}
 		seen[abs] = true
+	}
+	var walk func(dir string, top bool)
+	walk = func(dir string, top bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if top {
+				plan.unsupported = append(plan.unsupported, filepath.Base(dir))
+			}
+			return
+		}
+		var names, dirs []string
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			if e.IsDir() { // symlinked folders are not followed (no loops)
+				dirs = append(dirs, e.Name())
+				continue
+			}
+			if _, ok := media.KindForPath(e.Name()); ok {
+				names = append(names, e.Name())
+			}
+		}
+		byName := func(s []string) {
+			sort.Slice(s, func(i, j int) bool { return strings.ToLower(s[i]) < strings.ToLower(s[j]) })
+		}
+		byName(names)
+		for _, n := range names {
+			add(filepath.Join(dir, n))
+		}
+		if recursive {
+			byName(dirs)
+			for _, d := range dirs {
+				walk(filepath.Join(dir, d), false)
+			}
+		}
 	}
 	for _, p := range paths {
 		st, err := os.Stat(p)
@@ -111,23 +156,7 @@ func planImport(paths []string, existing map[string]bool) importPlan {
 			add(p)
 			continue
 		}
-		entries, err := os.ReadDir(p)
-		if err != nil {
-			plan.unsupported = append(plan.unsupported, filepath.Base(p))
-			continue
-		}
-		var names []string
-		for _, e := range entries {
-			if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-				if _, ok := media.KindForPath(e.Name()); ok {
-					names = append(names, e.Name())
-				}
-			}
-		}
-		sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
-		for _, n := range names {
-			add(filepath.Join(p, n))
-		}
+		walk(p, true)
 	}
 	return plan
 }
@@ -150,6 +179,12 @@ func importSummary(plan importPlan, failures []string) string {
 			b.WriteString("• " + f + "\n")
 		}
 		b.WriteString("Unterstützt werden Bilder (PNG, JPEG, GIF, BMP, WebP, TIFF), Videos (MP4, MOV, MKV, WebM, AVI) und Audio (WAV, MP3, FLAC, OGG, M4A, AAC, Opus).\n")
+	}
+	if plan.truncated > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "Pro Import werden höchstens %d Dateien übernommen, %d weitere wurden ausgelassen. Unterordner einzeln importieren.\n", maxImport, plan.truncated)
 	}
 	return strings.TrimSpace(b.String())
 }
