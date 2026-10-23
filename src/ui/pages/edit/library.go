@@ -17,6 +17,7 @@ import (
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/workgate"
 )
 
 const thumbW, thumbH = 64, 36
@@ -353,7 +354,7 @@ func (l *library) thumb(m model.MediaItem) fyne.CanvasObject {
 		l.loading[key] = true
 		post := l.pg.post
 		go func() {
-			t, err := cache.Thumbnail(m, thumbW*2, thumbH*2)
+			t, err := workgate.Call(workgate.PrioVisible, func() (image.Image, error) { return cache.Thumbnail(m, thumbW*2, thumbH*2) })
 			post(func() {
 				if err != nil || t == nil {
 					// Keep the kind icon (missing media or ffmpeg is reported elsewhere)

@@ -33,14 +33,6 @@ func perfOn(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 }
 
-// slack scales absolute limits on loaded machines (FS_PERF_SLACK, default 1).
-func slack() float64 {
-	if f, err := strconv.ParseFloat(os.Getenv("FS_PERF_SLACK"), 64); err == nil && f >= 1 {
-		return f
-	}
-	return 1
-}
-
 // synthVideo serves the same RGBA picture for every frame (no decode cost).
 type synthVideo struct {
 	mu  sync.Mutex

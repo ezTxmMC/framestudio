@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync/atomic"
 	"syscall"
 
 	"fyne.io/fyne/v2"
@@ -28,6 +29,7 @@ import (
 // settings window (settingsui.RequestRestart) starts the program again.
 func Run(files []string) {
 	s, loadErr := settings.Load()
+	startMemory()
 	// Read before applyEnv sets the variables: only what the user set counts as theirs
 	// (a restart passes the environment on without the derived ones, see RestartEnv).
 	settingsui.SetEnvOverrides(EnvOverrides(os.Getenv))
@@ -62,7 +64,7 @@ func Follow() (stop func()) {
 		if studiotheme.Configure(s.Display.Accent, s.Display.Compact) {
 			studiotheme.Refresh()
 		}
-		media.Configure(MediaConfig(s))
+		mediaCaches.Set(MediaConfig(s))
 	}
 	apply(settings.Get())
 	unsub := settings.Subscribe(apply)
@@ -70,6 +72,34 @@ func Follow() (stop func()) {
 	return func() {
 		unsub()
 		stopAudio()
+	}
+}
+
+var (
+	mediaCaches = newMediaBudget()
+	memWatcher  atomic.Pointer[MemoryWatcher]
+)
+
+// startMemory sets the GC limits (R9) and starts the memory watcher that shrinks the
+// caches when the heap nears the limit. Environment variables GOGC and GOMEMLIMIT of
+// the user win.
+func startMemory() {
+	total := SystemRAM(os.ReadFile)
+	limit := TuneGC(os.Getenv, total)
+	if limit <= 0 {
+		return
+	}
+	w := NewMemoryWatcher(limit, nil)
+	w.Add(mediaCaches)
+	memWatcher.Store(w)
+	w.Start()
+}
+
+// MemoryBudgets lets other caches (the preview frame cache) take part in the memory
+// watcher: they are scaled down under pressure. Safe before and after startMemory.
+func MemoryBudgets(b Budgeter) {
+	if w := memWatcher.Load(); w != nil {
+		w.Add(b)
 	}
 }
 

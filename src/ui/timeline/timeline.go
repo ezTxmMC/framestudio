@@ -14,6 +14,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/workgate"
 )
 
 type Tool int
@@ -85,6 +86,9 @@ type Timeline struct {
 	rename *renameState
 	// snapAt is the frame of the active snap indicator, -1 when none.
 	snapAt int
+	// cacheRanges feeds the cache line under the ruler (SetCacheRanges).
+	cacheRanges func() []CacheRange
+
 	// scrubbing suppresses view paging while the user drags the playhead.
 	scrubbing bool
 }
@@ -172,7 +176,8 @@ func (t *Timeline) Escape() bool {
 			t.s.SelectClips(t.drag.orig)
 		}
 		t.drag = &dragState{mode: dragIgnore} // swallow the rest of this drag
-		t.snapAt, t.scrubbing = -1, false
+		t.snapAt = -1
+		t.setScrubbing(false)
 		t.Refresh()
 	case len(t.s.Selected) > 0 || t.s.SelectedClip != "":
 		t.ClearSelection()
@@ -241,6 +246,7 @@ func (t *Timeline) Close() {
 		u()
 	}
 	t.unsubMedia = nil
+	t.setScrubbing(false)
 	t.ld.close()
 	t.posters.close()
 }
@@ -288,11 +294,17 @@ func (t *Timeline) changed(c session.Change) {
 		return
 	}
 	if c&session.ChangePlayhead != 0 {
-		if t.follow() || t.r == nil {
+		moved := t.follow()
+		switch {
+		case t.r == nil:
 			t.Refresh()
-			return
+		case moved && t.r.shiftView():
+			t.r.updatePlayhead() // smooth follow: the built objects slide, nothing is rebuilt
+		case moved || (t.r.margin > 0) != t.smoothFollow():
+			t.Refresh()
+		default:
+			t.r.updatePlayhead() // cheap path during playback
 		}
-		t.r.updatePlayhead() // cheap path during playback
 	}
 }
 
@@ -310,6 +322,22 @@ func (t *Timeline) forgetChangedMedia() {
 	t.known = known
 }
 
+// setScrubbing tracks a playhead drag: it suppresses view paging and tells the work gate
+// (background work waits while the user scrubs).
+func (t *Timeline) setScrubbing(on bool) {
+	if t.scrubbing == on {
+		return
+	}
+	t.scrubbing = on
+	workgate.SetScrubbing(on)
+}
+
+// smoothFollow reports whether the view scrolls with the playhead right now. A UI thread
+// the load governor found saturated falls back to paging (no per-frame scrolling).
+func (t *Timeline) smoothFollow() bool {
+	return t.followMode == FollowSmooth && t.s.Playing && !workgate.UIBusy()
+}
+
 // follow pages the view so the playhead stays visible (FollowPage), keeps it in the
 // middle while playing (FollowSmooth) or leaves the view alone (FollowOff). It reports
 // whether the view moved.
@@ -318,7 +346,7 @@ func (t *Timeline) follow() bool {
 		return false
 	}
 	g := t.geom()
-	if t.followMode == FollowSmooth && t.s.Playing {
+	if t.smoothFollow() {
 		off := g.clampOffset(t.s.Project, float64(t.s.Playhead)-g.visibleFrames()/2, t.zoom)
 		if math.Abs(off-t.offset) < 1e-9 {
 			return false

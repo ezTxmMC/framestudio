@@ -21,6 +21,7 @@ import (
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
+	"framestudio-proto/src/ui/statsui"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/timeline"
 	"framestudio-proto/src/ui/viewer"
@@ -43,6 +44,8 @@ type Page struct {
 	hsplit       *container.Split // library | rest (nil while the library is hidden)
 	rsplit       *container.Split // centre | inspector (nil while the inspector is hidden)
 	viewer       *viewer.Viewer
+	stats        *statsui.Overlay
+	statsStop    func()
 	transport    *viewer.TransportBar
 	tl           *timeline.Timeline
 	timelineHost *fyne.Container
@@ -170,7 +173,11 @@ func (p *Page) buildViewer(clean bool) {
 		return
 	}
 	p.transport = viewer.NewTransportBar(s, true)
-	p.progBox = container.NewBorder(nil, p.transport.Content(), nil, nil, p.viewer)
+	// the statistics overlay and the "Wiedergabe überlastet" chip sit over the picture
+	picture, overlay := statsui.Wrap(p.viewer, statsui.Current)
+	p.stats = overlay
+	p.statsStop = overlay.FollowSettings()
+	p.progBox = container.NewBorder(nil, p.transport.Content(), nil, nil, picture)
 	p.progName = text("", studiotheme.Text, 12)
 	p.progMeta = kit.MonoText("", studiotheme.Faint, 11)
 	p.viewer.ShowSafeArea(p.prefs.Playback.SafeArea)
@@ -217,7 +224,7 @@ func (p *Page) changed(c session.Change) {
 			p.insp.update()
 		}
 	}
-	if p.bar != nil && c&(session.ChangeProject|session.ChangeSelection|session.ChangePlayhead|session.ChangeMeta) != 0 {
+	if p.bar != nil && c&(session.ChangeProject|session.ChangeSelection|session.ChangeMeta) != 0 {
 		p.bar.update()
 	}
 	if p.progName != nil && c&(session.ChangeProject|session.ChangeMeta) != 0 {
@@ -294,6 +301,12 @@ func (p *Page) Close() {
 	}
 	if p.tl != nil {
 		p.tl.Close()
+	}
+	if p.statsStop != nil {
+		p.statsStop()
+	}
+	if p.stats != nil {
+		p.stats.Close()
 	}
 	if p.viewer != nil {
 		p.viewer.Close()

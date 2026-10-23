@@ -140,3 +140,21 @@ func shiftTracks(p *model.Project, at, shift int, only map[string]bool, except .
 	}
 	return p.ShiftAfter(at, shift, except...)
 }
+
+// CacheRange is a span of timeline frames [Start, End) whose preview pictures are cached.
+type CacheRange struct{ Start, End int }
+
+// SetCacheRanges shows the cached spans of the preview as a thin green line under the
+// ruler. src is called on the UI thread whenever the timeline redraws (nil = no line);
+// call RefreshCacheBar when the cache changed.
+func (t *Timeline) SetCacheRanges(src func() []CacheRange) {
+	t.cacheRanges = src
+	t.RefreshCacheBar()
+}
+
+// RefreshCacheBar redraws the cache line.
+func (t *Timeline) RefreshCacheBar() {
+	if t.r != nil && !t.closed {
+		t.Refresh()
+	}
+}

@@ -1,6 +1,7 @@
 package timeline
 
 import (
+	"context"
 	"image"
 	"os"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/workgate"
 )
 
 // mediaSource is the part of media.Cache the timeline draws from.
@@ -47,14 +49,23 @@ type loader struct {
 	mu      sync.Mutex
 	items   map[assetKey]*asset
 	closed  bool
-	pending bool // a refresh is already queued
-	sem     chan struct{}
-	quit    chan struct{} // closed by close: queued loads give up
+	pending bool            // a refresh is already queued
+	quit    chan struct{}   // closed by close: queued loads give up
+	gate    workgate.Gate   // nil = workgate.Default()
+	ctx     context.Context // ends when the loader closes
+	cancel  context.CancelFunc
+}
+
+func (l *loader) gt() workgate.Gate {
+	if l.gate != nil {
+		return l.gate
+	}
+	return workgate.Default()
 }
 
 func newLoader(src mediaSource, refresh func()) *loader {
-	return &loader{src: src, refresh: refresh, items: map[assetKey]*asset{}, sem: make(chan struct{}, 3),
-		quit: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &loader{src: src, refresh: refresh, items: map[assetKey]*asset{}, quit: make(chan struct{}), ctx: ctx, cancel: cancel}
 }
 
 // isClosed reports whether close was called.
@@ -93,17 +104,23 @@ func (l *loader) get(m model.MediaItem, wave bool, buckets int) *asset {
 		return a
 	}
 	go func() {
-		select {
-		case l.sem <- struct{}{}:
-		case <-l.quit:
+		// Thumbnails of what the timeline draws are visible work, waveforms are
+		// background work; both wait while the user plays or scrubs (playback has
+		// priority, the clip shows its placeholder meanwhile).
+		prio := workgate.PrioVisible
+		if wave {
+			prio = workgate.PrioBackground
+		}
+		release, err := l.gt().Acquire(l.ctx, prio)
+		if err != nil {
 			return // closed while queued: start no decode for a closed timeline
 		}
 		if l.isClosed() {
-			<-l.sem
+			release()
 			return
 		}
 		res := l.load(m, wave, buckets)
-		<-l.sem
+		release()
 		l.mu.Lock()
 		if l.closed {
 			l.mu.Unlock()
@@ -186,6 +203,7 @@ func (l *loader) close() {
 	if !l.closed {
 		l.closed = true
 		close(l.quit)
+		l.cancel()
 	}
 }
 

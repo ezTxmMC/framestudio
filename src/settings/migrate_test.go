@@ -39,7 +39,7 @@ func TestWindowButtonsMigration(t *testing.T) {
 				t.Fatal(err)
 			}
 			b, _ = os.ReadFile(p)
-			if !strings.Contains(string(b), `"version": 2`) {
+			if !strings.Contains(string(b), `"version": 3`) {
 				t.Fatalf("version not written: %s", b)
 			}
 		})

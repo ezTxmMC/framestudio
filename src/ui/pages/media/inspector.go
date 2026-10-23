@@ -15,6 +15,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/workgate"
 )
 
 const previewW, previewH = 640, 360
@@ -270,7 +271,7 @@ func (in *inspector) loadPoster(m model.MediaItem) {
 	}
 	gen := in.skimGen
 	in.p.spawn(func() {
-		img, err := cache.Thumbnail(m, previewW, previewH)
+		img, err := workgate.Call(workgate.PrioVisible, func() (image.Image, error) { return cache.Thumbnail(m, previewW, previewH) })
 		kit.Do(func() { in.setPreview(gen, img, err) })
 	})
 }

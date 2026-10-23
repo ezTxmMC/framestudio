@@ -24,6 +24,7 @@ import (
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/viewer"
+	"framestudio-proto/src/workgate"
 )
 
 // Page is the Resolve-style colour page: viewer and scopes on top, the clip strip in the
@@ -561,7 +562,7 @@ func (p *Page) thumbFor(c model.Clip, used map[string]bool) (img image.Image, mi
 	p.thumbState[key] = thumbLoading
 	item, cache := *m, p.ctx.Media
 	p.posterQ = append(p.posterQ, posterJob{key: key, fetch: func() (image.Image, error) {
-		return cache.Poster(item, sec, thumbW*2, thumbH*2)
+		return workgate.Call(workgate.PrioVisible, func() (image.Image, error) { return cache.Poster(item, sec, thumbW*2, thumbH*2) })
 	}})
 	return nil, false
 }

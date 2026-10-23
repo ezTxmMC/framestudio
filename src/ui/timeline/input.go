@@ -380,7 +380,7 @@ func (t *Timeline) beginDrag(press fyne.Position) *dragState {
 	switch {
 	case h.area == areaRuler:
 		d.mode = dragScrub
-		t.scrubbing = true
+		t.setScrubbing(true)
 	case h.area == areaLane && h.clip < 0 && t.tool != ToolBlade:
 		d.mode = dragMarquee
 		d.orig = append([]string(nil), t.s.Selected...)
@@ -647,7 +647,8 @@ func (t *Timeline) updateMove(g geom, pos fyne.Position) {
 
 func (t *Timeline) DragEnd() {
 	d := t.drag
-	t.drag, t.snapAt, t.scrubbing = nil, -1, false
+	t.drag, t.snapAt = nil, -1
+	t.setScrubbing(false)
 	if d == nil {
 		return
 	}

@@ -23,6 +23,7 @@ var (
 	offlineText = color.NRGBA{0xF0, 0x9A, 0x96, 0xFF}
 	lockHatch   = color.NRGBA{0xFF, 0xFF, 0xFF, 0x12}
 	white       = color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}
+	cacheBar    = color.NRGBA{0x4C, 0xB8, 0x6A, 0xD0}
 )
 
 // tlRenderer rebuilds the timeline's canvas objects on every refresh. Lanes, headers and
@@ -42,6 +43,12 @@ type tlRenderer struct {
 	phStem *canvas.Rectangle
 
 	objects []fyne.CanvasObject
+
+	// Smooth follow while playing: lanes and ruler are built wider than the view (margin
+	// on each side) and then only slide (shiftView) instead of being rebuilt per frame.
+	margin   float32 // 0 = built exactly for the view
+	buildOff float64 // view offset (frames) the objects were built for
+	buildG   geom    // geometry of the (wider) build, used to place the playhead
 
 	// generated images, reused while their key stays the same so textures are kept
 	imgs, nextImgs map[string]*canvas.Image
@@ -183,12 +190,25 @@ func (r *tlRenderer) rebuild() {
 	r.rulsC.Move(fyne.NewPos(headerW, 0))
 	r.rulsC.Resize(fyne.NewSize(laneW, rulerH))
 
-	r.lanes.Objects = r.buildLanes(p, g)
+	// When the view follows the playhead smoothly the scrolling content is built with air
+	// on both sides, so the next frames only slide it.
+	gb := g
+	r.margin = 0
+	if t.smoothFollow() {
+		r.margin = min(max(laneW/4, 120), 600)
+		gb.w += 2 * r.margin
+		gb.offset -= float64(r.margin) / g.ppf
+	}
+	r.buildOff, r.buildG = g.offset, gb
+	r.lanes.Move(fyne.NewPos(-r.margin, 0))
+	r.ruler.Move(fyne.NewPos(-r.margin, 0))
+
+	r.lanes.Objects = r.buildLanes(p, gb)
 	r.header.Objects = r.buildHeaders(p, g)
-	r.ruler.Objects = r.buildRuler(p, g)
+	r.ruler.Objects = r.buildRuler(p, gb)
 	r.corner.Objects = r.buildCorner(g)
 	r.overlay.Objects = r.buildOverlay(p, g)
-	r.placePlayhead(g)
+	r.placePlayhead(gb)
 
 	r.imgs = r.nextImgs
 	for _, c := range []*fyne.Container{r.lanes, r.header, r.ruler, r.corner, r.overlay} {
@@ -218,9 +238,36 @@ func (r *tlRenderer) buildOverlay(p *model.Project, g geom) []fyne.CanvasObject 
 	return []fyne.CanvasObject{st.entry}
 }
 
+// shiftView slides the built lanes and ruler to the view's current offset without
+// rebuilding them. It reports false when that is not possible (not built for smooth
+// following, zoom or size changed, or the view left the built margin): then the caller
+// rebuilds.
+func (r *tlRenderer) shiftView() bool {
+	if r.margin <= 0 || !r.t.smoothFollow() {
+		return false
+	}
+	t := r.t
+	g := t.geom()
+	if g.ppf != r.buildG.ppf || g.w+2*r.margin != r.buildG.w || g.h != r.buildG.h {
+		return false
+	}
+	d := float32((g.offset - r.buildOff) * g.ppf) // content moves left by d
+	if d > r.margin*0.9 || -d > r.margin*0.9 {
+		return false
+	}
+	pos := fyne.NewPos(-r.margin-d, 0)
+	r.lanes.Move(pos)
+	r.ruler.Move(pos)
+	return true
+}
+
 // updatePlayhead moves only the playhead objects; used while playing.
 func (r *tlRenderer) updatePlayhead() {
-	r.placePlayhead(r.t.geom())
+	if r.margin > 0 {
+		r.placePlayhead(r.buildG)
+	} else {
+		r.placePlayhead(r.t.geom())
+	}
 	canvas.Refresh(r.phLine)
 	canvas.Refresh(r.phHead)
 	canvas.Refresh(r.phStem)
@@ -846,6 +893,17 @@ func (r *tlRenderer) buildRuler(p *model.Project, g geom) []fyne.CanvasObject {
 				r.text(p.Timecode(tk.frame), studiotheme.Muted, 10, mono, x+4, 3))
 		} else {
 			objs = append(objs, rect(studiotheme.Faint, x, rulerH-5, 1, 4))
+		}
+	}
+
+	// rendered-frame cache: a thin green line under the ruler (purely informational)
+	if src := r.t.cacheRanges; src != nil {
+		for _, rg := range src() {
+			x0 := max(g.frameX(float64(rg.Start))-headerW, 0)
+			x1 := min(g.frameX(float64(rg.End))-headerW, laneW)
+			if x1 > x0 {
+				objs = append(objs, rect(cacheBar, x0, rulerH-3, x1-x0, 2))
+			}
 		}
 	}
 

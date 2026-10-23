@@ -12,7 +12,7 @@ import (
 	"sync"
 )
 
-const Version = 2
+const Version = 3
 
 type Settings struct {
 	Version int `json:"version"`
@@ -40,11 +40,25 @@ type General struct {
 }
 
 type Playback struct {
-	PreviewQuality string `json:"previewQuality"` // "auto" | "full" | "half" | "quarter"
-	MaxPreviewH    int    `json:"maxPreviewHeight"`
-	Follow         string `json:"follow"` // "page" | "smooth" | "off"
+	PreviewQuality string `json:"previewQuality"`   // "auto" | "full" | "half" | "quarter"
+	MaxPreviewH    int    `json:"maxPreviewHeight"` // upper cap of the render height while playing; 0 = none
+	Follow         string `json:"follow"`           // "page" | "smooth" | "off"
 	LoopDefault    bool   `json:"loopDefault"`
 	SafeArea       bool   `json:"safeArea"`
+
+	// CacheMB is the budget of the preview frame cache: 0 = automatic (10 % of the RAM,
+	// 256..2048 MB), -1 = off, otherwise the size in MB.
+	CacheMB int `json:"cacheMb"`
+	// ProxyMode is "auto" (proxies for heavy sources), "off" or "always".
+	ProxyMode string `json:"proxyMode"`
+	// ProxyCapGB limits the proxy folder.
+	ProxyCapGB int `json:"proxyCapGb"`
+	// HwDecode is "auto" (hardware decoding where it was verified) or "off".
+	HwDecode string `json:"hwDecode"`
+	// BackgroundCache renders the neighbourhood of the playhead while the app is idle.
+	BackgroundCache bool `json:"backgroundCache"`
+	// Stats shows the playback statistics over the viewer.
+	Stats bool `json:"stats"`
 }
 
 type Audio struct {
@@ -98,12 +112,40 @@ type Display struct {
 	WindowButtons string `json:"windowButtons"`
 }
 
+// normalize replaces unknown values by the defaults.
+func (p *Playback) normalize() {
+	switch p.PreviewQuality {
+	case "auto", "full", "half", "quarter":
+	default:
+		p.PreviewQuality = "auto"
+	}
+	switch p.ProxyMode {
+	case "auto", "off", "always":
+	default:
+		p.ProxyMode = "auto"
+	}
+	switch p.HwDecode {
+	case "auto", "off":
+	default:
+		p.HwDecode = "auto"
+	}
+	if p.ProxyCapGB <= 0 {
+		p.ProxyCapGB = 10
+	}
+	if p.MaxPreviewH < 0 {
+		p.MaxPreviewH = 0
+	}
+	if p.CacheMB < -1 {
+		p.CacheMB = 0
+	}
+}
+
 // Defaults returns the factory settings.
 func Defaults() Settings {
 	return Settings{
 		Version:  Version,
 		General:  General{Startup: "manager", AutosaveSeconds: 90, DefaultTemplate: "1080p25", ConfirmClose: true},
-		Playback: Playback{PreviewQuality: "auto", MaxPreviewH: 720, Follow: "page"},
+		Playback: Playback{PreviewQuality: "auto", Follow: "page", ProxyMode: "auto", ProxyCapGB: 10, HwDecode: "auto", BackgroundCache: true},
 		Audio:    Audio{Player: "auto", ScrubAudio: true, MasterGain: 1},
 		Timeline: Timeline{Snapping: true, StillSeconds: 5, GeneratorSecs: 5, FadeSeconds: 1, VideoTrackH: 58, AudioTrackH: 48,
 			ShowFilmstrip: true, ShowWaveforms: true, RippleSyncLock: true},
@@ -175,6 +217,12 @@ func Load() (Settings, error) {
 		// version 1 made "mac" the default on every system; "auto" resolves to mac on macOS
 		s.Display.WindowButtons = "auto"
 	}
+	if s.Version < 3 && s.Playback.MaxPreviewH == 720 && s.Playback.PreviewQuality == "auto" {
+		// version 2 capped the playing preview at 720 p; the adaptive quality ladder
+		// governs now (a deliberate cap with another quality is kept)
+		s.Playback.MaxPreviewH = 0
+	}
+	s.Playback.normalize()
 	s.Version = Version
 	mu.Lock()
 	path = p

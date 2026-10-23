@@ -19,6 +19,7 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
+	"framestudio-proto/src/workgate"
 )
 
 const (
@@ -127,6 +128,7 @@ type frameRenderer struct {
 	r    *render.Renderer
 	w, h int
 	src  *seqSource
+	ctx  context.Context // ends the wait while playback has priority
 }
 
 func newFrameRenderer(p *model.Project, r *render.Renderer, w, h, pool int) *frameRenderer {
@@ -140,8 +142,22 @@ func newFrameRenderer(p *model.Project, r *render.Renderer, w, h, pool int) *fra
 	return &frameRenderer{p: p, r: r, w: w, h: h, src: newSeqSource(fallback, pool+2)}
 }
 
+// waitForPlayback pauses the export between frames while the user plays or scrubs the
+// preview (playback has priority over queue renders); it ends when playback stops or
+// ctx is cancelled.
+func waitForPlayback(ctx context.Context) {
+	g := workgate.Default()
+	for g.ShouldYield(workgate.PrioBackground) {
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 // frame returns frame f as a tightly packed w x h NRGBA image.
 func (fr *frameRenderer) frame(f int) *image.NRGBA {
+	waitForPlayback(fr.ctx)
 	img := fr.r.FrameWith(fr.p, f, fr.w, fr.h, render.Options{Video: fr.src})
 	want := image.Rect(0, 0, fr.w, fr.h)
 	if img != nil && img.Rect == want && img.Stride == 4*fr.w {
@@ -255,11 +271,14 @@ func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Optio
 	if err != nil {
 		return err
 	}
-	if err := cmd.Start(); err != nil {
+	done, err := workgate.Start(workgate.Default(), cmd)
+	if err != nil {
 		return fmt.Errorf("ffmpeg kann nicht gestartet werden: %w", err)
 	}
+	defer done()
 
 	fr := newFrameRenderer(p, r, o.Width, o.Height, poolFor(o.Width, o.Height))
+	fr.ctx = ctx
 	defer fr.Close()
 	rep.Stage("Bilder rendern", 0, len(frames))
 	perr := pipeline(ctx, len(frames), poolFor(o.Width, o.Height),
@@ -322,9 +341,11 @@ func runWAV(ctx context.Context, p *model.Project, o Options, rep *reporter) err
 	}
 	total := to - from
 	rep.Stage("Audio mischen", 0, total)
-	if err := cmd.Start(); err != nil {
+	done, err := workgate.Start(workgate.Default(), cmd)
+	if err != nil {
 		return fmt.Errorf("ffmpeg kann nicht gestartet werden: %w", err)
 	}
+	defer done()
 	readProgress(stdout, p.Rate(), total, rep)
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
@@ -366,6 +387,7 @@ func runPNG(ctx context.Context, p *model.Project, r *render.Renderer, o Options
 	defer os.RemoveAll(tmp) // empty after a successful swap
 	pool := poolFor(o.Width, o.Height)
 	fr := newFrameRenderer(p, r, o.Width, o.Height, pool)
+	fr.ctx = ctx
 	defer fr.Close()
 	enc := png.Encoder{CompressionLevel: png.BestSpeed}
 	total := to - from
