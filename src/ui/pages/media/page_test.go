@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -30,7 +31,7 @@ type harness struct {
 	errors []error
 }
 
-// newHarness builds the page in a 1440x860 test window. Background work is queued
+// newHarness builds the page in a 1440x900 test window. Background work is queued
 // and run by drain on the test goroutine.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
@@ -45,9 +46,10 @@ func newHarness(t *testing.T) *harness {
 		Navigate: func(string) {}, ShowErr: func(err error) { h.errors = append(h.errors, err) }}
 	h.p = New(ctx).(*Page)
 	h.p.spawn = func(f func()) { h.queue = append(h.queue, f) }
+	h.p.pickFiles = func(pickRequest) ([]string, error) { return nil, errors.New("kein Portal") }
 	h.p.files.open(t.TempDir())
 	w.SetContent(h.p.Content())
-	w.Resize(fyne.NewSize(1440, 860))
+	w.Resize(fyne.NewSize(1440, 900))
 	t.Cleanup(h.p.Close)
 	return h
 }
@@ -150,14 +152,14 @@ func TestPlanImport(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "notiz.txt"), []byte("x"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, ".versteckt.png"), []byte("x"), 0o644)
 	other := filepath.Join(t.TempDir(), "doku.pdf")
-	plan := planImport([]string{dir, a, other}, map[string]bool{})
+	plan := planImport([]string{dir, a, other}, map[string]bool{}, false)
 	if len(plan.files) != 2 || filepath.Base(plan.files[0]) != "A.jpg.png" {
 		t.Fatalf("files %v", plan.files)
 	}
 	if len(plan.unsupported) != 1 || plan.unsupported[0] != "doku.pdf" {
 		t.Fatalf("unsupported %v", plan.unsupported)
 	}
-	plan = planImport([]string{a}, map[string]bool{a: true})
+	plan = planImport([]string{a}, map[string]bool{a: true}, false)
 	if len(plan.files) != 0 || plan.duplicates != 1 {
 		t.Fatalf("duplicate not detected: %+v", plan)
 	}
@@ -197,6 +199,7 @@ func TestImportInsertRemove(t *testing.T) {
 
 	// Importing the same file again only selects nothing new.
 	h.p.Dropped([]fyne.URI{storage.NewFileURI(a)})
+	h.drain()
 	if len(h.s.Project.Media) != 2 || h.p.importing {
 		t.Fatal("duplicate drop must not import")
 	}
@@ -248,7 +251,9 @@ func TestFilterAndSelection(t *testing.T) {
 		p.AddMedia(model.MediaItem{ID: "3", Name: "Musik", Kind: model.KindAudio, Path: "/nicht/da.wav"})
 		return nil
 	})
-	if len(h.p.view) != 3 || !h.p.missing["1"] {
+	h.p.checkOffline()
+	h.drain()
+	if len(h.p.view) != 3 || !h.p.missing("1") {
 		t.Fatal("pool should list all items and flag missing files")
 	}
 	h.p.search.SetText("st")
@@ -315,15 +320,16 @@ func TestRelink(t *testing.T) {
 	h.drain()
 	id := h.s.SelectedMedia
 	_ = os.Remove(old)
-	h.p.refreshPool()
-	if !h.p.missing[id] {
+	h.p.checkOffline()
+	h.drain()
+	if !h.p.missing(id) {
 		t.Fatal("deleted file should be missing")
 	}
 	moved := writePNG(t, t.TempDir(), "neu.png", 64, 64, color.NRGBA{100, 100, 100, 255})
 	h.p.relinkTo(id, moved)
 	h.drain()
 	m, _ := h.s.Project.MediaByID(id)
-	if m.Path != moved || m.Width != 64 || m.Name != "alt" || h.p.missing[id] || h.s.UndoLabel() != "Medium neu verknüpfen" {
+	if m.Path != moved || m.Width != 64 || m.Name != "alt" || h.p.missing(id) || h.s.UndoLabel() != "Medium neu verknüpfen" {
 		t.Fatalf("relinked %+v", m)
 	}
 	if h.p.relinkTo(id, filepath.Join(dir, "x.wav")); true {
@@ -364,14 +370,35 @@ func TestScreenshot(t *testing.T) {
 	for _, m := range h.s.Project.Media {
 		if m.Name == "Interview Totale" {
 			h.s.SelectMedia(m.ID)
-			h.p.insert(m, false)
+			h.p.insert([]model.MediaItem{m}, false)
 			h.s.SelectMedia(m.ID)
 		}
 	}
+	for _, m := range h.s.Project.Media {
+		if m.Name == "Farbbalken" || m.Name == "Musikbett" {
+			h.p.pick(m.ID, fyne.KeyModifierControl)
+		}
+	}
+	h.p.checkOffline()
+	h.drain()
 	h.p.refreshPool()
 	h.drain()
 	h.drain()
 	capture(t, h.w, out)
+
+	// The in-app browser that replaces the desktop file chooser when no portal runs.
+	_ = os.Mkdir(filepath.Join(dir, "Tag 2"), 0o755)
+	h.p.files.open(dir)
+	h.p.showImportDialog()
+	h.drain()
+	d := h.p.fileDlg
+	for _, e := range d.entries {
+		if strings.HasPrefix(e.name, "Drohnenflug") || strings.HasPrefix(e.name, "Atmo") || strings.HasPrefix(e.name, "Logo") {
+			d.tap(e, 100)
+		}
+	}
+	h.drain()
+	capture(t, h.w, strings.TrimSuffix(out, ".png")+"-browser.png")
 }
 
 func capture(t *testing.T, w fyne.Window, path string) {

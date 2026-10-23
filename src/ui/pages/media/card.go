@@ -7,6 +7,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -22,11 +23,23 @@ const (
 	textPad      = 8  // left and right of the text lines
 )
 
+// warnColor marks offline media (Tally red is reserved for the playhead).
+var warnColor = color.NRGBA{0xD9, 0x8E, 0x2B, 0xFF}
+
 // card is one media pool tile: thumbnail, name with kind icon and a timecode/size line.
+// Click selects, Ctrl+click toggles, Shift+click extends the selection; dragging a card
+// drags it (or the whole selection it belongs to) onto the timeline.
 type card struct {
 	widget.BaseWidget
-	onTap       func()
+	onTap       func(mod fyne.KeyModifier)
 	onSecondary func(pos fyne.Position)
+	// onDragStart returns the media IDs and ghost label of a drag that starts on this card.
+	onDragStart func() (ids []string, label string)
+	win         fyne.Window
+
+	mod      fyne.KeyModifier // modifiers of the last mouse press
+	dragging bool
+	dragAt   fyne.Position // last absolute pointer position of the drag
 
 	bg, frame, well *canvas.Rectangle
 	thumb           *canvas.Image
@@ -50,8 +63,8 @@ func newCard() *card {
 		name:        canvas.NewText("", studiotheme.Text),
 		info:        kit.MonoText("", studiotheme.Muted, 11),
 		detail:      kit.MonoText("", studiotheme.Faint, 11),
-		badge:       canvas.NewRectangle(studiotheme.Tally),
-		badgeText:   canvas.NewText("fehlt", color.White),
+		badge:       canvas.NewRectangle(warnColor),
+		badgeText:   canvas.NewText("Offline", color.NRGBA{0x1B, 0x1C, 0x20, 0xFF}),
 	}
 	c.bg.CornerRadius = 4
 	c.frame.CornerRadius = 4
@@ -117,15 +130,50 @@ func (c *card) set(m model.MediaItem, fps int, thumb image.Image, selected, miss
 }
 
 func (c *card) Tapped(*fyne.PointEvent) {
+	mod := c.mod
+	c.mod = 0
 	if c.onTap != nil {
-		c.onTap()
+		c.onTap(mod)
 	}
 }
 
-func (c *card) TappedSecondary(e *fyne.PointEvent) {
-	if c.onTap != nil {
-		c.onTap()
+// MouseDown remembers the modifier keys for the tap that follows.
+func (c *card) MouseDown(e *desktop.MouseEvent) {
+	if e.Button == desktop.MouseButtonPrimary {
+		c.mod = e.Modifier
 	}
+}
+
+func (c *card) MouseUp(*desktop.MouseEvent) {}
+
+// Dragged starts a media drag on the first movement and moves its ghost afterwards.
+func (c *card) Dragged(e *fyne.DragEvent) {
+	c.mod = 0
+	if !c.dragging {
+		if c.onDragStart == nil || c.win == nil {
+			return
+		}
+		ids, label := c.onDragStart()
+		if len(ids) == 0 {
+			return
+		}
+		c.dragging = true
+		kit.BeginMediaDrag(c.win, ids, label)
+	}
+	c.dragAt = e.AbsolutePosition
+	kit.UpdateMediaDrag(e.AbsolutePosition)
+}
+
+// DragEnd drops the media where the pointer was released.
+func (c *card) DragEnd() {
+	if !c.dragging {
+		return
+	}
+	c.dragging = false
+	kit.EndMediaDrag(c.dragAt)
+}
+
+func (c *card) TappedSecondary(e *fyne.PointEvent) {
 	if c.onSecondary != nil {
 		c.onSecondary(e.AbsolutePosition)
 	}

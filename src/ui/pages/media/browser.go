@@ -33,6 +33,7 @@ type browserEntry struct {
 	name, path string
 	dir        bool
 	kind       model.ClipKind
+	size       int64 // bytes, files only
 }
 
 func newBrowser(p *Page) *browser {
@@ -174,7 +175,11 @@ func readDir(dir string) ([]browserEntry, error) {
 			continue
 		}
 		if k, ok := media.KindForPath(d.Name()); ok {
-			out = append(out, browserEntry{name: d.Name(), path: path, kind: k})
+			e := browserEntry{name: d.Name(), path: path, kind: k}
+			if info, err := d.Info(); err == nil {
+				e.size = info.Size()
+			}
+			out = append(out, e)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

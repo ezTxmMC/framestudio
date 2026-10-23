@@ -87,16 +87,16 @@ func newInspector(p *Page) *inspector {
 	}
 	warn := canvas.NewText("Datei fehlt – neu verknüpfen", studiotheme.Text)
 	warn.TextSize = 12
-	badge := canvas.NewRectangle(studiotheme.Tally)
+	badge := canvas.NewRectangle(warnColor)
 	badge.CornerRadius = 3
 	badge.SetMinSize(fyne.NewSize(4, 18))
 	in.status = container.NewHBox(badge, warn)
 
-	in.insertBtn = widget.NewButtonWithIcon("In Timeline einfügen", theme.ContentAddIcon(), func() { in.act(func(m model.MediaItem) { p.insert(m, false) }) })
+	in.insertBtn = widget.NewButtonWithIcon("In Timeline einfügen", theme.ContentAddIcon(), func() { p.insert(p.selectedItems(), false) })
 	in.insertBtn.Importance = widget.HighImportance
-	in.appendBtn = widget.NewButtonWithIcon("Ans Ende anhängen", theme.MediaSkipNextIcon(), func() { in.act(func(m model.MediaItem) { p.insert(m, true) }) })
+	in.appendBtn = widget.NewButtonWithIcon("Ans Ende anhängen", theme.MediaSkipNextIcon(), func() { p.insert(p.selectedItems(), true) })
 	in.relinkBtn = widget.NewButtonWithIcon("Neu verknüpfen", theme.SearchReplaceIcon(), func() { in.act(p.showRelinkDialog) })
-	in.removeBtn = widget.NewButtonWithIcon("Entfernen", theme.DeleteIcon(), func() { in.act(p.confirmRemove) })
+	in.removeBtn = widget.NewButtonWithIcon("Entfernen", theme.DeleteIcon(), func() { p.confirmRemove(p.selectedItems()...) })
 	for _, b := range []*widget.Button{in.appendBtn, in.relinkBtn, in.removeBtn} {
 		b.Alignment = widget.ButtonAlignLeading
 	}
@@ -144,9 +144,10 @@ func (in *inspector) show() {
 	in.placeholder.Hide()
 	in.body.Show()
 	uses := usage(in.p.ctx.Session.Project, m.ID)
-	missing := in.p.missing[m.ID]
+	missing := in.p.missing(m.ID)
 	in.status.Hidden = !missing
 	in.status.Refresh()
+	in.showCount()
 	if m == in.shown && uses == in.uses {
 		return
 	}
@@ -206,6 +207,25 @@ func (in *inspector) show() {
 	}
 	if !missing {
 		in.loadPoster(m)
+	}
+}
+
+// showCount labels the insert, append and remove buttons with the number of selected
+// items when several are selected (they act on the whole selection).
+func (in *inspector) showCount() {
+	suffix := ""
+	if n := len(in.p.sel); n > 1 {
+		suffix = fmt.Sprintf(" (%d)", n)
+	}
+	for b, label := range map[*widget.Button]string{in.insertBtn: "In Timeline einfügen", in.appendBtn: "Ans Ende anhängen", in.removeBtn: "Entfernen"} {
+		if b.Text != label+suffix {
+			b.SetText(label + suffix)
+		}
+	}
+	if suffix != "" {
+		in.relinkBtn.Disable()
+	} else {
+		in.relinkBtn.Enable()
 	}
 }
 

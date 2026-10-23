@@ -156,6 +156,7 @@ type prefetcher struct {
 	s      stream
 	start  int
 	ahead  int
+	gen    uint64 // invalidation generation of the media item at start
 	cancel context.CancelFunc
 
 	mu      sync.Mutex
@@ -175,6 +176,17 @@ func (p *prefetcher) signal() {
 }
 
 func (p *prefetcher) stop() { p.cancel() }
+
+// demand raises the newest requested frame to n without waiting for it.
+func (p *prefetcher) demand(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.used = time.Now()
+	if n > p.want {
+		p.want = n
+		p.signal()
+	}
+}
 
 // covers reports whether frame n will soon be produced by this prefetcher.
 func (p *prefetcher) covers(n, jump int) bool {
@@ -236,7 +248,7 @@ func (p *prefetcher) run(ctx context.Context, bin string, m model.MediaItem) {
 		img := rgbaFrame(buf, p.s.w, p.s.h)
 		p.mu.Lock()
 		n := p.next
-		p.c.frames.put(p.s.frameKey(n), p.s.id, img, int64(size))
+		p.c.putIf(p.c.frames, p.gen, p.s.frameKey(n), p.s.id, img, int64(size))
 		p.next++
 		p.tail = img
 		p.signal()
@@ -367,7 +379,7 @@ func (c *Cache) prefetcherFor(m model.MediaItem, s stream, n int) (*prefetcher, 
 		ahead = max(limit, 1)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &prefetcher{c: c, s: s, start: n, ahead: ahead, cancel: cancel,
+	p := &prefetcher{c: c, s: s, start: n, ahead: ahead, gen: c.gen(s.id), cancel: cancel,
 		next: n, want: n, used: time.Now(), changed: make(chan struct{})}
 	c.prefetchers = append(c.prefetchers, p)
 	c.wg.Add(1)

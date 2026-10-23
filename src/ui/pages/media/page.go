@@ -8,15 +8,15 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"os"
+	"slices"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -46,14 +46,30 @@ type Page struct {
 	closed bool
 	// spawn runs background work; tests replace it to stay on one goroutine.
 	spawn func(func())
+	// pickFiles asks for files or folders (desktop portal); on error the page falls back
+	// to its own browser dialog. Tests replace it.
+	pickFiles pickFunc
+	picking   bool
+	fileDlg   *fileDialog // open fallback browser, for tests
 
 	view       []model.MediaItem // pool items after search and kind filter
 	query      string
 	kindFilter model.ClipKind
-	missing    map[string]bool        // media ID -> file not found
 	thumbs     map[string]image.Image // "id|path" -> pool thumbnail (nil = failed)
 	loading    map[string]bool
 	sem        chan struct{} // bounds concurrent thumbnail decodes
+
+	// Pool selection: sel holds the selected media IDs in selection order, the last one
+	// is the session's SelectedMedia; anchor is where Shift+click ranges start.
+	sel    []string
+	anchor string
+
+	// Offline watcher: the cache's missing-file map is refreshed in the background on
+	// import, on activation and every offlineEvery while the page is visible.
+	offlineEvery time.Duration
+	watchStop    chan struct{}
+	checking     bool
+	unsubOff     func()
 
 	grid     *widget.GridWrap
 	search   *widget.Entry
@@ -68,6 +84,7 @@ type Page struct {
 	importing   bool
 	importBtn   *widget.Button
 	folderBtn   *widget.Button
+	recursive   *widget.Check
 	progress    *widget.ProgressBar
 	progressMsg *canvas.Text
 	progressBox *fyne.Container
@@ -79,15 +96,20 @@ type Page struct {
 
 func New(ctx *page.Context) page.Page {
 	p := &Page{
-		ctx:     ctx,
-		spawn:   func(f func()) { go f() },
-		missing: map[string]bool{},
-		thumbs:  map[string]image.Image{},
-		loading: map[string]bool{},
-		sem:     make(chan struct{}, 3),
+		ctx:          ctx,
+		spawn:        func(f func()) { go f() },
+		pickFiles:    portalPick,
+		thumbs:       map[string]image.Image{},
+		loading:      map[string]bool{},
+		sem:          make(chan struct{}, 3),
+		offlineEvery: 5 * time.Second,
 	}
 	p.content = p.build()
 	p.unsub = ctx.Session.Subscribe(p.onChange)
+	if ctx.Media != nil {
+		p.unsubOff = ctx.Media.OnOfflineChange(func() { kit.Do(p.offlineChanged) })
+	}
+	p.syncSelection()
 	p.refreshPool()
 	p.insp.show()
 	return p
@@ -99,15 +121,98 @@ func (p *Page) Activate() {
 	p.refreshPool()
 	p.files.reload()
 	p.insp.show()
+	p.checkOffline()
+	p.startWatch()
 }
 
-func (p *Page) Deactivate() {}
+func (p *Page) Deactivate() { p.stopWatch() }
 
 func (p *Page) Close() {
 	p.closed = true
+	p.stopWatch()
 	if p.unsub != nil {
 		p.unsub()
 		p.unsub = nil
+	}
+	if p.unsubOff != nil {
+		p.unsubOff()
+		p.unsubOff = nil
+	}
+	if p.fileDlg != nil {
+		p.fileDlg.dlg.Hide()
+		p.fileDlg = nil
+	}
+}
+
+// missing reports whether the file of media id was not found at the last check.
+func (p *Page) missing(id string) bool {
+	if p.ctx.Media == nil {
+		return false
+	}
+	m, ok := p.ctx.Session.Project.MediaByID(id)
+	return ok && p.ctx.Media.Offline(*m)
+}
+
+// checkOffline refreshes the offline map of the project's media in the background.
+// Changes arrive through the cache's OnOfflineChange subscription.
+func (p *Page) checkOffline() {
+	if p.closed || p.checking || p.ctx.Media == nil {
+		return
+	}
+	p.checking = true
+	items := slices.Clone(p.ctx.Session.Project.Media)
+	cache := p.ctx.Media
+	p.spawn(func() {
+		cache.CheckOffline(items)
+		kit.Do(func() { p.checking = false })
+	})
+}
+
+// offlineChanged redraws the pool after files went missing or came back.
+func (p *Page) offlineChanged() {
+	if p.closed {
+		return
+	}
+	for k, img := range p.thumbs { // retry thumbnails that failed while offline
+		if img == nil {
+			delete(p.thumbs, k)
+		}
+	}
+	p.refreshPool()
+	p.insp.reset()
+	p.insp.show()
+}
+
+// startWatch rechecks missing files every offlineEvery until stopWatch.
+func (p *Page) startWatch() {
+	if p.watchStop != nil || p.closed || p.offlineEvery <= 0 {
+		return
+	}
+	stop := make(chan struct{})
+	p.watchStop = stop
+	every := p.offlineEvery
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				kit.Do(func() {
+					if p.watchStop == stop {
+						p.checkOffline()
+					}
+				})
+			}
+		}
+	}()
+}
+
+func (p *Page) stopWatch() {
+	if p.watchStop != nil {
+		close(p.watchStop)
+		p.watchStop = nil
 	}
 }
 
@@ -115,13 +220,13 @@ func (p *Page) Close() {
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	switch k.Name {
 	case fyne.KeyDelete, fyne.KeyBackspace:
-		if m, ok := p.selected(); ok {
-			p.confirmRemove(m)
+		if items := p.selectedItems(); len(items) > 0 {
+			p.confirmRemove(items...)
 			return true
 		}
 	case fyne.KeyReturn, fyne.KeyEnter:
-		if m, ok := p.selected(); ok {
-			p.insert(m, false)
+		if items := p.selectedItems(); len(items) > 0 {
+			p.insert(items, false)
 			return true
 		}
 	case fyne.KeyLeft:
@@ -156,13 +261,14 @@ func (p *Page) build() fyne.CanvasObject {
 	p.importBtn = widget.NewButtonWithIcon("Importieren", theme.ContentAddIcon(), p.showImportDialog)
 	p.importBtn.Importance = widget.HighImportance
 	p.folderBtn = widget.NewButtonWithIcon("Ordner importieren", theme.FolderOpenIcon(), p.showFolderDialog)
+	p.recursive = widget.NewCheck("Unterordner einbeziehen", nil)
 	p.progress = widget.NewProgressBar()
 	p.progressMsg = canvas.NewText("", studiotheme.Muted)
 	p.progressMsg.TextSize = 12
 	p.progressBox = container.NewVBox(p.progressMsg, p.progress)
 	p.progressBox.Hide()
 	left := kit.Panel("Dateien", nil, container.NewBorder(
-		container.NewVBox(p.importBtn, p.folderBtn, spacer(4)),
+		container.NewVBox(p.importBtn, p.folderBtn, p.recursive, spacer(2)),
 		p.progressBox, nil, nil, p.files.content()))
 
 	return container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), container.NewBorder(nil, nil,
@@ -204,9 +310,12 @@ func (p *Page) buildPool() fyne.CanvasObject {
 			}
 			m := p.view[i]
 			c := o.(*card)
-			c.onTap = func() { p.ctx.Session.SelectMedia(m.ID) }
+			c.win = p.ctx.Window
+			c.onTap = func(mod fyne.KeyModifier) { p.pick(m.ID, mod) }
 			c.onSecondary = func(pos fyne.Position) { p.showMenu(m.ID, pos) }
-			c.set(m, p.fps(), p.thumbFor(m), m.ID == p.ctx.Session.SelectedMedia, p.missing[m.ID])
+			c.onDragStart = func() ([]string, string) { return p.dragItems(m.ID) }
+			missing := p.ctx.Media != nil && p.ctx.Media.Offline(m)
+			c.set(m, p.fps(), p.thumbFor(m), p.isPicked(m.ID), missing)
 		})
 
 	p.emptyMsg = canvas.NewText("", studiotheme.Text)
@@ -222,7 +331,7 @@ func (p *Page) buildPool() fyne.CanvasObject {
 		spacer(4), container.NewCenter(p.emptyBtn)))
 
 	p.count.Alignment = fyne.TextAlignTrailing
-	p.tools = container.NewHBox(fixedWidth(80, container.NewVBox(layout.NewSpacer(), p.count, layout.NewSpacer())), spacer(4), fixedWidth(190, p.search), fixedWidth(118, p.kindSel))
+	p.tools = container.NewHBox(fixedWidth(170, container.NewVBox(layout.NewSpacer(), p.count, layout.NewSpacer())), spacer(4), fixedWidth(190, p.search), fixedWidth(118, p.kindSel))
 	body := container.NewStack(p.grid, p.empty)
 	if !media.FFmpegAvailable() {
 		body = container.NewBorder(ffmpegNotice(), nil, nil, nil, body)
@@ -247,9 +356,13 @@ func (p *Page) onChange(c session.Change) {
 	if p.closed {
 		return
 	}
+	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
+		p.syncSelection()
+	}
 	if c&session.ChangeProject != 0 {
 		p.refreshPool()
 	} else if c&session.ChangeSelection != 0 {
+		p.updateCount()
 		p.grid.Refresh()
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
@@ -273,8 +386,6 @@ func (p *Page) refreshPool() {
 	}
 	live := map[string]bool{}
 	for _, m := range all {
-		_, err := os.Stat(m.Path)
-		p.missing[m.ID] = err != nil
 		live[m.ID+"|"+m.Path] = true
 	}
 	for k := range p.thumbs {
@@ -296,16 +407,28 @@ func (p *Page) refreshPool() {
 		p.emptyBtn.Hide()
 		p.empty.Show()
 	default:
-		if len(p.view) == len(all) {
-			p.count.Text = fmt.Sprintf("%d %s", len(all), plural(len(all), "Medium", "Medien"))
-		} else {
-			p.count.Text = fmt.Sprintf("%d von %d", len(p.view), len(all))
-		}
 		p.empty.Hide()
 	}
-	p.count.Refresh()
+	p.updateCount()
 	p.empty.Refresh()
 	p.grid.Refresh()
+}
+
+// updateCount shows the number of items, filter hits and selected items in the header.
+func (p *Page) updateCount() {
+	all := len(p.ctx.Session.Project.Media)
+	switch {
+	case all == 0:
+		p.count.Text = ""
+	case len(p.view) == all:
+		p.count.Text = fmt.Sprintf("%d %s", all, plural(all, "Medium", "Medien"))
+	default:
+		p.count.Text = fmt.Sprintf("%d von %d", len(p.view), all)
+	}
+	if n := len(p.sel); n > 1 {
+		p.count.Text = fmt.Sprintf("%d ausgewählt · %s", n, p.count.Text)
+	}
+	p.count.Refresh()
 }
 
 // thumbFor returns the pool thumbnail of m, loading it in the background on first use.
@@ -314,7 +437,7 @@ func (p *Page) thumbFor(m model.MediaItem) image.Image {
 	if img, ok := p.thumbs[key]; ok {
 		return img
 	}
-	if p.loading[key] || p.missing[m.ID] || p.ctx.Media == nil {
+	if p.loading[key] || p.ctx.Media == nil || p.ctx.Media.Offline(m) {
 		return nil
 	}
 	p.loading[key] = true
@@ -350,6 +473,117 @@ func (p *Page) selected() (model.MediaItem, bool) {
 	return *m, true
 }
 
+// selectedItems returns the selected media in pool (project) order.
+func (p *Page) selectedItems() []model.MediaItem {
+	var out []model.MediaItem
+	for _, m := range p.ctx.Session.Project.Media {
+		if p.isPicked(m.ID) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (p *Page) isPicked(id string) bool { return slices.Contains(p.sel, id) }
+
+// syncSelection keeps the pool selection consistent with the project and the session:
+// deleted media drop out, and a primary chosen elsewhere (another page, undo) becomes
+// the single selection.
+func (p *Page) syncSelection() {
+	pr := p.ctx.Session.Project
+	p.sel = slices.DeleteFunc(p.sel, func(id string) bool {
+		_, ok := pr.MediaByID(id)
+		return !ok
+	})
+	primary := p.ctx.Session.SelectedMedia
+	switch {
+	case primary == "":
+		p.sel = nil
+	case len(p.sel) == 0 || p.sel[len(p.sel)-1] != primary:
+		p.sel = []string{primary}
+		p.anchor = primary
+	}
+}
+
+// pick handles a click on a pool item: plain click selects it alone, Ctrl+click toggles
+// it, Shift+click selects the range from the anchor.
+func (p *Page) pick(id string, mod fyne.KeyModifier) {
+	switch {
+	case mod&(fyne.KeyModifierControl|fyne.KeyModifierSuper) != 0:
+		if p.isPicked(id) {
+			p.sel = slices.DeleteFunc(p.sel, func(s string) bool { return s == id })
+		} else {
+			p.sel = append(p.sel, id)
+			p.anchor = id
+		}
+	case mod&fyne.KeyModifierShift != 0 && p.anchor != "":
+		from, to := -1, -1
+		for i, m := range p.view {
+			if m.ID == p.anchor {
+				from = i
+			}
+			if m.ID == id {
+				to = i
+			}
+		}
+		if from < 0 || to < 0 {
+			p.sel, p.anchor = []string{id}, id
+			break
+		}
+		step := 1
+		if to < from {
+			step = -1
+		}
+		p.sel = p.sel[:0]
+		for i := from; ; i += step {
+			p.sel = append(p.sel, p.view[i].ID)
+			if i == to {
+				break
+			}
+		}
+	default:
+		p.sel, p.anchor = []string{id}, id
+	}
+	primary := ""
+	if len(p.sel) > 0 {
+		primary = p.sel[len(p.sel)-1]
+	}
+	p.ctx.Session.SelectMedia(primary)
+}
+
+// selectAll selects every item the pool shows.
+func (p *Page) selectAll() {
+	if len(p.view) == 0 {
+		return
+	}
+	p.sel = p.sel[:0]
+	for _, m := range p.view {
+		p.sel = append(p.sel, m.ID)
+	}
+	p.anchor = p.sel[0]
+	p.ctx.Session.SelectMedia(p.sel[len(p.sel)-1])
+}
+
+// dragItems returns what a drag starting on item id carries: the selection when id is
+// part of it, otherwise id alone (which becomes the selection).
+func (p *Page) dragItems(id string) ([]string, string) {
+	if !p.isPicked(id) {
+		p.pick(id, 0)
+	}
+	items := p.selectedItems()
+	ids := make([]string, len(items))
+	for i, m := range items {
+		ids[i] = m.ID
+	}
+	switch len(items) {
+	case 0:
+		return nil, ""
+	case 1:
+		return ids, items[0].Name
+	}
+	return ids, fmt.Sprintf("%d Clips", len(items))
+}
+
 func (p *Page) moveSelection(delta int) bool {
 	if len(p.view) == 0 {
 		return false
@@ -364,64 +598,101 @@ func (p *Page) moveSelection(delta int) bool {
 	if cur >= 0 {
 		next = min(max(cur+delta, 0), len(p.view)-1)
 	}
-	p.ctx.Session.SelectMedia(p.view[next].ID)
+	p.pick(p.view[next].ID, 0)
 	p.grid.ScrollTo(next)
 	return true
 }
 
 func (p *Page) showMenu(id string, pos fyne.Position) {
-	m, ok := p.ctx.Session.Project.MediaByID(id)
-	if !ok {
+	if _, ok := p.ctx.Session.Project.MediaByID(id); !ok {
 		return
 	}
-	item := *m
+	if !p.isPicked(id) {
+		p.pick(id, 0)
+	}
+	items := p.selectedItems()
+	n := len(items)
+	what := ""
+	if n > 1 {
+		what = fmt.Sprintf(" (%d)", n)
+	}
+	relink := fyne.NewMenuItem("Neu verknüpfen…", func() { p.showRelinkDialog(items[0]) })
+	relink.Disabled = n != 1
 	menu := fyne.NewMenu("",
-		fyne.NewMenuItem("In Timeline einfügen", func() { p.insert(item, false) }),
-		fyne.NewMenuItem("Ans Ende anhängen", func() { p.insert(item, true) }),
+		fyne.NewMenuItem("In Timeline einfügen"+what, func() { p.insert(items, false) }),
+		fyne.NewMenuItem("Ans Ende anhängen"+what, func() { p.insert(items, true) }),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Neu verknüpfen…", func() { p.showRelinkDialog(item) }),
-		fyne.NewMenuItem("Entfernen…", func() { p.confirmRemove(item) }),
+		fyne.NewMenuItem("Alle auswählen", p.selectAll),
+		relink,
+		fyne.NewMenuItem("Entfernen…"+what, func() { p.confirmRemove(items...) }),
 	)
 	widget.ShowPopUpMenuAtPosition(menu, p.ctx.Window.Canvas(), pos)
 }
 
-// insert places m at the playhead (or appends it at the timeline end) as one edit,
-// selects the new clip and moves the playhead behind it.
-func (p *Page) insert(m model.MediaItem, atEnd bool) {
+// insert places the items one after another at the playhead (or behind the last clip)
+// as one edit, selects the new clips and moves the playhead behind them.
+func (p *Page) insert(items []model.MediaItem, atEnd bool) {
+	if len(items) == 0 {
+		return
+	}
 	s := p.ctx.Session
 	label := "In Timeline einfügen"
 	if atEnd {
 		label = "Ans Ende anhängen"
 	}
-	var id string
+	var ids []string
 	var end int
+	var failed model.MediaItem
 	err := s.Edit(label, func(pr *model.Project) error {
-		at := s.Playhead
+		ids = ids[:0]
+		end = s.Playhead
 		if atEnd {
-			at = pr.Duration()
+			end = pr.Duration()
 		}
-		var err error
-		id, end, err = placeMedia(pr, m, at, s.SelectedTrack)
-		return err
+		for _, m := range items {
+			id, e, err := placeMedia(pr, m, end, s.SelectedTrack)
+			if err != nil {
+				failed = m
+				return err
+			}
+			ids, end = append(ids, id), e
+		}
+		return nil
 	})
 	if err != nil {
-		p.showErr(fmt.Errorf("„%s“ konnte nicht eingefügt werden: %w", m.Name, err))
+		p.showErr(fmt.Errorf("„%s“ konnte nicht eingefügt werden: %w", failed.Name, err))
 		return
 	}
-	s.SelectClip(id)
+	s.SelectClips(ids)
 	s.Seek(end)
 }
 
-func (p *Page) confirmRemove(m model.MediaItem) {
-	n := usage(p.ctx.Session.Project, m.ID)
-	msg := fmt.Sprintf("„%s“ wird aus dem Projekt entfernt. Es wird in keinem Clip verwendet.", m.Name)
-	if n > 0 {
-		msg = fmt.Sprintf("„%s“ wird aus dem Projekt entfernt.\n%d %s in der Timeline %s es und %s ebenfalls gelöscht.",
-			m.Name, n, plural(n, "Clip", "Clips"), plural(n, "verwendet", "verwenden"), plural(n, "wird", "werden"))
+func (p *Page) confirmRemove(items ...model.MediaItem) {
+	if len(items) == 0 {
+		return
 	}
-	d := dialog.NewConfirm("Medium entfernen", msg, func(ok bool) {
+	n := 0
+	ids := make([]string, len(items))
+	for i, m := range items {
+		ids[i] = m.ID
+		n += usage(p.ctx.Session.Project, m.ID)
+	}
+	what := fmt.Sprintf("„%s“ wird", items[0].Name)
+	if len(items) > 1 {
+		what = fmt.Sprintf("%d Medien werden", len(items))
+	}
+	msg := fmt.Sprintf("%s aus dem Projekt entfernt. Kein Clip in der Timeline verwendet %s.", what, plural(len(items), "es", "sie"))
+	if n > 0 {
+		msg = fmt.Sprintf("%s aus dem Projekt entfernt.\n%d %s in der Timeline %s %s und %s ebenfalls gelöscht.",
+			what, n, plural(n, "Clip", "Clips"), plural(n, "verwendet", "verwenden"), plural(len(items), "es", "sie"), plural(n, "wird", "werden"))
+	}
+	title := "Medium entfernen"
+	if len(items) > 1 {
+		title = "Medien entfernen"
+	}
+	d := dialog.NewConfirm(title, msg, func(ok bool) {
 		if ok {
-			p.remove(m.ID)
+			p.remove(ids...)
 		}
 	}, p.ctx.Window)
 	d.SetConfirmText("Entfernen")
@@ -429,8 +700,19 @@ func (p *Page) confirmRemove(m model.MediaItem) {
 	d.Show()
 }
 
-func (p *Page) remove(id string) {
-	err := p.ctx.Session.Edit("Medium entfernen", func(pr *model.Project) error { return pr.RemoveMedia(id) })
+func (p *Page) remove(ids ...string) {
+	label := "Medium entfernen"
+	if len(ids) > 1 {
+		label = "Medien entfernen"
+	}
+	err := p.ctx.Session.Edit(label, func(pr *model.Project) error {
+		for _, id := range ids {
+			if err := pr.RemoveMedia(id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if errors.Is(err, model.ErrLocked) {
 		p.showErr(errors.New("Medium konnte nicht entfernt werden: Clips davon liegen auf einer gesperrten Spur. Spur entsperren und erneut versuchen"))
 		return
@@ -440,59 +722,47 @@ func (p *Page) remove(id string) {
 		return
 	}
 	if p.ctx.Media != nil {
-		p.ctx.Media.Invalidate(id)
+		for _, id := range ids {
+			p.ctx.Media.Invalidate(id)
+		}
 	}
 }
 
-func (p *Page) mediaFilter() storage.FileFilter {
-	return storage.NewExtensionFileFilter(media.Extensions())
-}
-
-func (p *Page) startDir() fyne.ListableURI {
-	if l, err := storage.ListerForURI(storage.NewFileURI(p.files.dir)); err == nil {
-		return l
+// choose asks for paths with the desktop file chooser in the background and falls back
+// to the in-app browser when the portal is not available.
+func (p *Page) choose(req pickRequest, done func([]string)) {
+	if p.picking {
+		return
 	}
-	return nil
+	if req.dir == "" {
+		req.dir = p.files.dir
+	}
+	p.picking = true
+	pick := p.pickFiles
+	p.spawn(func() {
+		paths, err := pick(req)
+		kit.Do(func() {
+			p.picking = false
+			if p.closed {
+				return
+			}
+			if err != nil {
+				p.showFileBrowser(req, done)
+				return
+			}
+			if len(paths) > 0 {
+				done(paths)
+			}
+		})
+	})
 }
 
 func (p *Page) showImportDialog() {
-	d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
-		if err != nil {
-			p.showErr(err)
-			return
-		}
-		if r == nil {
-			return
-		}
-		path := r.URI().Path()
-		_ = r.Close()
-		p.importPaths([]string{path})
-	}, p.ctx.Window)
-	d.SetFilter(p.mediaFilter())
-	d.SetLocation(p.startDir())
-	d.SetTitleText("Medien importieren")
-	d.SetConfirmText("Importieren")
-	d.SetDismissText("Abbrechen")
-	d.Resize(dialogSize(p.ctx.Window))
-	d.Show()
+	p.choose(pickRequest{title: "Medien importieren", accept: "Importieren", multi: true}, p.importPaths)
 }
 
 func (p *Page) showFolderDialog() {
-	d := dialog.NewFolderOpen(func(u fyne.ListableURI, err error) {
-		if err != nil {
-			p.showErr(err)
-			return
-		}
-		if u != nil {
-			p.importPaths([]string{u.Path()})
-		}
-	}, p.ctx.Window)
-	d.SetLocation(p.startDir())
-	d.SetTitleText("Ordner importieren")
-	d.SetConfirmText("Importieren")
-	d.SetDismissText("Abbrechen")
-	d.Resize(dialogSize(p.ctx.Window))
-	d.Show()
+	p.choose(pickRequest{title: "Ordner importieren", accept: "Importieren", folders: true, multi: true}, p.importPaths)
 }
 
 func dialogSize(w fyne.Window) fyne.Size {
@@ -500,8 +770,8 @@ func dialogSize(w fyne.Window) fyne.Size {
 	return fyne.NewSize(min(900, s.Width*0.9), min(620, s.Height*0.9))
 }
 
-// importPaths probes files (folders expand to their supported files) in the background
-// and adds them to the project in one undo step.
+// importPaths expands folders (with subfolders when "Unterordner einbeziehen" is on),
+// probes the files in the background and adds them to the project in one undo step.
 func (p *Page) importPaths(paths []string) {
 	if p.importing {
 		p.showErr(errors.New("Es läuft bereits ein Import. Nach dessen Abschluss erneut importieren"))
@@ -511,21 +781,23 @@ func (p *Page) importPaths(paths []string) {
 	for _, m := range p.ctx.Session.Project.Media {
 		existing[m.Path] = true
 	}
-	plan := planImport(paths, existing)
-	if len(plan.files) == 0 {
-		switch msg := importSummary(plan, nil); {
-		case msg != "":
-			dialog.ShowInformation("Nichts importiert", msg, p.ctx.Window)
-		case plan.duplicates > 0:
-			dialog.ShowInformation("Nichts importiert", "Die gewählten Dateien sind bereits im Projekt.", p.ctx.Window)
-		default:
-			dialog.ShowInformation("Nichts importiert", "Im gewählten Ordner liegen keine unterstützten Mediendateien.", p.ctx.Window)
-		}
-		return
-	}
+	recursive := p.recursive.Checked
 	p.setImporting(true)
-	p.importProgress(0, len(plan.files))
+	p.progressMsg.Text = "Dateien werden gesucht …"
+	p.progressMsg.Refresh()
+	p.progress.SetValue(0)
 	p.spawn(func() {
+		plan := planImport(paths, existing, recursive)
+		if len(plan.files) == 0 {
+			kit.Do(func() {
+				p.setImporting(false)
+				if !p.closed {
+					p.nothingToImport(plan)
+				}
+			})
+			return
+		}
+		kit.Do(func() { p.importProgress(0, len(plan.files)) })
 		items := make([]model.MediaItem, len(plan.files))
 		errs := make([]error, len(plan.files))
 		for i, f := range plan.files {
@@ -535,6 +807,17 @@ func (p *Page) importPaths(paths []string) {
 		}
 		kit.Do(func() { p.finishImport(plan, items, errs) })
 	})
+}
+
+func (p *Page) nothingToImport(plan importPlan) {
+	switch msg := importSummary(plan, nil); {
+	case msg != "":
+		dialog.ShowInformation("Nichts importiert", msg, p.ctx.Window)
+	case plan.duplicates > 0:
+		dialog.ShowInformation("Nichts importiert", "Die gewählten Dateien sind bereits im Projekt.", p.ctx.Window)
+	default:
+		dialog.ShowInformation("Nichts importiert", "Im gewählten Ordner liegen keine unterstützten Mediendateien. Für Dateien in Unterordnern „Unterordner einbeziehen“ einschalten.", p.ctx.Window)
+	}
 }
 
 func (p *Page) setImporting(on bool) {
@@ -586,12 +869,15 @@ func (p *Page) finishImport(plan importPlan, items []model.MediaItem, errs []err
 			p.showErr(err)
 			return
 		}
+		p.sel = []string{ok[0].ID}
+		p.anchor = ok[0].ID
 		p.ctx.Session.SelectMedia(ok[0].ID)
 		for i, m := range p.view {
 			if m.ID == ok[0].ID {
 				p.grid.ScrollTo(i)
 			}
 		}
+		p.checkOffline()
 	}
 	if msg := importSummary(plan, failures); msg != "" {
 		title := "Import unvollständig"
@@ -605,28 +891,12 @@ func (p *Page) finishImport(plan importPlan, items []model.MediaItem, errs []err
 }
 
 func (p *Page) showRelinkDialog(m model.MediaItem) {
-	d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
-		if err != nil {
-			p.showErr(err)
-			return
-		}
-		if r == nil {
-			return
-		}
-		path := r.URI().Path()
-		_ = r.Close()
-		p.relinkTo(m.ID, path)
-	}, p.ctx.Window)
-	d.SetFilter(p.mediaFilter())
-	d.SetLocation(p.startDir())
-	d.SetTitleText(fmt.Sprintf("„%s“ neu verknüpfen", m.Name))
-	d.SetConfirmText("Verknüpfen")
-	d.SetDismissText("Abbrechen")
-	d.Resize(dialogSize(p.ctx.Window))
-	d.Show()
+	req := pickRequest{title: fmt.Sprintf("„%s“ neu verknüpfen", m.Name), accept: "Verknüpfen"}
+	p.choose(req, func(paths []string) { p.relinkTo(m.ID, paths[0]) })
 }
 
-// relinkTo probes path in the background and points media id at it.
+// relinkTo probes path in the background and points media id at it. All cached
+// pictures of the item are dropped so every page shows the new file.
 func (p *Page) relinkTo(id, path string) {
 	p.spawn(func() {
 		probed, err := media.Probe(path)
@@ -655,6 +925,7 @@ func (p *Page) relinkTo(id, path string) {
 			p.insp.reset()
 			p.refreshPool()
 			p.insp.show()
+			p.checkOffline()
 		})
 	})
 }
