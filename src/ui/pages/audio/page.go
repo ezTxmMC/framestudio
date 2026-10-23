@@ -2,9 +2,11 @@
 //
 // OWNER: audio page agent. New(ctx) is the contract; do not change its signature.
 //
-// The page follows Resolve's Fairlight layout: audio tracks with waveforms on top, the
-// selected clip and a channel-strip mixer below. "Vorhören" mixes the timeline audio
-// through export and plays it with an external player, since Fyne has no audio output.
+// The page follows Resolve's Fairlight layout: zoomable audio lanes with waveforms on top,
+// the selected clips and a metered channel-strip mixer below. Sound comes from the live
+// engine (liveaudio) during normal playback; "Vorhören" plays the In/Out range (or from
+// the playhead) through it, or mixes a WAV for an external player when live sound is
+// not available.
 package audio
 
 import (
@@ -12,12 +14,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os/exec"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -26,6 +30,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -51,10 +56,24 @@ type Page struct {
 	spawn func(func()) // starts background work; tests replace it to run jobs deterministically
 	peaks map[string]*waveEntry
 
+	// levels reads the live meter levels; clock calls tick at display rate until stopped.
+	// Tests replace both.
+	levels func(*session.Session) (liveaudio.Level, map[string]liveaudio.Level)
+	clock  func(tick func()) (stop func())
+	now    func() time.Time
+	// mods returns the keyboard modifiers held right now (Ctrl+click, Ctrl+wheel).
+	mods func() fyne.KeyModifier
+
+	view      viewport
+	meterStop func()
+	meterGen  int
+	meterLast time.Time
+
 	prev    *previewer
 	tracks  *trackView
 	mixer   *mixer
 	clip    *clipPanel
+	zoom    *widget.Slider
 	play    *widget.Button
 	stop    *widget.Button
 	status  *canvas.Text
@@ -66,7 +85,9 @@ type Page struct {
 }
 
 func New(ctx *page.Context) page.Page {
-	p := &Page{ctx: ctx, s: ctx.Session, active: true, peaks: map[string]*waveEntry{}, spawn: func(f func()) { go f() }}
+	p := &Page{ctx: ctx, s: ctx.Session, active: true, peaks: map[string]*waveEntry{},
+		spawn: func(f func()) { go f() }, levels: liveaudio.Levels, clock: tickerClock, now: time.Now,
+		mods: currentModifiers, view: viewport{zoom: 1}}
 	if ctx.Media != nil {
 		p.waves = ctx.Media
 	}
@@ -80,8 +101,26 @@ func New(ctx *page.Context) page.Page {
 		onChange: p.updateTransport,
 		onError:  p.showErr,
 	}
+	p.prev.live = p.prev.liveAvailable
 	return p
 }
+
+// currentModifiers asks the desktop driver which modifier keys are held.
+func currentModifiers() fyne.KeyModifier {
+	if a := fyne.CurrentApp(); a != nil {
+		if d, ok := a.Driver().(desktop.Driver); ok {
+			return d.CurrentKeyModifiers()
+		}
+	}
+	return 0
+}
+
+// ctrlHeld reports whether Ctrl (or Cmd) is held.
+func (p *Page) ctrlHeld() bool {
+	return p.mods()&(fyne.KeyModifierControl|fyne.KeyModifierSuper) != 0
+}
+
+func (p *Page) shiftHeld() bool { return p.mods()&fyne.KeyModifierShift != 0 }
 
 func (p *Page) Content() fyne.CanvasObject {
 	if p.content != nil {
@@ -97,16 +136,29 @@ func (p *Page) Content() fyne.CanvasObject {
 	p.play.Importance = widget.LowImportance
 	p.stop = widget.NewButtonWithIcon("Stopp", theme.MediaStopIcon(), p.prev.Stop)
 	p.stop.Importance = widget.LowImportance
-	tools := container.NewHBox(container.NewCenter(p.status), fixedSize(6, 0), p.play, p.stop)
+
+	p.zoom = widget.NewSlider(0, 1)
+	p.zoom.Step = 0.001
+	p.zoom.OnChanged = func(v float64) { p.setZoom(sliderToZoom(v, maxZoom(p.span(), p.s.FPS())), -1) }
+	zoomOut := kit.ToolButton(theme.ZoomOutIcon(), func() { p.setZoom(p.view.zoom/1.5, -1) })
+	zoomIn := kit.ToolButton(theme.ZoomInIcon(), func() { p.setZoom(p.view.zoom*1.5, -1) })
+	fit := widget.NewButton("Einpassen", func() { p.setZoom(1, -1) })
+	fit.Importance = widget.LowImportance
+	zoomBox := container.NewHBox(zoomOut, container.NewGridWrap(fyne.NewSize(120, 30), p.zoom), zoomIn, fit)
+
+	sep := canvas.NewRectangle(studiotheme.Border)
+	sep.SetMinSize(fyne.NewSize(1, 18))
+	tools := container.NewHBox(zoomBox, container.NewCenter(sep), fixedSize(4, 0),
+		container.NewCenter(p.status), fixedSize(4, 0), p.play, p.stop)
 
 	add := widget.NewButtonWithIcon("Spur hinzufügen", theme.ContentAddIcon(), p.addTrack)
 	add.Importance = widget.LowImportance
 
 	top := kit.Panel("Spuren", tools, p.tracks.obj)
 	bottom := container.NewHSplit(kit.Panel("Clip", nil, p.clip.obj), kit.Panel("Mixer", add, p.mixer.obj))
-	bottom.Offset = 0.3
+	bottom.Offset = 0.27
 	split := container.NewVSplit(top, bottom)
-	split.Offset = 0.55
+	split.Offset = 0.5
 	p.content = container.NewStack(canvas.NewRectangle(studiotheme.Gap),
 		container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), split))
 
@@ -120,23 +172,36 @@ func (p *Page) Activate() {
 	if p.stale && p.content != nil {
 		p.refresh()
 	}
+	p.syncMeters()
 }
 
-// Deactivate stops a running preview: its Stopp button is not reachable from other pages.
+// Deactivate stops a running preview (its Stopp button is not reachable from other
+// pages) and the meters.
 func (p *Page) Deactivate() {
 	p.active = false
 	p.prev.Stop()
+	p.stopMeters()
+	if p.mixer != nil {
+		p.mixer.resetMeters()
+	}
 }
 
-// TypedKey: Space toggles the preview, Left/Right step one frame, Home/End jump.
+// TypedKey: Space toggles the preview, J/K/L shuttle, Left/Right step one frame, Home/End jump.
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	switch k.Name {
 	case fyne.KeySpace:
-		if p.prev.Busy() {
+		if p.prev.Busy() || p.s.Playing {
 			p.prev.Stop()
+			p.s.SetPlaying(false)
 		} else {
 			p.prev.Start()
 		}
+	case fyne.KeyJ:
+		p.s.Shuttle(-1)
+	case fyne.KeyK:
+		p.s.Shuttle(0)
+	case fyne.KeyL:
+		p.s.Shuttle(1)
 	case fyne.KeyLeft:
 		p.s.Seek(p.s.Playhead - 1)
 	case fyne.KeyRight:
@@ -157,6 +222,7 @@ func (p *Page) Wait(timeout time.Duration) bool { return p.prev.wait(timeout) }
 func (p *Page) Close() {
 	p.closed = true
 	p.prev.Stop()
+	p.stopMeters()
 	if p.unsub != nil {
 		p.unsub()
 		p.unsub = nil
@@ -169,11 +235,15 @@ func (p *Page) changed(c session.Change) {
 		p.stale = true
 		return
 	}
+	if c&session.ChangePlayback != 0 {
+		p.syncMeters()
+	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
 		p.refresh()
 		return
 	}
 	if c&session.ChangePlayhead != 0 {
+		p.followPlayhead()
 		p.tracks.updatePlayhead()
 		p.updateTransport()
 	}
@@ -181,6 +251,8 @@ func (p *Page) changed(c session.Change) {
 
 func (p *Page) refresh() {
 	p.stale = false
+	p.view.clamp(p.span(), p.s.FPS())
+	p.syncZoomSlider()
 	p.tracks.update()
 	p.mixer.update()
 	p.clip.update()
@@ -194,11 +266,7 @@ func (p *Page) updateTransport() {
 	busy := p.prev.Busy()
 	text := p.prev.status
 	if !busy {
-		if p.s.HasRange() {
-			text = "In/Out-Bereich, max. 30 s"
-		} else {
-			text = "Ab Abspielkopf, max. 30 s"
-		}
+		text = p.prev.idleStatus()
 	}
 	setText(p.status, text)
 	if busy {
@@ -209,6 +277,7 @@ func (p *Page) updateTransport() {
 		p.stop.Disable()
 	}
 	p.play.Refresh()
+	p.syncMeters()
 }
 
 func (p *Page) showErr(err error) {
@@ -222,20 +291,102 @@ func (p *Page) showErr(err error) {
 	log.Println("audio:", err)
 }
 
-// span is the number of frames shown across the lanes: the program plus some headroom.
+// span is the number of frames the lanes scroll over: the program plus some headroom.
 func (p *Page) span() int {
 	fps := max(p.s.FPS(), 1)
 	d := max(p.s.Project.Duration(), 10*fps)
 	return d + d/16
 }
 
-func (p *Page) xOf(f int, w float32) float32 { return float32(f) / float32(p.span()) * w }
+func (p *Page) xOf(f int, w float32) float32 { return p.view.xOf(float64(f), p.span(), w) }
 
-func (p *Page) frameAt(x, w float32) int {
-	if w <= 0 || x <= 0 {
+func (p *Page) frameAt(x, w float32) int { return p.view.frameAt(x, w, p.span()) }
+
+// laneWidth is the width of the lanes (ruler width), 0 before layout.
+func (p *Page) laneWidth() float32 {
+	if p.tracks == nil {
 		return 0
 	}
-	return int(x / w * float32(p.span()))
+	return p.tracks.ruler.Size().Width
+}
+
+// setZoom zooms around the lane position x (pixels), or around the playhead if it is
+// visible (else the centre) when x < 0.
+func (p *Page) setZoom(zoom float64, x float32) {
+	span, fps := p.span(), p.s.FPS()
+	w := p.laneWidth()
+	frac := 0.5
+	anchor := p.view.start + p.view.visible(span)/2
+	if x >= 0 && w > 0 {
+		frac = float64(x / w)
+		anchor = p.view.start + frac*p.view.visible(span)
+	} else if px := p.xOf(p.s.Playhead, w); w > 0 && px >= 0 && px <= w {
+		frac = float64(px / w)
+		anchor = float64(p.s.Playhead)
+	}
+	old := p.view
+	p.view.zoomAround(zoom, anchor, frac, span, fps)
+	p.syncZoomSlider()
+	if p.view != old {
+		p.redrawLanes()
+	}
+}
+
+// scrollLanes pans the lanes by dx pixels.
+func (p *Page) scrollLanes(dx float32) {
+	w := p.laneWidth()
+	if w <= 0 {
+		return
+	}
+	old := p.view
+	p.view.scrollBy(float64(dx/w)*p.view.visible(p.span()), p.span(), p.s.FPS())
+	if p.view != old {
+		p.redrawLanes()
+	}
+}
+
+// wheel handles a scroll event over the lanes or the ruler: Ctrl zooms around the pointer,
+// Shift or a horizontal wheel pans; it reports false for plain vertical scrolling.
+func (p *Page) wheel(ev *fyne.ScrollEvent, x float32) bool {
+	switch {
+	case p.ctrlHeld():
+		d := float64(ev.Scrolled.DY + ev.Scrolled.DX)
+		p.setZoom(p.view.zoom*math.Pow(1.25, d/10), x)
+	case p.shiftHeld():
+		p.scrollLanes(-(ev.Scrolled.DY + ev.Scrolled.DX) * 3)
+	case ev.Scrolled.DX != 0:
+		p.scrollLanes(-ev.Scrolled.DX * 3)
+	default:
+		return false
+	}
+	return true
+}
+
+func (p *Page) syncZoomSlider() {
+	if p.zoom == nil {
+		return
+	}
+	v := zoomToSlider(p.view.zoom, maxZoom(p.span(), p.s.FPS()))
+	if math.Abs(p.zoom.Value-v) > 1e-9 {
+		p.zoom.Value = v // set directly: SetValue would fire OnChanged
+		p.zoom.Refresh()
+	}
+}
+
+// followPlayhead keeps the playhead on screen, paging in the play direction.
+func (p *Page) followPlayhead() {
+	if p.tracks == nil {
+		return
+	}
+	if p.view.follow(p.s.Playhead, p.s.Playing, p.s.Rate, p.span(), p.s.FPS()) {
+		p.redrawLanes()
+	}
+}
+
+func (p *Page) redrawLanes() {
+	if p.tracks != nil {
+		p.tracks.redraw()
+	}
 }
 
 // waveFor returns the clip's media and its cached waveform, starting a load if needed.
@@ -338,4 +489,33 @@ func (p *Page) addTrack() {
 		return
 	}
 	p.s.SelectTrack(id)
+}
+
+// renameTrack gives a track a new name as one undo step.
+func (p *Page) renameTrack(id, name string) {
+	if t, _ := p.s.Project.Track(id); t == nil || t.Name == name {
+		return
+	}
+	p.editTrack("Spur umbenennen", id, func(t *model.Track) { t.Name = name })
+}
+
+// removeTrack deletes an empty audio track. Tracks with clips are kept: their clips would
+// be lost without a word.
+func (p *Page) removeTrack(id string) {
+	t, _ := p.s.Project.Track(id)
+	if t == nil {
+		return
+	}
+	if len(t.Clips) > 0 {
+		p.showErr(fmt.Errorf("Spur %s enthält noch Clips. Erst die Clips löschen oder verschieben, dann die Spur löschen.", t.Name))
+		return
+	}
+	name := t.Name
+	err := p.s.Edit("Spur "+name+" löschen", func(pr *model.Project) error { return pr.RemoveTrack(id) })
+	switch {
+	case errors.Is(err, model.ErrLocked):
+		p.showErr(fmt.Errorf("Spur %s ist gesperrt. Im Spurkopf das Schloss lösen und erneut löschen.", name))
+	case err != nil:
+		p.showErr(fmt.Errorf("Spur lässt sich nicht löschen: %w", err))
+	}
 }
