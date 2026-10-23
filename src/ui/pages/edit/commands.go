@@ -91,9 +91,13 @@ func (p *Page) bindings() []command.Binding {
 		{ID: "timeline.zoomOut", Run: func() { p.zoomBy(1 / 1.5) }, Enabled: func() bool { return hasTL() && p.zoom > minZoom }},
 		{ID: "timeline.zoomFit", Run: func() { p.setZoom(minZoom) }, Enabled: func() bool { return hasTL() && p.zoom != minZoom }},
 		{ID: "timeline.showFilmstrip", Checked: func() bool { return p.prefs.Timeline.ShowFilmstrip },
-			Run: func() { p.updateSettings(func(s *settings.Settings) { s.Timeline.ShowFilmstrip = !s.Timeline.ShowFilmstrip }) }},
+			Run: func() {
+				p.updateSettings(func(s *settings.Settings) { s.Timeline.ShowFilmstrip = !s.Timeline.ShowFilmstrip })
+			}},
 		{ID: "timeline.showWaveforms", Checked: func() bool { return p.prefs.Timeline.ShowWaveforms },
-			Run: func() { p.updateSettings(func(s *settings.Settings) { s.Timeline.ShowWaveforms = !s.Timeline.ShowWaveforms }) }},
+			Run: func() {
+				p.updateSettings(func(s *settings.Settings) { s.Timeline.ShowWaveforms = !s.Timeline.ShowWaveforms })
+			}},
 
 		{ID: "marker.add", Run: p.addMarker},
 		{ID: "marker.edit", Run: p.editMarker, Enabled: func() bool { return p.markerAtPlayhead() >= 0 && p.ctx.Window != nil }},

@@ -1,6 +1,8 @@
 package edit
 
 import (
+	"image/color"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -27,10 +29,13 @@ type fsHost struct {
 
 func newFSHost(p *Page, monitor fyne.CanvasObject) *fsHost {
 	bg := canvas.NewRectangle(studiotheme.MonitorOut)
-	hint := canvas.NewText("Esc beendet die Vollbildansicht", studiotheme.Faint)
+	hint := canvas.NewText("Esc beendet die Vollbildansicht", studiotheme.Muted)
 	hint.TextSize = 11
-	top := container.New(layout.NewCustomPaddedLayout(6, 0, 0, 10), container.NewHBox(layout.NewSpacer(), hint))
-	h := &fsHost{p: p, content: container.NewStack(bg, container.NewBorder(top, nil, nil, nil, monitor))}
+	chip := canvas.NewRectangle(color.NRGBA{A: 0x90})
+	chip.CornerRadius = 3
+	label := container.NewStack(chip, container.New(layout.NewCustomPaddedLayout(3, 3, 8, 8), hint))
+	top := container.New(layout.NewCustomPaddedLayout(10, 0, 0, 10), container.NewHBox(layout.NewSpacer(), label))
+	h := &fsHost{p: p, content: container.NewStack(bg, monitor, container.NewVBox(top))}
 	h.ExtendBaseWidget(h)
 	return h
 }
@@ -46,9 +51,9 @@ func (h *fsHost) focus() {
 	}
 }
 
-func (h *fsHost) FocusGained()    {}
-func (h *fsHost) FocusLost()      {}
-func (h *fsHost) TypedRune(rune)  {}
+func (h *fsHost) FocusGained()   {}
+func (h *fsHost) FocusLost()     {}
+func (h *fsHost) TypedRune(rune) {}
 func (h *fsHost) TypedKey(k *fyne.KeyEvent) {
 	p := h.p
 	if k.Name == fyne.KeyEscape {

@@ -87,6 +87,12 @@ type Page struct {
 	dlg dialog.Dialog
 }
 
+var (
+	_ page.CommandProvider = (*Page)(nil)
+	_ page.LayoutAware     = (*Page)(nil)
+	_ page.DropTarget      = (*Page)(nil)
+)
+
 func New(ctx *page.Context) page.Page { return newPage(ctx, "") }
 
 func newPage(ctx *page.Context, panel string) *Page {
@@ -142,7 +148,7 @@ func (p *Page) Content() fyne.CanvasObject {
 
 // start subscribes to the shared tool state, the settings and the command registry.
 func (p *Page) start() {
-	if p.started {
+	if p.started || p.closed {
 		return
 	}
 	p.started = true
@@ -368,7 +374,11 @@ func (p *Page) edit(label string, fn func(*model.Project) error) error {
 	return err
 }
 
-func (p *Page) setBladeAll(on bool) { p.st.setBladeAll(on) }
+func (p *Page) setBladeAll(on bool) {
+	if p.start(); p.st != nil { // commands may run before the content is built
+		p.st.setBladeAll(on)
+	}
+}
 
 // zoomChanged follows zoom changes the timeline made itself (Ctrl+wheel, pinch).
 func (p *Page) zoomChanged(z float32) {
@@ -381,7 +391,11 @@ func (p *Page) zoomChanged(z float32) {
 }
 
 // setTool selects the tool on every timeline of the project (page and panels).
-func (p *Page) setTool(t timeline.Tool) { p.st.setTool(t) }
+func (p *Page) setTool(t timeline.Tool) {
+	if p.start(); p.st != nil {
+		p.st.setTool(t)
+	}
+}
 
 // toggleSnap flips snapping in the settings, which every timeline follows.
 func (p *Page) toggleSnap() {

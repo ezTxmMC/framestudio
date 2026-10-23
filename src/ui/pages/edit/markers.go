@@ -130,6 +130,7 @@ func (p *Page) editMarker() {
 		field("Name", name),
 		field("Farbe", sw.box),
 		note.box,
+		fixed(0, 8), // air above the buttons
 	)
 	id := m.ID
 	var d *dialog.ConfirmDialog
