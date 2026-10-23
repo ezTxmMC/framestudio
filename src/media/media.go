@@ -3,6 +3,15 @@
 //
 // OWNER: media agent. Exported signatures in this file are a contract; do not change them.
 // Everything here must be safe for concurrent use.
+//
+// Preview pipeline additions (see hint.go, source.go, kfindex.go):
+//   - VideoFrameInto: ctx-cancellable frames in pooled buffers with a MediaHint; picks a
+//     proxy (src/media/proxy) or hardware decoding (src/media/hwaccel) where allowed and
+//     falls back to the original in software on any failure; returns approximate pictures
+//     (cached neighbour, keyframe ladder) rather than missing a deadline.
+//   - VideoFrame/PlaybackFrame stay exact, original and software (export, tests).
+//   - Background ffmpeg work (posters, thumbnails, waveforms, keyframe index/ladder) runs
+//     through a workgate.Gate (SetGate): nothing runs while the user plays.
 package media
 
 import (
@@ -22,6 +31,7 @@ import (
 	"golang.org/x/image/draw"
 
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/workgate"
 )
 
 // FFmpegAvailable reports whether ffmpeg and ffprobe are on PATH.
@@ -80,6 +90,16 @@ type Cache struct {
 
 	hits, misses atomic.Int64 // frame cache statistics
 	decoders     atomic.Int32 // limit of concurrent playback decoders (SetMaxDecoders)
+
+	pool      *BufPool // frame buffers
+	gate      atomic.Pointer[gateBox]
+	proxies   atomic.Pointer[proxyBox]
+	hwp       atomic.Pointer[hwBox]
+	shuttleKF atomic.Bool // always shuttle keyframe-only (tests, user choice)
+	kf        kfStore
+	ladders   ladderStore
+	srcInfos  sync.Map // path|id -> *srcInfoEntry
+	badProxy  sync.Map // proxy path -> time it failed to decode
 }
 
 // Limits for background ffmpeg jobs.
@@ -103,6 +123,7 @@ func NewCache() *Cache {
 		stop:        stop,
 		bg:          make(chan struct{}, maxBackground),
 		jobs:        map[string]map[*int]context.CancelFunc{},
+		pool:        NewBufPool(frameBudget / 4),
 	}
 	c.decoders.Store(maxPrefetchers)
 	register(c)
@@ -125,13 +146,27 @@ func (c *Cache) putIf(l *lru, g uint64, key, owner string, val any, size int64) 
 	}
 }
 
+// putIfPF is putIf for a frame in a pooled buffer; the cache takes its own reference.
+func (c *Cache) putIfPF(l *lru, g uint64, key, owner string, val any, size int64, pf *pframe, src SourceKind) {
+	c.gmu.Lock()
+	defer c.gmu.Unlock()
+	if c.gens[owner] == g {
+		l.putPF(key, owner, val, size, pf, src)
+	}
+}
+
 // flightKey makes in-flight work of an older generation invisible to new callers.
 func flightKey(key string, g uint64) string { return fmt.Sprintf("%s|g%d", key, g) }
 
 // background runs fn in one of the limited background slots with a context that ends
 // after timeout, when the cache closes or when Cancel(mediaID) is called.
 func (c *Cache) background(mediaID string, timeout time.Duration, fn func(ctx context.Context) (any, error)) (any, error) {
-	return c.inSlot(c.bg, mediaID, timeout, fn)
+	return c.inSlotP(workgate.PrioBackground, c.bg, mediaID, timeout, fn)
+}
+
+// backgroundP is background with an explicit work-gate priority.
+func (c *Cache) backgroundP(prio workgate.Prio, mediaID string, timeout time.Duration, fn func(ctx context.Context) (any, error)) (any, error) {
+	return c.inSlotP(prio, c.bg, mediaID, timeout, fn)
 }
 
 // inSlot runs fn while holding one of the slots of sem (see background). The timeout
@@ -139,8 +174,19 @@ func (c *Cache) background(mediaID string, timeout time.Duration, fn func(ctx co
 // so a long queue cannot make healthy files time out. Queued jobs still end with the
 // cache or Cancel(mediaID).
 func (c *Cache) inSlot(sem chan struct{}, mediaID string, timeout time.Duration, fn func(ctx context.Context) (any, error)) (any, error) {
+	return c.inSlotP(workgate.PrioVisible, sem, mediaID, timeout, fn)
+}
+
+// inSlotP is inSlot for work of the given priority: the job also waits for the work gate
+// (nothing runs in the background while the user plays) and holds its slot until done.
+func (c *Cache) inSlotP(prio workgate.Prio, sem chan struct{}, mediaID string, timeout time.Duration, fn func(ctx context.Context) (any, error)) (any, error) {
 	wait, release := c.jobContext(mediaID)
 	defer release()
+	rel, err := c.gateOf().Acquire(wait, prio)
+	if err != nil {
+		return nil, fmt.Errorf("Vorschau abgebrochen: %w", err)
+	}
+	defer rel()
 	select {
 	case sem <- struct{}{}:
 		defer func() { <-sem }()
@@ -150,6 +196,20 @@ func (c *Cache) inSlot(sem chan struct{}, mediaID string, timeout time.Duration,
 	ctx, cancel := context.WithTimeout(wait, timeout)
 	defer cancel()
 	return fn(ctx)
+}
+
+// prioKey carries the work-gate priority of a job to the functions that start processes.
+type prioKey struct{}
+
+func withPrio(ctx context.Context, p workgate.Prio) context.Context {
+	return context.WithValue(ctx, prioKey{}, p)
+}
+
+func prioOf(ctx context.Context, def workgate.Prio) workgate.Prio {
+	if p, ok := ctx.Value(prioKey{}).(workgate.Prio); ok {
+		return p
+	}
+	return def
 }
 
 // jobContext returns a context that ends when the cache closes or Cancel(mediaID) is
@@ -276,8 +336,8 @@ func (c *Cache) Thumbnail(m model.MediaItem, w, h int) (image.Image, error) {
 			}
 		} else {
 			var v any
-			v, err = c.background(m.ID, posterTimeout, func(ctx context.Context) (any, error) {
-				return c.posterFrame(ctx, m, w, h)
+			v, err = c.backgroundP(workgate.PrioVisible, m.ID, posterTimeout, func(ctx context.Context) (any, error) {
+				return c.posterFrame(withPrio(ctx, workgate.PrioVisible), m, w, h)
 			})
 			if err == nil {
 				img = v.(image.Image)
@@ -303,9 +363,10 @@ func (c *Cache) posterFrame(ctx context.Context, m model.MediaItem, w, h int) (i
 	}
 	w, h = fitSize(m.Width, m.Height, w, h)
 	t := m.Duration.Seconds() / 10
-	img, err := decodeOne(ctx, m, posterArgs(m.Path, t, w, h), w, h)
+	prio := prioOf(ctx, workgate.PrioVisible)
+	img, err := decodeOneG(ctx, c.gateOf(), prio, m, withThreads(posterArgs(m.Path, t, w, h), bgThreads), w, h)
 	if err != nil && t > 0 && ctx.Err() == nil {
-		img, err = decodeOne(ctx, m, posterArgs(m.Path, 0, w, h), w, h)
+		img, err = decodeOneG(ctx, c.gateOf(), prio, m, withThreads(posterArgs(m.Path, 0, w, h), bgThreads), w, h)
 	}
 	if err != nil {
 		return nil, err
@@ -345,7 +406,7 @@ func (c *Cache) peaks(m model.MediaItem) ([]float32, error) {
 			return nil, err
 		}
 		v, err := c.background(m.ID, peaksTimeout, func(ctx context.Context) (any, error) {
-			return readPeaks(ctx, bin, m)
+			return c.readPeaks(ctx, bin, m)
 		})
 		if err != nil {
 			return nil, err
@@ -373,6 +434,9 @@ func (c *Cache) Invalidate(mediaID string) {
 	}
 	c.gmu.Unlock()
 	c.rev.forget(mediaID)
+	c.kf.forget(mediaID)
+	c.ladders.forget(mediaID)
+	c.forgetSrcInfo(mediaID)
 	c.off.notifyInvalidate(mediaID)
 }
 
