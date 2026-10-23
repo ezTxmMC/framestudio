@@ -154,5 +154,5 @@ func Close() {
 
 // Categories lists the category IDs in display order.
 func Categories() []string {
-	return []string{catGeneral, catPlayback, catAudio, catTimeline, catMedia, catExport, catDisplay, catMonitors, catKeymap}
+	return []string{catGeneral, catPlayback, catPerf, catAudio, catTimeline, catMedia, catExport, catDisplay, catMonitors, catKeymap}
 }

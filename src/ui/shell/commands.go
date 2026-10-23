@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 
+	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
@@ -20,6 +21,7 @@ import (
 	deliverpage "framestudio-proto/src/ui/pages/deliver"
 	mediapage "framestudio-proto/src/ui/pages/media"
 	"framestudio-proto/src/ui/settingsui"
+	"framestudio-proto/src/ui/statsui"
 	"framestudio-proto/src/ui/winchrome"
 )
 
@@ -116,6 +118,12 @@ func (sh *Shell) bindGlobal() {
 		sh.toggle("timeline.showFilmstrip", func(s *settings.Settings) *bool { return &s.Timeline.ShowFilmstrip }),
 		sh.toggle("timeline.showWaveforms", func(s *settings.Settings) *bool { return &s.Timeline.ShowWaveforms }),
 		sh.toggle("view.safeArea", func(s *settings.Settings) *bool { return &s.Playback.SafeArea }),
+		sh.toggle("view.previewStats", func(s *settings.Settings) *bool { return &s.Playback.Stats }),
+		b("cache.clear", func() { statsui.GetHooks().ClearCache() }, func() bool { return statsui.GetHooks().ClearCache != nil }),
+		b("media.proxyClear", func() { statsui.GetHooks().ProxyClear() }, func() bool { return statsui.GetHooks().ProxyClear != nil }),
+		b("media.proxyCreate", sh.createProxies, func() bool {
+			return statsui.GetHooks().ProxyCreate != nil && sh.workspaceProject() != nil
+		}),
 		sh.toggle("view.pageBar", func(s *settings.Settings) *bool { return &s.Display.PageBar }),
 		sh.toggle("view.statusBar", func(s *settings.Settings) *bool { return &s.Display.StatusBar }),
 	)
@@ -521,4 +529,19 @@ func shortDir(dir string) string {
 		return "~" + strings.TrimPrefix(dir, home)
 	}
 	return dir
+}
+
+// createProxies asks the proxy manager for a proxy of every video of the project (it
+// generates them one at a time in the background, paused while the user plays).
+func (sh *Shell) createProxies() {
+	p := sh.workspaceProject()
+	h := statsui.GetHooks().ProxyCreate
+	if p == nil || h == nil {
+		return
+	}
+	for _, m := range p.sess.Project.Media {
+		if m.Kind == model.KindVideo {
+			h(m.Path)
+		}
+	}
 }

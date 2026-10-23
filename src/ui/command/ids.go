@@ -148,6 +148,10 @@ var Catalog = []Info{
 	{ID: "view.fullscreen", Label: "Vollbild", Category: "Ansicht", Shortcut: "F11"},
 	{ID: "view.viewerFullscreen", Label: "Viewer im Vollbild", Category: "Ansicht", Shortcut: "Shift+F"},
 	{ID: "view.safeArea", Label: "Sicherheitsrahmen anzeigen", Category: "Ansicht"},
+	{ID: "view.previewStats", Label: "Wiedergabe-Statistik", Category: "Ansicht"},
+	{ID: "cache.clear", Label: "Vorschau-Cache leeren", Category: "Ansicht"},
+	{ID: "media.proxyCreate", Label: "Proxys für alle Videos erzeugen", Category: "Medien"},
+	{ID: "media.proxyClear", Label: "Proxy-Cache leeren", Category: "Medien"},
 	{ID: "view.pageBar", Label: "Seitenwechsler anzeigen", Category: "Ansicht"},
 	{ID: "view.statusBar", Label: "Statusleiste anzeigen", Category: "Ansicht"},
 	// OWNER edit page (areas of the Schnitt page; checked = shown, like every check mark

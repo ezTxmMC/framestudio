@@ -34,6 +34,7 @@ import (
 	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/workgate"
 )
 
 var errLockedClip = errors.New("Die Spur des Clips ist gesperrt. Im Spurkopf das Schloss lösen und erneut versuchen.")
@@ -437,7 +438,7 @@ func (p *Page) waveFor(c model.Clip) (*waveEntry, *model.MediaItem) {
 	item, src := *m, p.waves
 	buckets := min(max(int(item.Duration.Seconds()*100), 512), 40000)
 	p.spawn(func() {
-		peaks, err := src.Waveform(item, buckets)
+		peaks, err := workgate.Call(workgate.PrioBackground, func() ([]float32, error) { return src.Waveform(item, buckets) })
 		kit.Do(func() {
 			e.peaks, e.err, e.loading = peaks, err, false
 			if !p.closed && p.tracks != nil {

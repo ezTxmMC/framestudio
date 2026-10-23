@@ -24,6 +24,7 @@ import (
 const (
 	catGeneral  = "general"
 	catPlayback = "playback"
+	catPerf     = "perf"
 	catAudio    = "audio"
 	catTimeline = "timeline"
 	catMedia    = "media"

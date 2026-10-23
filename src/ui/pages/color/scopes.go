@@ -5,9 +5,11 @@ import (
 	"image/color"
 	"math"
 	"sync"
+	"time"
 
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/workgate"
 )
 
 // scopeKind selects which scope the scopes panel shows.
@@ -307,12 +309,59 @@ type scopeRunner struct {
 	async func(func())                        // starts work in the background
 	show  func(k scopeKind, img *image.NRGBA) // called on the UI thread
 
-	mu     sync.Mutex
-	frame  *image.NRGBA
-	kind   scopeKind
-	gen    int
-	busy   bool
-	closed bool
+	// pace overrides scopeInterval (tests); sleep overrides time.Sleep.
+	pace  func() time.Duration
+	sleep func(time.Duration)
+
+	mu      sync.Mutex
+	frame   *image.NRGBA
+	kind    scopeKind
+	gen     int
+	busy    bool
+	closed  bool
+	lastRun time.Time
+}
+
+// Scope rates: scopes never compete with the preview. While playing or scrubbing they
+// run at most 10 times a second; when the UI thread is saturated 2 times; at rest at
+// full speed.
+const (
+	scopePlayInterval = 100 * time.Millisecond
+	scopeBusyInterval = 500 * time.Millisecond
+)
+
+// scopeInterval is the minimum time between two scope computations right now.
+func scopeInterval(st workgate.State, uiBusy bool) time.Duration {
+	switch {
+	case uiBusy && st != workgate.Idle:
+		return scopeBusyInterval
+	case st != workgate.Idle:
+		return scopePlayInterval
+	}
+	return 0
+}
+
+func (s *scopeRunner) interval() time.Duration {
+	if s.pace != nil {
+		return s.pace()
+	}
+	return scopeInterval(workgate.Default().State(), workgate.UIBusy())
+}
+
+// wait holds back the next computation until the interval since the last one passed.
+// The newest frame is read after the wait, so frames in between are dropped.
+func (s *scopeRunner) wait() {
+	s.mu.Lock()
+	left := s.interval() - time.Since(s.lastRun)
+	s.mu.Unlock()
+	if left <= 0 {
+		return
+	}
+	if s.sleep != nil {
+		s.sleep(left)
+	} else {
+		time.Sleep(left)
+	}
 }
 
 // submit queues frame f for scope kind k. Call on the UI thread.
@@ -335,6 +384,7 @@ func (s *scopeRunner) submit(f *image.NRGBA, k scopeKind) {
 
 func (s *scopeRunner) loop() {
 	for {
+		s.wait()
 		s.mu.Lock()
 		if s.closed {
 			s.busy = false
@@ -342,6 +392,7 @@ func (s *scopeRunner) loop() {
 			return
 		}
 		f, k, gen := s.frame, s.kind, s.gen
+		s.lastRun = time.Now()
 		s.mu.Unlock()
 
 		out := computeScope(k, f)

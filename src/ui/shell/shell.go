@@ -41,6 +41,7 @@ import (
 	"framestudio-proto/src/ui/settingsui"
 	"framestudio-proto/src/ui/winchrome"
 	"framestudio-proto/src/ui/workspace"
+	"framestudio-proto/src/workgate"
 )
 
 // Run builds the main window for app a, optionally opening the given project files, and blocks.
@@ -280,7 +281,9 @@ func New(a fyne.App, w fyne.Window) *Shell {
 		stopClock := kit.DrivePlayback(s)
 		stopSound := liveaudio.Drive(s, sh.showErr)
 		unwatch := liveaudio.WatchMedia(s, sh.cache) // files coming back online sound at once
+		stopGate := followWorkGate(s)
 		return func() {
+			stopGate()
 			unwatch()
 			stopClock()
 			stopSound()
@@ -757,4 +760,23 @@ func (sh *Shell) refreshChrome() {
 	sh.syncCommands()
 	sh.notifyActive()
 	sh.reg.Refresh() // menus update enabled states and check marks
+}
+
+// followWorkGate reports the session's play state to the work gate, so thumbnails,
+// waveforms, proxies and other background work pause while the user plays (playback
+// has priority). The playhead ticks keep the gate's watchdog alive.
+func followWorkGate(s *session.Session) func() {
+	key := s
+	unsub := s.Subscribe(func(c session.Change) {
+		if c&session.ChangePlayback != 0 {
+			workgate.SetPlaying(key, s.Playing)
+		}
+		if c&session.ChangePlayhead != 0 && s.Playing {
+			workgate.ClockTick()
+		}
+	})
+	return func() {
+		unsub()
+		workgate.SetPlaying(key, false)
+	}
 }

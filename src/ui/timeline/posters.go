@@ -1,12 +1,14 @@
 package timeline
 
 import (
+	"context"
 	"image"
 	"math"
 	"sync"
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/workgate"
 )
 
 // posterSource is the part of media.Cache that delivers filmstrip frames.
@@ -53,10 +55,14 @@ type posterLoader struct {
 	closed  bool
 	pending bool
 	wg      sync.WaitGroup
+	gate    workgate.Gate // nil = workgate.Default()
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func newPosterLoader(src posterSource, refresh func()) *posterLoader {
-	return &posterLoader{src: src, refresh: refresh, items: map[posterKey]*posterEntry{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &posterLoader{src: src, refresh: refresh, items: map[posterKey]*posterEntry{}, ctx: ctx, cancel: cancel}
 }
 
 // get returns the frame of m at source frame (project frames, fps), or nil while it
@@ -123,7 +129,20 @@ func (l *posterLoader) work() {
 		l.queue = l.queue[:len(l.queue)-1]
 		l.mu.Unlock()
 
+		// filmstrip frames are visible work: they wait while playing or scrubbing
+		var g workgate.Gate = workgate.Default()
+		if l.gate != nil {
+			g = l.gate
+		}
+		release, err := g.Acquire(l.ctx, workgate.PrioVisible)
+		if err != nil {
+			l.mu.Lock()
+			l.workers--
+			l.mu.Unlock()
+			return
+		}
 		img, _ := l.src.Poster(req.m, req.sec, thumbW, thumbH)
+		release()
 
 		l.mu.Lock()
 		if e, ok := l.items[req.key]; ok {
@@ -167,6 +186,9 @@ func (l *posterLoader) close() {
 	l.closed = true
 	l.queue = nil
 	l.mu.Unlock()
+	if l.cancel != nil {
+		l.cancel()
+	}
 }
 
 // posterStep is the source-frame grid for filmstrip tiles: the largest power of two not

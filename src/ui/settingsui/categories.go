@@ -26,6 +26,8 @@ func (w *window) buildCategories() []*category {
 		desc: "Start, Speichern und neue Projekte."}
 	playback := &category{id: catPlayback, title: "Wiedergabe", icon: theme.MediaPlayIcon(),
 		desc: "Vorschauqualität und wie die Timeline der Wiedergabe folgt."}
+	perf := &category{id: catPerf, title: "Vorschau & Leistung", icon: theme.ComputerIcon(),
+		desc: "Vorschau-Cache, Proxys und Hardware-Dekodierung. Die Wiedergabe hat immer Vorrang vor Hintergrundarbeit."}
 	audioCat := &category{id: catAudio, title: "Audio", icon: theme.VolumeUpIcon(),
 		desc: "Tonausgabe der Vorschau. Betrifft nicht den Export."}
 	timeline := &category{id: catTimeline, title: "Timeline", icon: iconTimeline,
@@ -64,7 +66,7 @@ func (w *window) buildCategories() []*category {
 		{"auto", "Automatisch"}, {"full", "Volle Auflösung"}, {"half", "Halbe Auflösung"}, {"quarter", "Viertel-Auflösung"},
 	}, func(s *settings.Settings) *string { return &s.Playback.PreviewQuality })
 	choice(w, playback, "Höchste Vorschauhöhe", "Obergrenze für die Bildhöhe während der Wiedergabe, unabhängig von der Projektauflösung. Gilt nicht bei „Volle Auflösung“.", []option[int]{
-		{360, "360 Pixel"}, {540, "540 Pixel"}, {720, "720 Pixel"}, {1080, "1080 Pixel"}, {1440, "1440 Pixel"}, {2160, "2160 Pixel"},
+		{0, "Keine Begrenzung"}, {360, "360 Pixel"}, {540, "540 Pixel"}, {720, "720 Pixel"}, {1080, "1080 Pixel"}, {1440, "1440 Pixel"}, {2160, "2160 Pixel"},
 	}, func(s *settings.Settings) *int { return &s.Playback.MaxPreviewH })
 	choice(w, playback, "Timeline folgt dem Abspielkopf", "Wie die Timeline mitläuft, wenn der Abspielkopf den sichtbaren Bereich verlässt.", []option[string]{
 		{"page", "Seitenweise"}, {"smooth", "Fließend"}, {"off", "Nicht folgen"},
@@ -73,6 +75,24 @@ func (w *window) buildCategories() []*category {
 		func(s *settings.Settings) *bool { return &s.Playback.LoopDefault })
 	w.check(playback, "Sicherheitsrahmen anzeigen", "Title- und Action-Safe-Rahmen im Viewer einblenden.",
 		func(s *settings.Settings) *bool { return &s.Playback.SafeArea })
+
+	// Vorschau & Leistung
+	choice(w, perf, "Vorschau-Cache", "Speicher für bereits berechnete Bilder der Timeline. Wiederholtes Abspielen derselben Stelle bleibt so auch bei schwerem Material flüssig. Automatisch nutzt etwa 10 % des Arbeitsspeichers.", []option[int]{
+		{0, "Automatisch"}, {-1, "Aus"}, {256, "256 MB"}, {512, "512 MB"}, {1024, "1 GB"}, {2048, "2 GB"}, {4096, "4 GB"},
+	}, func(s *settings.Settings) *int { return &s.Playback.CacheMB })
+	w.check(perf, "Im Leerlauf vorrendern", "Berechnet im Stillstand die Bilder rund um den Abspielkopf im Voraus. Stoppt sofort, sobald Sie abspielen oder bearbeiten.",
+		func(s *settings.Settings) *bool { return &s.Playback.BackgroundCache })
+	choice(w, perf, "Proxys", "Kleine, schnell lesbare Kopien schwerer Videos für die Vorschau. Automatisch erzeugt sie im Leerlauf für hochauflösendes oder stark komprimiertes Material. Export und Farbbeurteilung nutzen immer das Original.", []option[string]{
+		{"auto", "Automatisch"}, {"always", "Für alle Videos"}, {"off", "Aus"},
+	}, func(s *settings.Settings) *string { return &s.Playback.ProxyMode })
+	choice(w, perf, "Größe des Proxy-Ordners", "Älteste, nicht benutzte Proxys werden gelöscht, sobald der Ordner größer wird.", []option[int]{
+		{2, "2 GB"}, {5, "5 GB"}, {10, "10 GB"}, {25, "25 GB"}, {50, "50 GB"}, {100, "100 GB"},
+	}, func(s *settings.Settings) *int { return &s.Playback.ProxyCapGB })
+	choice(w, perf, "Hardware-Dekodierung", "Nutzt die Grafikeinheit zum Dekodieren, wenn der Treiber das Format sicher beherrscht. Schlägt es fehl, wechselt Frame Studio selbstständig zur Software-Dekodierung. Nie beim Export.", []option[string]{
+		{"auto", "Automatisch"}, {"off", "Aus"},
+	}, func(s *settings.Settings) *string { return &s.Playback.HwDecode })
+	w.check(perf, "Wiedergabe-Statistik anzeigen", "Blendet im Viewer Bildrate, verworfene Bilder, Qualitätsstufe, Cache-Treffer und Dekoder ein. Eine Warnung erscheint auch ohne Statistik, wenn die Wiedergabe überlastet ist.",
+		func(s *settings.Settings) *bool { return &s.Playback.Stats })
 
 	// Audio
 	players := []option[string]{{"auto", "Automatisch"}}
@@ -210,7 +230,7 @@ func (w *window) buildCategories() []*category {
 		}
 	}
 
-	return []*category{general, playback, audioCat, timeline, media, exp, display, monitors, keymap}
+	return []*category{general, playback, perf, audioCat, timeline, media, exp, display, monitors, keymap}
 }
 
 // layoutChoice is "Layout beim Start": its options are the saved layouts at the time

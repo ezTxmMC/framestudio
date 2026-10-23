@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"framestudio-proto/src/workgate"
 )
 
 var execLookPath = exec.LookPath
@@ -61,7 +63,8 @@ func ffmpegError(err error, t *tail) error {
 // The process is killed when ctx is cancelled.
 func newCommand(ctx context.Context, args ...string) (*exec.Cmd, *tail) {
 	base := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-y"}
-	cmd := exec.CommandContext(ctx, "ffmpeg", append(base, args...)...)
+	// exports are background work: low CPU/IO priority, frozen while the user plays
+	cmd := workgate.Default().Command(ctx, workgate.PrioBackground, "ffmpeg", append(base, args...)...)
 	t := &tail{}
 	cmd.Stderr = t
 	cmd.WaitDelay = 2 * time.Second

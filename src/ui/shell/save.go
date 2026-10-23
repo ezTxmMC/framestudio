@@ -21,6 +21,7 @@ import (
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
+	"framestudio-proto/src/workgate"
 )
 
 // choice is the answer to "Änderungen speichern?".
@@ -395,8 +396,13 @@ type autosaveJob struct {
 	err     error
 }
 
+// autosavePlayingMax is the longest autosave is put off while playing.
+const autosavePlayingMax = 60 * time.Second
+
 // StartAutosave writes dirty projects that have a file every interval (0 = off); the
 // returned func stops it. A changed General.AutosaveSeconds setting applies at once.
+// While the user plays, a tick is skipped (playback has priority) unless the last
+// autosave is older than a minute.
 func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 	quit := make(chan struct{})
 	done := make(chan struct{})
@@ -413,6 +419,7 @@ func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 			return t.C
 		}
 		c := tick(interval)
+		lastRun := time.Now()
 		for {
 			select {
 			case <-quit:
@@ -420,6 +427,12 @@ func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 			case d := <-set:
 				c = tick(d)
 			case <-c:
+				// While the user plays, cloning and writing projects waits: at most
+				// every 60 s, otherwise at the next tick after playback stopped.
+				if workgate.Default().State() == workgate.Playing && time.Since(lastRun) < autosavePlayingMax {
+					continue
+				}
+				lastRun = time.Now()
 				var jobs []*autosaveJob
 				kit.DoAndWait(func() { jobs = sh.autosaveJobs() })
 				if len(jobs) == 0 {
