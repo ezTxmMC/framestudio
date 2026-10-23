@@ -2,13 +2,11 @@
 // macOS-style window buttons (or Windows/Linux-style buttons), drag-to-move, double-click
 // to maximize, a window menu, and invisible resize borders with a thin outline.
 //
-// OWNER: chrome agent. Signatures are a contract; the shell and workspace code against them.
+// Files: chrome.go (contract), backend.go (display backend, close registry), controls.go
+// (window buttons), titlebar.go, frame.go (resize borders), paint.go (button rasteriser).
 package chrome
 
-import (
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/widget"
-)
+import "fyne.io/fyne/v2"
 
 // Button styles for the window controls.
 const (
@@ -39,46 +37,3 @@ type Options struct {
 	CanMaximize   bool // false hides/disables the zoom button (dialog-like windows)
 	CanFullscreen bool
 }
-
-// Titlebar is the draggable bar. leading and trailing are placed next to the window
-// buttons (e.g. wordmark + menu bar); center is the title area (e.g. project name) which
-// also drags the window. The buttons sit left (mac) or right (win) of everything.
-type Titlebar struct {
-	widget.BaseWidget
-}
-
-// NewTitlebar builds the bar for window w.
-func NewTitlebar(w fyne.Window, o Options, leading, center, trailing fyne.CanvasObject) *Titlebar {
-	t := &Titlebar{}
-	t.ExtendBaseWidget(t)
-	return t
-}
-
-func (t *Titlebar) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(widget.NewLabel("Titelleiste"))
-}
-
-// SetStyle switches the button style live.
-func (t *Titlebar) SetStyle(style string) {}
-
-// Close releases watchers.
-func (t *Titlebar) Close() {}
-
-// Frame wraps content with resize borders (6 px, invisible, resize cursors) and a 1 px
-// outline. When the window is maximized or fullscreen the borders are inactive and the
-// outline is hidden. Call Close to stop watching.
-type Frame struct {
-	widget.BaseWidget
-}
-
-func NewFrame(w fyne.Window, b Backend, content fyne.CanvasObject) *Frame {
-	f := &Frame{}
-	f.ExtendBaseWidget(f)
-	return f
-}
-
-func (f *Frame) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(widget.NewLabel("Rahmen"))
-}
-
-func (f *Frame) Close() {}
