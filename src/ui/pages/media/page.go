@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"framestudio-proto/src/ui/menubar"
 	"image"
 	"image/color"
 	"slices"
@@ -712,7 +713,7 @@ func (p *Page) showMenu(id string, pos fyne.Position) {
 		fyne.NewMenuItem("Im Dateimanager zeigen", p.reveal),
 		fyne.NewMenuItem("Entfernen…"+what, func() { p.confirmRemove(items...) }),
 	)
-	widget.ShowPopUpMenuAtPosition(menu, p.ctx.Window.Canvas(), pos)
+	menubar.ShowContextMenu(p.ctx.Window.Canvas(), pos, menubar.FromFyneMenu(menu))
 }
 
 // insert places the items one after another at the playhead (or behind the last clip)

@@ -27,6 +27,23 @@ var (
 	MonitorOut = color.NRGBA{0x00, 0x00, 0x00, 0xFF}
 )
 
+// Menu tokens (menus, context menus, command palette). Derived from the graphite
+// scale above, no new hues. MenuAccentRow follows the accent: see MenuAccentRow().
+var (
+	MenuSurface  = color.NRGBA{0x2A, 0x2C, 0x31, 0xFF} // pane fill, one step above Panel
+	MenuEdge     = color.NRGBA{0xFF, 0xFF, 0xFF, 0x29} // 1 px stroke of a pane
+	MenuHover    = color.NRGBA{0xFF, 0xFF, 0xFF, 0x17}
+	MenuHoverBar = color.NRGBA{0xFF, 0xFF, 0xFF, 0x1A} // bar title under the pointer
+	MenuOpen     = color.NRGBA{0xFF, 0xFF, 0xFF, 0x24} // bar title whose menu is open
+	MenuText     = Text
+	MenuShortcut = Muted
+	MenuDisabled = color.NRGBA{0xDA, 0xDB, 0xD7, 0x6B} // Text at 42 %
+	MenuSep      = color.NRGBA{0xFF, 0xFF, 0xFF, 0x1F}
+)
+
+// MenuAccentRow is the current menu row: the accent at 30 % alpha.
+func MenuAccentRow() color.NRGBA { return withAlpha(Steel, 0x4D) }
+
 // ClipColors mirrors the clip colour labels of an NLE, muted so white text stays readable.
 var ClipColors = []struct {
 	Name  string
@@ -95,6 +112,8 @@ func (Theme) Color(n fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 		return Muted
 	case ColorNameAccent:
 		return Steel
+	case ColorNameMenuDisabled:
+		return MenuDisabled
 	}
 	return theme.DefaultTheme().Color(n, theme.VariantDark)
 }

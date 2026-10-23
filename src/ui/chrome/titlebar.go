@@ -6,8 +6,36 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/menubar"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
+
+// bars are the title bars by canvas, for the click on the caption while a menu is open.
+var bars = map[fyne.Canvas][]*Titlebar{}
+
+func init() { menubar.CaptionDown = captionDown }
+
+// captionDown starts the window drag when pos (canvas coordinates) is on the caption of a
+// title bar: its area minus the window buttons. A menu overlay swallows presses but lets
+// the caption drag the window.
+func captionDown(c fyne.Canvas, pos fyne.Position) bool {
+	drv := fyne.CurrentApp().Driver()
+	for _, t := range bars[c] {
+		bp, bs := drv.AbsolutePositionForObject(t), t.Size()
+		if pos.X < bp.X || pos.Y < bp.Y || pos.X >= bp.X+bs.Width || pos.Y >= bp.Y+bs.Height {
+			continue
+		}
+		cp := drv.AbsolutePositionForObject(t.ctl)
+		cs := t.ctl.Size()
+		if pos.X >= cp.X && pos.X < cp.X+cs.Width && pos.Y >= cp.Y && pos.Y < cp.Y+cs.Height {
+			return false // the window buttons keep their own handling
+		}
+		t.beginMove()
+		return true
+	}
+	return false
+}
 
 // Titlebar is the draggable bar. leading and trailing are placed next to the window
 // buttons (e.g. wordmark + menu bar); center is the title area (e.g. project name) which
@@ -21,20 +49,19 @@ import (
 type Titlebar struct {
 	widget.BaseWidget
 
-	win     fyne.Window
-	opt     Options
-	back    Backend
-	style   string
-	ctl     *Controls
-	lead    fyne.CanvasObject
-	center  fyne.CanvasObject
-	trail   fyne.CanvasObject
-	bg      *canvas.Rectangle
-	line    *canvas.Rectangle
-	state   State
-	stop    func()
-	closed  bool
-	menuPop *widget.PopUpMenu
+	win    fyne.Window
+	opt    Options
+	back   Backend
+	style  string
+	ctl    *Controls
+	lead   fyne.CanvasObject
+	center fyne.CanvasObject
+	trail  fyne.CanvasObject
+	bg     *canvas.Rectangle
+	line   *canvas.Rectangle
+	state  State
+	stop   func()
+	closed bool
 }
 
 // NewTitlebar builds the bar for window w. leading, center and trailing may be nil.
@@ -60,6 +87,10 @@ func NewTitlebar(w fyne.Window, o Options, leading, center, trailing fyne.Canvas
 	})
 	t.ctl.state = t.state
 	t.ExtendBaseWidget(t)
+	t.hookCenter()
+	if w != nil {
+		bars[w.Canvas()] = append(bars[w.Canvas()], t)
+	}
 	if t.back != nil {
 		t.stop = t.back.Watch(w, t.onState)
 	}
@@ -105,6 +136,7 @@ func (t *Titlebar) SetStyle(style string) {
 // SetCenter replaces the title area.
 func (t *Titlebar) SetCenter(o fyne.CanvasObject) {
 	t.center = o
+	t.hookCenter()
 	t.Refresh()
 }
 
@@ -118,9 +150,19 @@ func (t *Titlebar) Close() {
 		t.stop()
 		t.stop = nil
 	}
-	if t.menuPop != nil {
-		t.menuPop.Hide()
-		t.menuPop = nil
+	if t.win != nil {
+		c := t.win.Canvas()
+		list := bars[c][:0:0]
+		for _, o := range bars[c] {
+			if o != t {
+				list = append(list, o)
+			}
+		}
+		if len(list) == 0 {
+			delete(bars, c)
+		} else {
+			bars[c] = list
+		}
 	}
 }
 
@@ -184,16 +226,12 @@ func (t *Titlebar) showMenu(e *fyne.PointEvent) {
 	if t.win == nil || t.closed {
 		return
 	}
-	if t.menuPop != nil {
-		t.menuPop.Hide()
-	}
-	t.menuPop = widget.NewPopUpMenu(t.WindowMenu(), t.win.Canvas())
-	t.menuPop.ShowAtPosition(e.AbsolutePosition)
+	menubar.ShowContextMenu(t.win.Canvas(), e.AbsolutePosition, menubar.FromFyneMenu(t.WindowMenu()))
 }
 
 // MinSize is the sum of the children widths at the bar height.
 func (t *Titlebar) MinSize() fyne.Size {
-	h := barHeight(t.opt.Compact)
+	h := BarHeight(t.opt.Compact)
 	w := t.ctl.MinSize().Width
 	for _, o := range []fyne.CanvasObject{t.lead, t.center, t.trail} {
 		if o != nil {
@@ -228,10 +266,13 @@ func (r *titlebarRenderer) Objects() []fyne.CanvasObject {
 
 func (r *titlebarRenderer) Layout(size fyne.Size) {
 	t := r.t
+	sc := kit.ScaleOf(t)
+	hair := kit.Hair(sc)
 	t.bg.Move(fyne.NewPos(0, 0))
 	t.bg.Resize(size)
-	t.line.Move(fyne.NewPos(0, size.Height-1))
-	t.line.Resize(fyne.NewSize(size.Width, 1))
+	// the 1 px line sits inside the bar height
+	t.line.Move(fyne.NewPos(0, kit.Snap(size.Height-hair, sc)))
+	t.line.Resize(fyne.NewSize(size.Width, hair))
 
 	cw := t.ctl.MinSize().Width
 	left, right := float32(0), size.Width
@@ -244,6 +285,8 @@ func (r *titlebarRenderer) Layout(size fyne.Size) {
 	}
 	t.ctl.Resize(fyne.NewSize(cw, size.Height))
 
+	// every child is centred in the bar with the same helper, so text boxes share one
+	// centre line
 	place := func(o fyne.CanvasObject, x, w float32) {
 		m := o.MinSize()
 		hh := m.Height
@@ -251,7 +294,7 @@ func (r *titlebarRenderer) Layout(size fyne.Size) {
 			hh = size.Height
 		}
 		o.Resize(fyne.NewSize(w, hh))
-		o.Move(fyne.NewPos(x, (size.Height-hh)/2))
+		o.Move(fyne.NewPos(kit.Snap(x, sc), kit.CenterY(size.Height, hh, sc)))
 	}
 	if t.lead != nil {
 		w := t.lead.MinSize().Width
@@ -269,13 +312,38 @@ func (r *titlebarRenderer) Layout(size fyne.Size) {
 			free = 0
 		}
 		x, w := left, free
-		if t.ctl.spec().centreText && isText(t.center) {
+		switch {
+		case isTitleText(t.center):
+			// the project name is centred on the window, not on the free space; it
+			// shrinks (middle ellipsis) before it comes within 24 of either side's zone
+			// and disappears when too little is left
+			zone := left
+			if z := size.Width - right; z > zone {
+				zone = z
+			}
+			avail := size.Width - 2*(zone+24)
+			if avail < 48 {
+				t.center.Hide()
+				break
+			}
+			t.center.Show()
+			w = t.center.MinSize().Width
+			if w > avail {
+				w = avail
+			}
+			x = (size.Width - w) / 2
+		case t.ctl.spec().centreText && isText(t.center):
 			if m := t.center.MinSize().Width; m < free {
 				x, w = left+(free-m)/2, m
 			}
 		}
 		place(t.center, x, w)
 	}
+}
+
+func isTitleText(o fyne.CanvasObject) bool {
+	_, ok := o.(*TitleText)
+	return ok
 }
 
 // isText reports whether o is a plain title (label/text) that is centred, not stretched.
@@ -298,3 +366,10 @@ func (r *titlebarRenderer) Refresh() {
 }
 
 func (r *titlebarRenderer) Destroy() {}
+
+// hookCenter lays the bar out again when the project name changes its width.
+func (t *Titlebar) hookCenter() {
+	if tt, ok := t.center.(*TitleText); ok {
+		tt.OnResize = func() { t.Refresh() }
+	}
+}

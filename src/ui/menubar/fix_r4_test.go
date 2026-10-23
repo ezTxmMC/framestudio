@@ -80,14 +80,14 @@ func TestFocusLossForgetsAlt(t *testing.T) {
 	}
 }
 
-// The open-title tint follows the accent.
-func TestOpenTintFollowsAccent(t *testing.T) {
+// The current-row fill follows the accent.
+func TestCurrentRowFollowsAccent(t *testing.T) {
 	old := studiotheme.Steel
 	t.Cleanup(func() { studiotheme.Steel = old })
-	before := openTint()
+	before := studiotheme.MenuAccentRow()
 	studiotheme.Configure("amber", false)
-	if openTint() == before {
-		t.Fatal("open tint did not follow the accent")
+	if studiotheme.MenuAccentRow() == before {
+		t.Fatal("current row did not follow the accent")
 	}
 }
 

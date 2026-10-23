@@ -41,9 +41,9 @@ func TestStyleLayouts(t *testing.T) {
 		order [3]buttonKind
 		width float32
 	}{
-		{StyleMac, false, [3]buttonKind{kindClose, kindMinimize, kindZoom}, 77.5},
+		{StyleMac, false, [3]buttonKind{kindClose, kindMinimize, kindZoom}, 76},
 		{StyleWin, true, [3]buttonKind{kindMinimize, kindZoom, kindClose}, 138},
-		{StyleLinux, true, [3]buttonKind{kindMinimize, kindZoom, kindClose}, 92},
+		{StyleLinux, true, [3]buttonKind{kindMinimize, kindZoom, kindClose}, 82},
 	}
 	for _, c := range cases {
 		tb, _ := styleBar(t, c.style, State{Focused: true})
@@ -76,11 +76,11 @@ func TestStyleLayouts(t *testing.T) {
 			t.Fatal("win buttons are 46 wide")
 		}
 		if c.style == StyleLinux {
-			if ctl.hit(pt(1, 14)) != kindNone || ctl.hit(pt(91, 14)) != kindNone {
+			if ctl.hit(pt(1, 14)) != kindNone || ctl.hit(pt(81, 14)) != kindNone {
 				t.Fatal("linux padding is not a button")
 			}
 			x0, x1 := ctl.slot(0)
-			if x1-x0 != 28 {
+			if x1-x0 != 24 {
 				t.Fatalf("linux hit width %v", x1-x0)
 			}
 		}

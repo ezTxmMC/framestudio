@@ -13,6 +13,8 @@ import (
 const (
 	ColorNameMuted  fyne.ThemeColorName = "fsMuted"
 	ColorNameAccent fyne.ThemeColorName = "fsAccent"
+	// ColorNameMenuDisabled tints the icons of disabled menu rows (MenuDisabled).
+	ColorNameMenuDisabled fyne.ThemeColorName = "fsMenuDisabled"
 )
 
 // Accent is a selectable accent colour.

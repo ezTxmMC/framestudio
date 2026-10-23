@@ -3,10 +3,10 @@ package timeline
 import (
 	"errors"
 	"fmt"
+	"framestudio-proto/src/ui/menubar"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/model"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -65,7 +65,7 @@ func (t *Timeline) TappedSecondary(ev *fyne.PointEvent) {
 		return
 	}
 	if c := fyne.CurrentApp().Driver().CanvasForObject(t); c != nil {
-		widget.ShowPopUpMenuAtPosition(menu, c, ev.AbsolutePosition)
+		menubar.ShowContextMenu(c, ev.AbsolutePosition, menubar.FromFyneMenu(menu))
 	}
 }
 
@@ -118,7 +118,7 @@ func (t *Timeline) clipMenu(c model.Clip) *fyne.Menu {
 				return p.UpdateClip(upd)
 			})
 		})
-		it.Icon = icon("swatch", cc.Color)
+		it.Icon = menubar.SwatchIcon(cc.Color)
 		it.Checked = c.Color == col
 		items = append(items, it)
 	}
