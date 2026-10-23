@@ -16,7 +16,11 @@ import (
 	"framestudio-proto/src/ui/timeline"
 )
 
-func press(f *fixture, n fyne.KeyName) bool { return f.pg.TypedKey(&fyne.KeyEvent{Name: n}) }
+// press sends a key like the shell: the page first, then the registry (playback keys
+// are global commands).
+func press(f *fixture, n fyne.KeyName) bool {
+	return f.pg.TypedKey(&fyne.KeyEvent{Name: n}) || f.reg.Dispatch(n, 0)
+}
 
 func TestShuttleKeys(t *testing.T) {
 	f := newFixture(t, basicProject())

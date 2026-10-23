@@ -8,8 +8,18 @@ import (
 	"framestudio-proto/src/model"
 )
 
-// Default length of stills and generators in seconds.
+// Default length of stills and generators in seconds (settings Timeline.StillSeconds
+// and GeneratorSecs override it).
 const defaultSeconds = 5
+
+// secondsToFrames converts a length from the settings to frames (at least one);
+// zero or negative seconds mean defaultSeconds.
+func secondsToFrames(sec float64, fps int) int {
+	if sec <= 0 {
+		sec = defaultSeconds
+	}
+	return max(1, int(sec*float64(max(fps, 1))+0.5))
+}
 
 // Generator is an entry of the "Generatoren" tab.
 type Generator struct {
@@ -24,9 +34,9 @@ var generators = []Generator{
 
 var audioClipColor = model.RGBA{R: 0x3D, G: 0x9A, B: 0x5B, A: 0xFF}
 
-// generatorClip builds the clip a generator inserts at frame start.
-func generatorClip(id string, fps, start int) model.Clip {
-	length := defaultSeconds * fps
+// generatorClip builds the clip a generator inserts at frame start, sec seconds long.
+func generatorClip(id string, fps, start int, sec float64) model.Clip {
+	length := secondsToFrames(sec, fps)
 	switch id {
 	case "title":
 		return model.NewClip(model.KindTitle, "Titel", start, length)
@@ -46,10 +56,11 @@ func generatorClip(id string, fps, start int) model.Clip {
 }
 
 // insertMedia overwrites media item m at frame start on the selected track or the next
-// fitting unlocked one; a video's sound goes to the first unlocked audio track. The
-// routine is shared with the media page (model.PlaceMedia). Returns the main clip's ID.
-func insertMedia(p *model.Project, selectedTrack string, m model.MediaItem, start int) (string, error) {
-	return p.PlaceMedia(m, start, defaultSeconds*p.Settings.FPS, selectedTrack)
+// fitting unlocked one; a video's sound goes to the first unlocked audio track. Stills
+// get stillSec seconds. The routine is shared with the media page (model.PlaceMedia).
+// Returns the main clip's ID.
+func insertMedia(p *model.Project, selectedTrack string, m model.MediaItem, start int, stillSec float64) (string, error) {
+	return p.PlaceMedia(m, start, secondsToFrames(stillSec, p.Settings.FPS), selectedTrack)
 }
 
 // placeGenerator places a generator clip. Titles overlay the picture: they go to the

@@ -60,7 +60,7 @@ func demoProject() *model.Project {
 	title.Title.Size = 0.12
 	title.FadeIn, title.FadeOut = 12, 12
 	_ = p.PlaceClip(v2, title)
-	lower := generatorClip("lower", 25, 300)
+	lower := generatorClip("lower", 25, 300, 5)
 	lower.Title.Text = "Anna Berger · Regie"
 	_ = p.PlaceClip(v2, lower)
 	p.AddMarker(250, "Interview")

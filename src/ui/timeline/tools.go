@@ -64,6 +64,12 @@ func rippleLimits(p *model.Project, id string, left bool) (lo, hi int) {
 // cut from the head while the clip keeps its start, and the clips after it move by -delta.
 // A clip on another track that is in the way gives a *model.RippleBlockedError.
 func rippleTrim(p *model.Project, id string, left bool, delta int) error {
+	return rippleTrimSync(p, id, left, delta, true)
+}
+
+// rippleTrimSync is rippleTrim; without sync only the tracks of the trimmed clip and its
+// linked partner shift (settings Timeline.RippleSyncLock off).
+func rippleTrimSync(p *model.Project, id string, left bool, delta int, sync bool) error {
 	c, ti, _ := p.Clip(id)
 	if c == nil {
 		return model.ErrNotFound
@@ -102,6 +108,14 @@ func rippleTrim(p *model.Project, id string, left bool, delta int) error {
 	shift := delta
 	if left {
 		shift = -delta
+	}
+	if !sync {
+		only := map[string]bool{}
+		for _, x := range ids {
+			_, xt, _ := p.Clip(x)
+			only[p.Tracks[xt].ID] = true
+		}
+		return shiftTracks(p, oldEnd, shift, only, ids...)
 	}
 	return p.ShiftAfter(oldEnd, shift, ids...)
 }

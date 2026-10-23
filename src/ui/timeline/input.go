@@ -588,7 +588,7 @@ func (t *Timeline) updateDrag(pos fyne.Position) {
 			d.edge = d.clip.Start + delta
 		}
 		d.preview = p.Clone()
-		if rippleTrim(d.preview, d.clip.ID, left, delta) != nil {
+		if rippleTrimSync(d.preview, d.clip.ID, left, delta, t.RippleSync()) != nil {
 			d.preview = nil
 		}
 	case dragRoll:
@@ -686,7 +686,7 @@ func (t *Timeline) DragEnd() {
 		if d.value != 0 {
 			left, delta := d.mode == dragRippleL, d.value
 			t.edit("Ripple-Trimmen", func(p *model.Project) error {
-				return rippleTrim(p, d.clip.ID, left, delta)
+				return rippleTrimSync(p, d.clip.ID, left, delta, t.RippleSync())
 			})
 		}
 	case dragRoll:

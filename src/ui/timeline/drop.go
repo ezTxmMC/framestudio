@@ -37,7 +37,7 @@ type dropPlan struct {
 func (t *Timeline) planDrop(ids []string, pos fyne.Position) *dropPlan {
 	p := t.s.Project
 	g := t.geom()
-	stillLen := stillSeconds * max(p.Settings.FPS, 1)
+	stillLen := t.stillLen(p)
 	var items []model.MediaItem
 	total := 0
 	for _, id := range ids {
@@ -176,7 +176,7 @@ func (t *Timeline) MediaDrop(ids []string, pos fyne.Position) bool {
 	var placed []string
 	err := t.s.Edit("Medien einfügen", func(p *model.Project) error {
 		placed = placed[:0]
-		stillLen := stillSeconds * max(p.Settings.FPS, 1)
+		stillLen := t.stillLen(p)
 		pref, audioPref := plan.preferred, plan.audioPref(p)
 		if plan.newTrack {
 			pref = p.AddTrack(plan.newKind).ID

@@ -97,7 +97,8 @@ func (t *Timeline) clipMenu(c model.Clip) *fyne.Menu {
 		t.edit(delLabel, func(p *model.Project) error { return p.DeleteClips(ids, false) })
 	})
 	ripple := fyne.NewMenuItem("Lücke schließen", func() {
-		t.edit("Löschen und Lücke schließen", func(p *model.Project) error { return p.DeleteClips(ids, true) })
+		sync := t.RippleSync()
+		t.edit("Löschen und Lücke schließen", func(p *model.Project) error { return RippleDelete(p, ids, sync) })
 	})
 	if len(ids) > 1 {
 		del.Label = fmt.Sprintf("%d Clips löschen", len(ids))
@@ -122,7 +123,13 @@ func (t *Timeline) clipMenu(c model.Clip) *fyne.Menu {
 		items = append(items, it)
 	}
 	colors.ChildMenu = fyne.NewMenu("", items...)
-	return fyne.NewMenu("", split, fyne.NewMenuItemSeparator(), del, ripple, fyne.NewMenuItemSeparator(), colors)
+	items = []*fyne.MenuItem{split, fyne.NewMenuItemSeparator(), del, ripple, fyne.NewMenuItemSeparator(), colors}
+	if t.ClipMenu != nil {
+		if extra := t.ClipMenu(c); len(extra) > 0 {
+			items = append(append(items, fyne.NewMenuItemSeparator()), extra...)
+		}
+	}
+	return fyne.NewMenu("", items...)
 }
 
 func (t *Timeline) trackMenu(tr model.Track) *fyne.Menu {
