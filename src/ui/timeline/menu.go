@@ -27,7 +27,10 @@ func editError(action string, err error) error {
 		return nil
 	}
 	var hint string
+	var lt *model.LockedTracksError
 	switch {
+	case errors.As(err, &lt):
+		hint = lt.Error() + "."
 	case errors.Is(err, model.ErrLocked):
 		hint = "Die Spur ist gesperrt. Schloss im Spurkopf lösen und erneut versuchen."
 	case errors.Is(err, model.ErrWrongTrack):
@@ -49,7 +52,9 @@ func (t *Timeline) TappedSecondary(ev *fyne.PointEvent) {
 	switch {
 	case h.area == areaLane && h.clip >= 0:
 		c := p.Tracks[h.track].Clips[h.clip]
-		t.s.SelectClip(c.ID)
+		if !t.s.IsSelected(c.ID) {
+			t.s.SelectClip(c.ID)
+		}
 		menu = t.clipMenu(c)
 	case h.area == areaHeader && h.track >= 0:
 		t.s.SelectTrack(p.Tracks[h.track].ID)
@@ -79,12 +84,24 @@ func (t *Timeline) clipMenu(c model.Clip) *fyne.Menu {
 		})
 	})
 	split.Disabled = !(t.s.Playhead > c.Start && t.s.Playhead < c.End())
+	// delete acts on the whole selection when the clicked clip is part of it
+	ids := []string{id}
+	if t.s.IsSelected(id) && len(t.s.Selected) > 1 {
+		ids = append([]string(nil), t.s.Selected...)
+	}
+	delLabel := "Clip löschen"
+	if len(ids) > 1 {
+		delLabel = fmt.Sprintf("%d Clips löschen", len(ids))
+	}
 	del := fyne.NewMenuItem("Löschen", func() {
-		t.edit("Clip löschen", func(p *model.Project) error { return p.DeleteClip(id, false) })
+		t.edit(delLabel, func(p *model.Project) error { return p.DeleteClips(ids, false) })
 	})
 	ripple := fyne.NewMenuItem("Lücke schließen", func() {
-		t.edit("Löschen und Lücke schließen", func(p *model.Project) error { return p.DeleteClip(id, true) })
+		t.edit("Löschen und Lücke schließen", func(p *model.Project) error { return p.DeleteClips(ids, true) })
 	})
+	if len(ids) > 1 {
+		del.Label = fmt.Sprintf("%d Clips löschen", len(ids))
+	}
 	colors := fyne.NewMenuItem("Clipfarbe", nil)
 	var items []*fyne.MenuItem
 	for _, cc := range studiotheme.ClipColors {
@@ -131,7 +148,27 @@ func (t *Timeline) trackMenu(tr model.Track) *fyne.Menu {
 			}
 		}, w)
 	})
-	items := append([]*fyne.MenuItem{remove, fyne.NewMenuItemSeparator()}, t.addTrackItems()...)
+	rename := fyne.NewMenuItem("Umbenennen", func() { t.startRename(id) })
+	near := func(label string, above bool) *fyne.MenuItem {
+		return fyne.NewMenuItem(label, func() {
+			t.edit("Spur hinzufügen", func(p *model.Project) error {
+				_, err := insertTrackNear(p, id, above)
+				return err
+			})
+		})
+	}
+	items := []*fyne.MenuItem{
+		rename, fyne.NewMenuItemSeparator(),
+		near("Spur darüber hinzufügen", true), near("Spur darunter hinzufügen", false),
+		remove, fyne.NewMenuItemSeparator(),
+	}
+	if _, ok := t.heights[id]; ok {
+		items = append(items, fyne.NewMenuItem("Standardhöhe", func() {
+			delete(t.heights, id)
+			t.Refresh()
+		}), fyne.NewMenuItemSeparator())
+	}
+	items = append(items, t.addTrackItems()...)
 	return fyne.NewMenu("", items...)
 }
 

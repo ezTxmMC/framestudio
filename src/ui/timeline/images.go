@@ -117,6 +117,7 @@ var iconSVG = map[string]string{
 	"unlock": `<rect x="4.5" y="10.5" width="15" height="11" rx="2" fill="%[1]s"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7" fill="none" stroke="%[1]s" stroke-width="2.2"/>`,
 	"film":   `<rect x="2.5" y="5" width="19" height="14" rx="2.5" fill="none" stroke="%[1]s" stroke-width="2"/><path d="M10 9l5 3-5 3z" fill="%[1]s"/>`,
 	"wave":   `<path d="M3 11v2M7 8v8M11 4v16M15 7v10M19 10v4" stroke="%[1]s" stroke-width="2.2" stroke-linecap="round"/>`,
+	"plus":   `<path d="M12 4v16M4 12h16" stroke="%[1]s" stroke-width="2.6" stroke-linecap="round"/>`,
 	"swatch": `<rect x="3" y="3" width="18" height="18" rx="3" fill="%[1]s"/>`,
 }
 
@@ -142,4 +143,44 @@ func clipLabel(length, fps int) string {
 		return tc[3:]
 	}
 	return tc
+}
+
+// scaleCover scales src to fill w x h, cropping the centre so the aspect is kept.
+func scaleCover(src image.Image, w, h int) *image.NRGBA {
+	dst := image.NewNRGBA(image.Rect(0, 0, max(w, 1), max(h, 1)))
+	b := src.Bounds()
+	if b.Dx() <= 0 || b.Dy() <= 0 {
+		return dst
+	}
+	crop := b
+	if sa, da := float64(b.Dx())/float64(b.Dy()), float64(w)/float64(h); sa > da {
+		cw := int(math.Round(float64(b.Dy()) * da))
+		crop.Min.X += (b.Dx() - cw) / 2
+		crop.Max.X = crop.Min.X + max(cw, 1)
+	} else if sa < da {
+		ch := int(math.Round(float64(b.Dx()) / da))
+		crop.Min.Y += (b.Dy() - ch) / 2
+		crop.Max.Y = crop.Min.Y + max(ch, 1)
+	}
+	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, crop, xdraw.Src, nil)
+	return dst
+}
+
+// posterStripImage lays out filmstrip tiles (tile i is tiles[i-first], tw pixels wide plus a
+// one-pixel gap) anchored at clip-local pixel -from. Missing tiles get a placeholder.
+func posterStripImage(w, h int, tiles []*image.NRGBA, first, tw, from int, bg color.NRGBA) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, max(w, 1), max(h, 1)))
+	xdraw.Draw(img, img.Bounds(), &image.Uniform{bg}, image.Point{}, xdraw.Src)
+	hole := &image.Uniform{mix(bg, color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}, 0.06)}
+	tw1 := tw + 1
+	for i, tile := range tiles {
+		x := (first+i)*tw1 - from
+		r := image.Rect(x, 0, x+tw, h)
+		if tile == nil {
+			xdraw.Draw(img, r.Inset(2), hole, image.Point{}, xdraw.Src)
+			continue
+		}
+		xdraw.Draw(img, r, tile, image.Point{}, xdraw.Src)
+	}
+	return img
 }

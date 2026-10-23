@@ -11,15 +11,21 @@ import (
 
 // Fixed metrics of the timeline in device-independent pixels.
 const (
-	headerW   float32 = 132
-	rulerH    float32 = 26
-	videoRowH float32 = 70
-	audioRowH float32 = 56
-	clipPadY  float32 = 2  // gap between a lane's edge and its clips
-	nameBarH  float32 = 16 // coloured name strip at the top of a clip
-	edgeGrab  float32 = 7  // trim handle width at each clip edge
-	snapPx    float32 = 8  // snapping distance
-	labelGap          = 96 // minimum distance between ruler labels
+	headerW    float32 = 132
+	rulerH     float32 = 26
+	videoRowH  float32 = 58 // default heights: V1, V2, A1, A2 fit a 300 px panel
+	audioRowH  float32 = 48
+	minRowH    float32 = 30 // track height limits when resizing by the header border
+	maxRowH    float32 = 220
+	tailH      float32 = 30 // empty strip below the last track: drop target for a new track
+	borderPx   float32 = 3  // grab distance of a header's bottom border (track resize)
+	scrollW    float32 = 5  // vertical scroll indicator width
+	scrollHitW float32 = 10 // grab width of the scroll indicator at the right edge
+	clipPadY   float32 = 2  // gap between a lane's edge and its clips
+	nameBarH   float32 = 16 // coloured name strip at the top of a clip
+	edgeGrab   float32 = 7  // trim handle width at each clip edge
+	snapPx     float32 = 8  // snapping distance
+	labelGap           = 96 // minimum distance between ruler labels
 
 	minZoom float32 = 1
 	maxZoom float32 = 60
@@ -38,6 +44,7 @@ type geom struct {
 	offset  float64 // frame at the left edge of the lanes
 	rows    []row
 	content float32 // height of all rows together
+	scroll  float32 // vertical scroll
 }
 
 // displayOrder lists track indices top to bottom: video from the top layer down to V1,
@@ -65,23 +72,39 @@ func fitFrames(p *model.Project) float64 {
 	return float64(max(p.Duration(), 10*fps)) * 1.05
 }
 
-// newGeom computes the geometry for a widget of size w x h. offset and vscroll are clamped.
+// trackHeight is a track's lane height: the user's choice from heights, else the default.
+func trackHeight(tr *model.Track, heights map[string]float32) float32 {
+	if h, ok := heights[tr.ID]; ok {
+		return max(minRowH, min(h, maxRowH))
+	}
+	return rowHeight(tr.Kind)
+}
+
+// newGeom computes the geometry for a widget of size w x h with default track heights.
+// offset and vscroll are clamped.
 func newGeom(p *model.Project, w, h, zoom float32, offset float64, vscroll float32) geom {
+	return layoutGeom(p, w, h, zoom, offset, vscroll, nil)
+}
+
+// layoutGeom is newGeom with per-track heights (track ID -> height).
+func layoutGeom(p *model.Project, w, h, zoom float32, offset float64, vscroll float32, heights map[string]float32) geom {
 	g := geom{w: w, h: h}
 	laneW := float64(max(w-headerW, 1))
 	g.ppf = laneW / fitFrames(p) * float64(clampZoom(zoom))
 	g.offset = g.clampOffset(p, offset, zoom)
 
-	for _, ti := range displayOrder(p) {
-		g.content += rowHeight(p.Tracks[ti].Kind)
+	order := displayOrder(p)
+	for _, ti := range order {
+		g.content += trackHeight(&p.Tracks[ti], heights)
 	}
 	vscroll = max(0, min(vscroll, g.maxScroll()))
 	y := rulerH - vscroll
-	for _, ti := range displayOrder(p) {
-		rh := rowHeight(p.Tracks[ti].Kind)
+	for _, ti := range order {
+		rh := trackHeight(&p.Tracks[ti], heights)
 		g.rows = append(g.rows, row{track: ti, y: y, h: rh})
 		y += rh
 	}
+	g.scroll = vscroll
 	return g
 }
 
@@ -104,14 +127,72 @@ func (g geom) clampOffset(p *model.Project, offset float64, zoom float32) float6
 	return math.Max(0, math.Min(offset, limit))
 }
 
-func (g geom) maxScroll() float32 { return max(0, g.content-(g.h-rulerH)) }
+// maxScroll is how far the tracks scroll vertically; the empty tail strip below the last
+// track stays reachable as a drop target.
+func (g geom) maxScroll() float32 { return max(0, g.content+tailH-(g.h-rulerH)) }
 
-// vscroll returns the current vertical scroll derived from the row positions.
-func (g geom) vscroll() float32 {
-	if len(g.rows) == 0 {
-		return 0
+// vscroll returns the current (clamped) vertical scroll.
+func (g geom) vscroll() float32 { return g.scroll }
+
+// bodyH is the height of the lane area below the ruler.
+func (g geom) bodyH() float32 { return max(g.h-rulerH, 0) }
+
+// tailY is the widget y where the area below the last track starts.
+func (g geom) tailY() float32 { return rulerH - g.scroll + g.content }
+
+// scrollThumb returns the vertical scroll indicator's position and height in lane
+// coordinates; ok is false when every track fits.
+func (g geom) scrollThumb() (y, h float32, ok bool) {
+	total := g.content + tailH
+	body := g.bodyH()
+	if g.maxScroll() <= 0 || total <= 0 || body <= 0 {
+		return 0, 0, false
 	}
-	return rulerH - g.rows[0].y
+	h = max(18, body*body/total)
+	y = (body - h) * g.scroll / g.maxScroll()
+	return y, h, true
+}
+
+// rowBorderAt returns the index of the row whose bottom border lies within borderPx of y
+// (the grab zone for resizing a track), or -1.
+func (g geom) rowBorderAt(y float32) int {
+	if y < rulerH {
+		return -1
+	}
+	for i, r := range g.rows {
+		b := r.y + r.h
+		if y >= b-borderPx && y <= b+borderPx {
+			return i
+		}
+	}
+	return -1
+}
+
+// clipRect returns the widget rectangle of clip c on row r.
+func (g geom) clipRect(c model.Clip, r row) (x0, y0, x1, y1 float32) {
+	x0, x1 = g.clipSpan(c)
+	return x0, r.y + clipPadY, x1, r.y + r.h - clipPadY - 1
+}
+
+// clipsInRect returns the IDs of clips on unlocked tracks touched by the rectangle with
+// corners a and b (widget coordinates), top to bottom and left to right.
+func (g geom) clipsInRect(p *model.Project, a, b fyne.Position) []string {
+	rx0, rx1 := min(a.X, b.X), max(a.X, b.X)
+	ry0, ry1 := min(a.Y, b.Y), max(a.Y, b.Y)
+	var ids []string
+	for _, r := range g.rows {
+		tr := &p.Tracks[r.track]
+		if tr.Locked || r.y+r.h-clipPadY-1 < ry0 || r.y+clipPadY > ry1 {
+			continue
+		}
+		for _, c := range tr.Clips {
+			x0, y0, x1, y1 := g.clipRect(c, r)
+			if x1 >= rx0 && x0 <= rx1 && y1 >= ry0 && y0 <= ry1 {
+				ids = append(ids, c.ID)
+			}
+		}
+	}
+	return ids
 }
 
 // frameX returns the widget x coordinate of frame f.
@@ -318,8 +399,12 @@ func (g geom) hitTest(p *model.Project, pos fyne.Position) hit {
 }
 
 // snapTargets collects the frames edits snap to: playhead, clip edges (except those of
-// the clip being edited), markers and the In/Out range.
-func snapTargets(p *model.Project, playhead int, in, out int, exclude string) []int {
+// the clips being edited), markers and the In/Out range.
+func snapTargets(p *model.Project, playhead int, in, out int, exclude ...string) []int {
+	skip := map[string]bool{}
+	for _, id := range exclude {
+		skip[id] = true
+	}
 	seen := map[int]bool{}
 	var ts []int
 	add := func(f int) {
@@ -334,7 +419,7 @@ func snapTargets(p *model.Project, playhead int, in, out int, exclude string) []
 	add(0)
 	for _, t := range p.Tracks {
 		for _, c := range t.Clips {
-			if c.ID != exclude {
+			if !skip[c.ID] {
 				add(c.Start)
 				add(c.End())
 			}

@@ -73,7 +73,7 @@ func TestRowsAndVerticalScroll(t *testing.T) {
 	if g.content != 2*videoRowH+2*audioRowH {
 		t.Fatalf("content height %v", g.content)
 	}
-	if want := g.content - (200 - rulerH); g.vscroll() != want {
+	if want := g.content + tailH - (200 - rulerH); g.vscroll() != want {
 		t.Fatalf("vscroll %v, want clamped %v", g.vscroll(), want)
 	}
 	g = newGeom(p, 800, 600, 1, 0, 0)
