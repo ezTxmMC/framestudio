@@ -209,7 +209,13 @@ func (p *Page) Deactivate() {
 }
 
 // TypedKey: Space toggles the preview, J/K/L shuttle, Left/Right step one frame, Home/End jump.
+// With a command registry (the shell) these keys are left to it: play.toggle is bound to
+// Vorhören in this page's scope and the global transport commands do the rest, so the
+// user's key map and modifiers (Umschalt+Links, Umschalt+Leertaste) apply.
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
+	if p.ctx != nil && p.ctx.Commands != nil {
+		return false
+	}
 	switch k.Name {
 	case fyne.KeySpace:
 		p.togglePreview()

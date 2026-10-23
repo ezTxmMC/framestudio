@@ -278,8 +278,13 @@ func (m *Manager) placeDetached(d *detached, monitor, mode string, r layout.Rect
 	if r.W <= 0 || r.H <= 0 {
 		r = m.defaultRect(monitor, len(m.wins)-1)
 	}
+	if mode == layout.ModeMaximized && monitor != "" && !m.disp.CanPosition() {
+		// Wayland maximizes where the compositor has the window; only fullscreen
+		// reaches the chosen monitor.
+		mode = layout.ModeFullscreen
+	}
 	d.monitor, d.mode, d.rect = monitor, mode, r
-	m.place(d.win, monitor, mode, r)
+	d.unplaced = !m.place(d.win, monitor, mode, r)
 	d.updateHeader()
 }
 
@@ -300,8 +305,9 @@ func (m *Manager) defaultRect(monitor string, n int) layout.Rect {
 }
 
 // place applies monitor and mode to any window. Wayland's "no positioning" is expected
-// and not reported.
-func (m *Manager) place(w fyne.Window, monitor, mode string, r layout.Rect) {
+// and not reported as an error; place returns false then (the window is wherever the
+// compositor put it).
+func (m *Manager) place(w fyne.Window, monitor, mode string, r layout.Rect) bool {
 	var err error
 	switch mode {
 	case layout.ModeFullscreen:
@@ -315,9 +321,13 @@ func (m *Manager) place(w fyne.Window, monitor, mode string, r layout.Rect) {
 			err = m.disp.Fullscreen(w, "", false)
 		}
 	}
-	if err != nil && !errors.Is(err, display.ErrNoPositioning) {
+	if errors.Is(err, display.ErrNoPositioning) {
+		return false
+	}
+	if err != nil {
 		m.showErr(err)
 	}
+	return true
 }
 
 // Apply restores a layout: main window, detached windows (missing or unused monitors
@@ -477,7 +487,15 @@ func (m *Manager) Window(panelID string) fyne.Window {
 func (m *Manager) LayoutName() string { return m.name }
 
 // Shutdown saves the layout if enabled and closes all detached windows.
-func (m *Manager) Shutdown() {
+func (m *Manager) Shutdown() { m.shutdown(true) }
+
+// ShutdownAfterLoop is Shutdown for when the run loop has already ended without it (the
+// process got SIGTERM before the shell could quit normally): the layout is saved from
+// what the manager knows and the panels are released, but no window is touched, since
+// GLFW is gone.
+func (m *Manager) ShutdownAfterLoop() { m.shutdown(false) }
+
+func (m *Manager) shutdown(live bool) {
 	if m.closed {
 		return
 	}
@@ -486,12 +504,17 @@ func (m *Manager) Shutdown() {
 			fyne.LogError("Layout beim Beenden speichern", err)
 		}
 	}
-	if m.dlg != nil {
+	if m.dlg != nil && live {
 		m.dlg.hide()
 	}
 	m.closed = true
 	for _, d := range append([]*detached(nil), m.wins...) {
-		d.close()
+		if live {
+			d.close()
+		} else {
+			d.closing = true
+			d.closed()
+		}
 	}
 	m.wins = nil
 	if reg := m.host.Commands(); reg != nil {
@@ -617,10 +640,12 @@ func (m *Manager) bestOther() string {
 }
 
 // setUnused marks a monitor as not to be used; its windows move to the main monitor.
+// Like a monitor that is unplugged, the windows remember it and go back when it is in
+// use again.
 func (m *Manager) setUnused(id string, unused bool) {
 	if !unused {
 		delete(m.unused, id)
-		m.refresh()
+		m.monitorsChanged() // windows waiting for id return in their mode
 		return
 	}
 	m.unused[id] = true
@@ -632,7 +657,8 @@ func (m *Manager) setUnused(id string, unused bool) {
 		}
 	}
 	for _, d := range m.wins {
-		if d.monitor == id {
+		if d.monitor == id && d.fallbackFrom == "" {
+			d.fallbackFrom, d.wantMode = id, d.mode
 			mon := m.mainMonitor()
 			m.placeDetached(d, mon, layout.ModeWindow, m.defaultRect(mon, 1))
 		}

@@ -66,7 +66,7 @@ func newScopeView(async func(func()), tools fyne.CanvasObject) *scopeView {
 	v.img.Hide()
 	bg := canvas.NewRectangle(scopeBG)
 	bg.CornerRadius = 4
-	waiting := canvas.NewText("Kein Bild – Playhead auf einen Clip setzen", studiotheme.Faint)
+	waiting := canvas.NewText("Kein Bild – Abspielkopf auf einen Clip setzen", studiotheme.Faint)
 	waiting.TextSize = 12
 	v.waiting = container.NewCenter(waiting)
 	v.scale = container.New(waveScaleLayout{})

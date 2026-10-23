@@ -206,3 +206,19 @@ func TestMixerPanelScreenshot(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Inside the shell (a registry exists) the page leaves keys to the registry, which knows
+// the modifiers and the user's key map.
+func TestKeysGoToRegistryInShell(t *testing.T) {
+	h := newHarness(t, demoProject())
+	h.p.ctx.Commands = command.NewRegistry()
+	h.s.Seek(10)
+	for _, k := range []fyne.KeyName{fyne.KeySpace, fyne.KeyJ, fyne.KeyL, fyne.KeyLeft, fyne.KeyHome, fyne.KeyEnd} {
+		if h.p.TypedKey(&fyne.KeyEvent{Name: k}) {
+			t.Fatalf("%s used by the page", k)
+		}
+	}
+	if h.s.Playing || h.s.Playhead != 10 || h.p.prev.Busy() {
+		t.Fatal("the page acted on a key the registry owns")
+	}
+}

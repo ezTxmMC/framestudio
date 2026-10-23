@@ -68,7 +68,11 @@ func (w *window) buildRow(f *field) fyne.CanvasObject {
 		left = append(left, container.New(layout.NewCustomPaddedLayout(-p, -p, -p, -p), help))
 	}
 	if f.restart {
-		left = append(left, container.New(layout.NewCustomPaddedLayout(3, 0, 0, 0), badge("Wirkt nach Neustart", warning)))
+		if env := envOverride(f.label); env != "" {
+			left = append(left, container.New(layout.NewCustomPaddedLayout(3, 0, 0, 0), badge("Wird durch "+env+" überschrieben", warning)))
+		} else {
+			left = append(left, container.New(layout.NewCustomPaddedLayout(3, 0, 0, 0), badge("Wirkt nach Neustart", warning)))
+		}
 	}
 	leftBox := container.New(&vstack{gap: 2}, left...)
 
@@ -135,24 +139,40 @@ func choice[T comparable](w *window, c *category, label, help string, opts []opt
 
 // number is a validated numeric entry with a unit; ints and floats share it. German
 // decimal commas are accepted.
+//
+// opts (optional) narrows the accepted values and can delay saving until Enter or until
+// the field loses the focus, for settings that restart something on every change.
 func (w *window) number(c *category, label, help, unit string, lo, hi float64, decimals int,
 	read func(settings.Settings) float64, write func(*settings.Settings, float64),
-	reset func(*settings.Settings, settings.Settings)) *field {
-	e := widget.NewEntry()
+	reset func(*settings.Settings, settings.Settings), opts ...numberOpts) *field {
+	var o numberOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	e := &commitEntry{}
+	e.ExtendBaseWidget(e)
 	errText := canvas.NewText("", warning)
 	errText.TextSize = 11
 	errText.Hide()
 	rangeMsg := fmt.Sprintf("Bitte einen Wert von %s bis %s eingeben.", formatNum(lo, decimals), formatNum(hi, decimals))
+	if o.rangeMsg != "" {
+		rangeMsg = o.rangeMsg
+	}
 	parse := func(t string) (float64, error) {
 		t = strings.ReplaceAll(strings.TrimSpace(t), ",", ".")
 		v, err := strconv.ParseFloat(t, 64)
-		if err != nil || math.IsNaN(v) || v < lo || v > hi {
+		if err != nil || math.IsNaN(v) || v < lo || v > hi || (o.allowed != nil && !o.allowed(v)) {
 			return 0, fmt.Errorf("%s", rangeMsg)
 		}
 		if decimals == 0 && v != math.Trunc(v) {
 			return 0, fmt.Errorf("Bitte eine ganze Zahl eingeben.")
 		}
 		return v, nil
+	}
+	commit := func(t string) {
+		if v, err := parse(t); err == nil && v != read(settings.Get()) {
+			w.set(func(s *settings.Settings) { write(s, v) })
+		}
 	}
 	e.OnChanged = func(t string) {
 		v, err := parse(t)
@@ -163,7 +183,13 @@ func (w *window) number(c *category, label, help, unit string, lo, hi float64, d
 			return
 		}
 		errText.Hide()
-		w.set(func(s *settings.Settings) { write(s, v) })
+		if !o.lazy {
+			w.set(func(s *settings.Settings) { write(s, v) })
+		}
+	}
+	if o.lazy {
+		e.OnSubmitted = commit
+		e.onLeave = func() { commit(e.Text) }
 	}
 	unitText := canvas.NewText(unit, studiotheme.Muted)
 	unitText.TextSize = 12
@@ -190,6 +216,26 @@ func (w *window) floatNumber(c *category, label, help, unit string, lo, hi float
 	return w.number(c, label, help, unit, lo, hi, 2,
 		func(s settings.Settings) float64 { return *get(&s) },
 		func(s *settings.Settings, v float64) { *get(s) = v }, resetter(get))
+}
+
+// numberOpts are the optional rules of a number field.
+type numberOpts struct {
+	allowed  func(v float64) bool // extra rule within lo..hi
+	rangeMsg string               // message for values outside the rules
+	lazy     bool                 // save on Enter or focus loss, not on every keystroke
+}
+
+// commitEntry is the entry of a number field; onLeave runs when it loses the focus.
+type commitEntry struct {
+	widget.Entry
+	onLeave func()
+}
+
+func (e *commitEntry) FocusLost() {
+	e.Entry.FocusLost()
+	if e.onLeave != nil {
+		e.onLeave()
+	}
 }
 
 // formatNum prints v with up to decimals digits and a German decimal comma.

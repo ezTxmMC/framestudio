@@ -122,7 +122,7 @@ func newToolbar(pg *Page) *toolbar {
 		b.tools = append(b.tools, seg(d.icon, d.id, d.label, d.detail))
 	}
 	b.bladeAll = seg(iconBladeAll, "timeline.bladeAll", "Alle Spuren", "Klinge schneidet alle entsperrten Spuren")
-	b.split = cmd(iconSplit, "clip.split", "Teilen am Playhead", "")
+	b.split = cmd(iconSplit, "clip.split", "Am Abspielkopf teilen", "")
 	b.del = cmd(theme.DeleteIcon(), "edit.delete", "Auswahl löschen", "")
 	b.ripple = cmd(iconRipple, "edit.rippleDelete", "Löschen und Lücke schließen", "")
 	marker := cmd(iconMarker, "marker.add", "Marker setzen", "")
@@ -132,7 +132,7 @@ func newToolbar(pg *Page) *toolbar {
 	addV := cmd(iconAddVideo, "timeline.addVideoTrack", "Videospur hinzufügen", "")
 	addA := cmd(iconAddAudio, "timeline.addAudioTrack", "Audiospur hinzufügen", "")
 	b.delTrack = cmd(iconRemoveTrack, "timeline.deleteTrack", "Ausgewählte Spur löschen", "")
-	b.snap = seg(iconSnap, "timeline.snapping", "Einrasten", "")
+	b.snap = seg(iconSnap, "timeline.snapping", "Magnetisch einrasten", "")
 	// undo and redo are the shell's commands; the page has no binding for them
 	b.undo = tips.Button(themed(theme.ContentUndoIcon()), "Rückgängig", s.Undo)
 	b.redo = tips.Button(themed(theme.ContentRedoIcon()), "Wiederholen", s.Redo)

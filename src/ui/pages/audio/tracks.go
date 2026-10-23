@@ -166,10 +166,10 @@ func newTrackRow(tv *trackView, id string) *trackRow {
 	r.name.fullName = func() string { return tv.pg.track(id).Name }
 	r.info = canvas.NewText("", studiotheme.Muted)
 	r.info.TextSize = 11
-	r.mute = newToggle("M", studiotheme.Steel, func() { tv.pg.toggleMute(id) })
+	r.mute = newToggle("M", accent, func() { tv.pg.toggleMute(id) })
 	r.solo = newToggle("S", amber, func() { tv.pg.toggleSolo(id) })
-	r.lock = newIconToggle(lockOff, lockOn, studiotheme.Steel, func() { tv.pg.toggleLock(id) })
-	r.del = newIconToggle(trashIcon, trashIcon, studiotheme.Steel, func() { tv.pg.removeTrack(id) })
+	r.lock = newIconToggle(lockOff, lockOn, accent, func() { tv.pg.toggleLock(id) })
+	r.del = newIconToggle(trashIcon, trashIcon, accent, func() { tv.pg.removeTrack(id) })
 	r.bg = canvas.NewRectangle(studiotheme.Panel)
 	r.accent = canvas.NewRectangle(studiotheme.Steel)
 	r.accent.SetMinSize(fyne.NewSize(3, 0))

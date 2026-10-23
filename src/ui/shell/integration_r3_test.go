@@ -130,24 +130,28 @@ func (f *fakeDisp) Maximize(w fyne.Window, id string) error {
 		return display.ErrNoMonitor
 	}
 	s := f.state(w)
+	w.SetFullScreen(false)
+	s.mode = wslayout.ModeMaximized
+	if id != "" && !f.canPos && id != s.mon {
+		return display.ErrNoPositioning // xdg maximize cannot pick an output
+	}
 	if id != "" {
 		s.mon = id
 	}
-	w.SetFullScreen(false)
-	s.mode = wslayout.ModeMaximized
 	return nil
 }
 func (f *fakeDisp) Place(w fyne.Window, id string, x, y, width, height int) error {
 	s := f.state(w)
 	w.SetFullScreen(false)
-	s.mode, s.mon = wslayout.ModeWindow, id
+	s.mode = wslayout.ModeWindow
 	if !f.canPos {
 		s.r = wslayout.Rect{W: width, H: height}
-		if id != "" {
-			return display.ErrNoPositioning
+		if id != "" && id != s.mon {
+			return display.ErrNoPositioning // the compositor keeps it where it is
 		}
 		return nil
 	}
+	s.mon = id
 	s.r = wslayout.Rect{X: x, Y: y, W: width, H: height}
 	return nil
 }
@@ -447,8 +451,8 @@ func TestLayoutSurvivesQuit(t *testing.T) {
 	if !editLayout(t, sh2).Hidden["viewer"] {
 		t.Fatal("viewer visible again after restore")
 	}
-	if c, _ := sh2.reg.Get("edit.hide.viewer"); !c.Checked {
-		t.Fatal("menu check mark of edit.hide.viewer lost")
+	if c, _ := sh2.reg.Get("edit.hide.viewer"); c.Checked {
+		t.Fatal("menu check mark of edit.hide.viewer (checked = shown) should be off")
 	}
 }
 

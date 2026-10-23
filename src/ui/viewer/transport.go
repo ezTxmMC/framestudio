@@ -150,8 +150,11 @@ func (t *transport) update() {
 		t.inOut.Hidden = hide
 		t.right.Refresh()
 	}
-	if r := RateLabel(s.Playing, s.Rate); r != t.rate.Text {
-		setText(t.rate, r)
+	if r := RateLabel(s.Playing, s.Rate); r != t.rate.Text || t.rate.Color != studiotheme.Steel {
+		// the accent may have changed in the settings since the bar was built
+		t.rate.Color, t.rateChip.StrokeColor = studiotheme.Steel, studiotheme.Steel
+		t.rate.Text = r
+		t.rate.Refresh()
 		t.rateChip.Hidden = r == ""
 		t.rateChip.Refresh()
 	}

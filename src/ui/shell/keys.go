@@ -31,36 +31,8 @@ import (
 var pageKeys = []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5}
 
 // comboOf returns the key combination a shortcut stands for, including the driver's
-// own shortcut types.
-func comboOf(sc fyne.Shortcut) (fyne.KeyName, fyne.KeyModifier, bool) {
-	const ctrl = fyne.KeyModifierShortcutDefault
-	switch s := sc.(type) {
-	case *desktop.CustomShortcut:
-		return s.KeyName, s.Modifier, true
-	case *fyne.ShortcutUndo:
-		return fyne.KeyZ, ctrl, true
-	case *fyne.ShortcutRedo:
-		return fyne.KeyY, ctrl, true
-	case *fyne.ShortcutSelectAll:
-		return fyne.KeyA, ctrl, true
-	case *fyne.ShortcutCopy:
-		if s.Secondary {
-			return fyne.KeyInsert, ctrl, true
-		}
-		return fyne.KeyC, ctrl, true
-	case *fyne.ShortcutCut:
-		if s.Secondary {
-			return fyne.KeyDelete, fyne.KeyModifierShift, true
-		}
-		return fyne.KeyX, ctrl, true
-	case *fyne.ShortcutPaste:
-		if s.Secondary {
-			return fyne.KeyInsert, fyne.KeyModifierShift, true
-		}
-		return fyne.KeyV, ctrl, true
-	}
-	return "", 0, false
-}
+// own shortcut types (see command.ComboOf).
+func comboOf(sc fyne.Shortcut) (fyne.KeyName, fyne.KeyModifier, bool) { return command.ComboOf(sc) }
 
 // builtinShortcuts are the driver's own shortcut types, always registered: the desktop
 // driver delivers Ctrl+Z/Y/A/C/X/V and Shift+Delete/Insert as these, never as
@@ -220,6 +192,14 @@ func (sh *Shell) keyDown(k *fyne.KeyEvent) {
 	}
 }
 
+// focusLost runs when the app loses the keyboard (Alt+Tab to another program): the Alt
+// release GLFW synthesizes afterwards must not put the keyboard on the menu bar.
+func (sh *Shell) focusLost() {
+	if fl, ok := sh.menuBar.(interface{ WindowFocusLost() }); ok {
+		fl.WindowFocusLost()
+	}
+}
+
 func (sh *Shell) keyUp(k *fyne.KeyEvent) {
 	if sh.menuBar == nil || (sh.modal() && !sh.menuBar.IsOpen()) {
 		return
@@ -242,9 +222,11 @@ func heldModifiers() fyne.KeyModifier {
 }
 
 // modal reports whether a dialog or pop-up covers the window. Keys then belong to it;
-// the media-drag ghost (also a pop-up) does not count.
+// the media-drag ghost (also a pop-up) and passive overlays (the viewer fullscreen of the
+// edit page) do not count.
 func (sh *Shell) modal() bool {
-	return sh.win.Canvas().Overlays().Top() != nil && !kit.MediaDragActive()
+	top := sh.win.Canvas().Overlays().Top()
+	return top != nil && !kit.MediaDragActive() && !kit.IsPassiveOverlay(top)
 }
 
 // typedKey handles keys while no widget has focus: F10 opens the menu bar; in the

@@ -6,6 +6,7 @@ package settings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -110,6 +111,9 @@ var (
 	listeners = map[int]func(Settings){}
 	nextID    int
 	path      string
+	// blocked is set when the settings file exists but could not be read: changes then
+	// stay in memory and Update reports this error instead of overwriting the file.
+	blocked error
 )
 
 // Dir is the config folder ($XDG_CONFIG_HOME/framestudio), created on demand.
@@ -137,6 +141,10 @@ func Load() (Settings, error) {
 	s := Defaults()
 	b, err := os.ReadFile(p)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		mu.Lock()
+		path = p
+		blocked = fmt.Errorf("%s ist nicht lesbar (%v). Rechte prüfen und Frame Studio neu starten", p, err)
+		mu.Unlock()
 		return Get(), err
 	}
 	var broken error
@@ -156,6 +164,7 @@ func Load() (Settings, error) {
 	s.Version = Version
 	mu.Lock()
 	path = p
+	blocked = nil
 	current = s
 	mu.Unlock()
 	return s, broken
@@ -166,6 +175,14 @@ func Loaded() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	return path != ""
+}
+
+// Blocked returns why changes cannot be saved (the settings file exists but could not
+// be read), nil when they can.
+func Blocked() error {
+	mu.Lock()
+	defer mu.Unlock()
+	return blocked
 }
 
 // Get returns a copy of the current settings.
@@ -181,7 +198,7 @@ func Update(fn func(s *Settings)) error {
 	next := clone(current)
 	fn(&next)
 	current = next
-	p := path
+	p, stuck := path, blocked
 	ls := make([]func(Settings), 0, len(listeners))
 	for _, l := range listeners {
 		ls = append(ls, l)
@@ -192,6 +209,9 @@ func Update(fn func(s *Settings)) error {
 	}
 	if p == "" {
 		return nil // Load was never called (tests): keep in memory only
+	}
+	if stuck != nil {
+		return stuck // the unreadable file stays as it is
 	}
 	return save(p, next)
 }

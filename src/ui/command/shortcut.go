@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/driver/desktop"
 )
 
 // Shortcut strings use English modifier names joined by "+": "Ctrl+Shift+Z", "Alt+1",
@@ -130,4 +131,38 @@ func Display(s string) string {
 		parts = append(parts, string(k))
 	}
 	return strings.Join(parts, "+")
+}
+
+// ComboOf returns the key combination a Fyne shortcut stands for, including the desktop
+// driver's own shortcut types: Strg+Z/Y/A/C/X/V arrive as fyne.ShortcutUndo and the like,
+// Umschalt+Entf as ShortcutCut{Secondary: true}, Umschalt+Einfg as ShortcutPaste and
+// Strg+Einfg as ShortcutCopy with Secondary set.
+func ComboOf(sc fyne.Shortcut) (fyne.KeyName, fyne.KeyModifier, bool) {
+	const ctrl = fyne.KeyModifierShortcutDefault
+	switch s := sc.(type) {
+	case *desktop.CustomShortcut:
+		return s.KeyName, s.Modifier, true
+	case *fyne.ShortcutUndo:
+		return fyne.KeyZ, ctrl, true
+	case *fyne.ShortcutRedo:
+		return fyne.KeyY, ctrl, true
+	case *fyne.ShortcutSelectAll:
+		return fyne.KeyA, ctrl, true
+	case *fyne.ShortcutCopy:
+		if s.Secondary {
+			return fyne.KeyInsert, ctrl, true
+		}
+		return fyne.KeyC, ctrl, true
+	case *fyne.ShortcutCut:
+		if s.Secondary {
+			return fyne.KeyDelete, fyne.KeyModifierShift, true
+		}
+		return fyne.KeyX, ctrl, true
+	case *fyne.ShortcutPaste:
+		if s.Secondary {
+			return fyne.KeyInsert, fyne.KeyModifierShift, true
+		}
+		return fyne.KeyV, ctrl, true
+	}
+	return "", 0, false
 }

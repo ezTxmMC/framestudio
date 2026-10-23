@@ -179,12 +179,12 @@ func TestDirtyTitleAndStatus(t *testing.T) {
 	if sh.bars.status.Text != "Ungespeichert" {
 		t.Errorf("status %q", sh.bars.status.Text)
 	}
-	if c, _ := sh.reg.Get("edit.undo"); c.Label != "Rückgängig: Clip einfügen" || !c.Enabled {
+	if c, _ := sh.reg.Get("edit.undo"); c.MenuLabel != "Rückgängig: Clip einfügen" || c.Label != "Rückgängig" || !c.Enabled {
 		t.Errorf("undo command %q enabled %v", c.Label, c.Enabled)
 	}
 	sh.reg.Run("edit.undo")
-	if c, _ := sh.reg.Get("edit.redo"); sh.Active().Project.Duration() != 0 || !c.Enabled || c.Label != "Wiederholen: Clip einfügen" {
-		t.Errorf("undo via command failed: redo %q", c.Label)
+	if c, _ := sh.reg.Get("edit.redo"); sh.Active().Project.Duration() != 0 || !c.Enabled || c.MenuLabel != "Wiederholen: Clip einfügen" || c.Label != "Wiederholen" {
+		t.Errorf("undo via command failed: redo %q", c.MenuLabel)
 	}
 }
 

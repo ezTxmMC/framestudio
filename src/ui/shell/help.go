@@ -20,7 +20,9 @@ import (
 	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/display"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/settingsui"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/ui/workspace"
 )
 
 // shortcut is one line of the help dialog. Keys lists alternatives separated by " | ";
@@ -41,7 +43,7 @@ var extraShortcuts = shortcutGroup{"Maus und Alternativen", []shortcut{
 	{"Umschalt+Klick", "Auswahl bis zum Clip erweitern"},
 	{"Strg+Mausrad", "Timeline zoomen"},
 	{"Ziehen", "Medien aus der Bibliothek in die Timeline ziehen"},
-	{"Eingabe", "Ausgewähltes Medium am Playhead einfügen (Schnitt)"},
+	{"Eingabe", "Ausgewähltes Medium am Abspielkopf einfügen (Schnitt)"},
 	{"Rücktaste", "Ausgewählte Clips löschen (wie Entf)"},
 	{"Strg+Y", "Wiederholen (alternativ)"},
 	{"Alt+1…5 | Strg+1…5", "Seite wechseln (alternativ)"},
@@ -186,7 +188,7 @@ func (sh *Shell) diagnostics() [][2]string {
 	if platform == "" {
 		platform = sessionType()
 	}
-	add("Fenstersystem", platform)
+	add("Fenstersystem", workspace.PlatformName(platform))
 	tool := func(name string) string {
 		if p, err := exec.LookPath(name); err == nil {
 			return "vorhanden (" + p + ")"
@@ -226,8 +228,9 @@ func (sh *Shell) diagnostics() [][2]string {
 		add("Einstellungsordner", err.Error())
 	}
 	s := settings.Get()
-	add("Cache-Grenzen", fmt.Sprintf("Bilder %d MB · Standbilder %d MB · Ton %d MB · %d Decoder",
-		s.Media.FrameCacheMB, s.Media.StillCacheMB, s.Media.AudioCacheMB, s.Media.MaxDecoders))
+	add("Cache-Grenzen", fmt.Sprintf("Bilder %s · Standbilder %s · Ton %s · %d Decoder",
+		settingsui.FormatMB(s.Media.FrameCacheMB), settingsui.FormatMB(s.Media.StillCacheMB),
+		settingsui.FormatMB(s.Media.AudioCacheMB), s.Media.MaxDecoders))
 	nmedia, offline := 0, 0
 	for _, p := range sh.projects {
 		for _, m := range p.sess.Project.Media {

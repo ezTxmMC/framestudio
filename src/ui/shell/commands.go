@@ -96,8 +96,8 @@ func (sh *Shell) bindGlobal() {
 		b("timeline.setIn", withSess(setIn), viewer),
 		b("timeline.setOut", withSess(setOut), viewer),
 		b("timeline.clearRange", withSess(func(s *session.Session) { s.ClearRange() }), func() bool {
-			p := sh.workspaceProject()
-			return viewer() && p.sess.HasRange()
+			p := sh.workspaceProject() // a lone In or Out point can be cleared too
+			return viewer() && (p.sess.In > 0 || p.sess.Out > 0)
 		}),
 	)
 
@@ -130,7 +130,7 @@ func (sh *Shell) bindGlobal() {
 		})
 	}
 	reg.Bind(command.Global,
-		command.Binding{ID: "view.fullscreen", Run: sh.toggleFullscreen, Checked: func() bool { return sh.fullscreen }},
+		command.Binding{ID: "view.fullscreen", Run: sh.toggleFullscreen, Checked: func() bool { return sh.win.FullScreen() }},
 		b("window.nextProject", func() { sh.cycleProject(+1) }, func() bool { return len(sh.projects) > 1 }),
 		b("window.prevProject", func() { sh.cycleProject(-1) }, func() bool { return len(sh.projects) > 1 }),
 		command.Binding{ID: "help.shortcuts", Run: sh.showShortcuts, Icon: theme.HelpIcon()},
@@ -213,27 +213,32 @@ func (sh *Shell) updateSettings(fn func(*settings.Settings)) {
 	}
 }
 
-// undoBinding is edit.undo with the label of the step it undoes ("Rückgängig: Clip teilen").
+// undoBinding is edit.undo; menus show the step it undoes ("Rückgängig: Clip teilen"),
+// help, palette and keymap editor the fixed catalog label "Rückgängig".
 func (sh *Shell) undoBinding() command.Binding {
-	label := "Rückgängig"
-	if p := sh.workspaceProject(); p != nil && p.sess.UndoLabel() != "" {
-		label += ": " + p.sess.UndoLabel()
-	}
-	sh.undoLabel = label
 	return command.Binding{ID: "edit.undo", Run: sh.undo, Icon: theme.ContentUndoIcon(),
-		Info:    &command.Info{Label: label},
-		Enabled: func() bool { p := sh.workspaceProject(); return p != nil && p.sess.CanUndo() }}
+		MenuLabel: func() string { return sh.undoMenuLabel() },
+		Enabled:   func() bool { p := sh.workspaceProject(); return p != nil && p.sess.CanUndo() }}
 }
 
 func (sh *Shell) redoBinding() command.Binding {
-	label := "Wiederholen"
-	if p := sh.workspaceProject(); p != nil && p.sess.RedoLabel() != "" {
-		label += ": " + p.sess.RedoLabel()
-	}
-	sh.redoLabel = label
 	return command.Binding{ID: "edit.redo", Run: sh.redo, Icon: theme.ContentRedoIcon(),
-		Info:    &command.Info{Label: label},
-		Enabled: func() bool { p := sh.workspaceProject(); return p != nil && p.sess.CanRedo() }}
+		MenuLabel: func() string { return sh.redoMenuLabel() },
+		Enabled:   func() bool { p := sh.workspaceProject(); return p != nil && p.sess.CanRedo() }}
+}
+
+func (sh *Shell) undoMenuLabel() string {
+	if p := sh.workspaceProject(); p != nil && p.sess.UndoLabel() != "" {
+		return "Rückgängig: " + p.sess.UndoLabel()
+	}
+	return "Rückgängig"
+}
+
+func (sh *Shell) redoMenuLabel() string {
+	if p := sh.workspaceProject(); p != nil && p.sess.RedoLabel() != "" {
+		return "Wiederholen: " + p.sess.RedoLabel()
+	}
+	return "Wiederholen"
 }
 
 // syncCommands brings undo labels and page scopes in line with the shown project.
@@ -241,9 +246,9 @@ func (sh *Shell) syncCommands() {
 	if sh.reg == nil {
 		return
 	}
-	undo, redo := sh.undoLabel, sh.redoLabel
-	if u, r := sh.undoBinding(), sh.redoBinding(); u.Info.Label != undo || r.Info.Label != redo {
-		sh.reg.Bind(command.Global, u, r)
+	if u, r := sh.undoMenuLabel(), sh.redoMenuLabel(); u != sh.undoLabel || r != sh.redoLabel {
+		sh.undoLabel, sh.redoLabel = u, r
+		sh.reg.Refresh() // open menus show the new step names
 	}
 	sh.syncScopes()
 }
@@ -411,13 +416,14 @@ func (sh *Shell) cycleProject(dir int) {
 	sh.activate(sh.projects[((i+dir)%n+n)%n])
 }
 
-// toggleFullscreen puts the main window fullscreen on the monitor it is on, or back.
+// toggleFullscreen puts the main window fullscreen on the monitor it is on, or back. The
+// state comes from the window itself: a restored layout or the monitor dialog may have
+// made it fullscreen.
 func (sh *Shell) toggleFullscreen() {
-	on := !sh.fullscreen
-	if err := display.Fullscreen(sh.win, "", on); err != nil {
+	on := !sh.win.FullScreen()
+	if err := display.Fullscreen(sh.win, "", on); err != nil || sh.win.FullScreen() != on {
 		sh.win.SetFullScreen(on)
 	}
-	sh.fullscreen = on
 }
 
 func (sh *Shell) openConfigFolder() {

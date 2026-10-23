@@ -6,12 +6,15 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -57,23 +60,86 @@ func Run(a fyne.App, files []string) {
 	// shown and GLFW runs, so the layout is restored when the app has started.
 	sh.deferRestore = true
 	sh.Start(files)
+	sigs := catchSignals(sh)
 	a.Lifecycle().SetOnStarted(func() {
 		sh.ws.Restore()
 		if loadErr != nil {
 			sh.showErr(errSettingsLoad(loadErr))
 		}
+		if msg := settingsui.TakeStartupWarning(); msg != "" {
+			sh.showErr(errors.New(msg))
+		}
 		sh.startDebugHooks()
+		sigs.take()
 	})
+	a.Lifecycle().SetOnExitedForeground(sh.focusLost)
 	settingsui.Restart = sh.restart
 	defer func() { settingsui.Restart = nil }()
 	stop := sh.StartAutosave(autosaveInterval(settings.Get()))
+	w.SetMaster() // closing the main window always ends the app
 	w.ShowAndRun()
+	sigs.stop()
 	stop()
+	if !sh.shutdownDone {
+		// The run loop ended without Quit (a signal before the handler was in place, or
+		// the session ending): remember the projects and the layout anyway. GLFW is gone,
+		// so the workspace saves what it knows without touching the windows.
+		sh.saveLastOpen()
+		sh.ws.ShutdownAfterLoop()
+	}
 	// Quit normally released everything already (exports and previews, then audio); if
 	// the run loop ended another way, do it now, then stop the decoders shared by all.
 	sh.releaseAll()
 	sh.dispose()
 	sh.cache.Close()
+}
+
+// signalCatcher turns SIGINT and SIGTERM (Strg+C in a terminal, kill, logging out) into
+// a normal shutdown on the UI thread: projects and layout are remembered, detached
+// windows closed. Fyne's own handler would end the run loop at once, skipping that.
+type signalCatcher struct {
+	ch    chan os.Signal
+	quit  chan struct{}
+	done  chan struct{}
+	timer *time.Timer
+}
+
+func catchSignals(sh *Shell) *signalCatcher {
+	c := &signalCatcher{ch: make(chan os.Signal, 1), quit: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(c.done)
+		select {
+		case <-c.ch:
+			fyne.Do(func() {
+				if !sh.shutdownDone {
+					sh.shutdown()
+				}
+			})
+		case <-c.quit:
+		}
+	}()
+	return c
+}
+
+// take replaces Fyne's signal handler (installed when the run loop starts) by c; once
+// more a moment later in case Fyne's goroutine registered late.
+func (c *signalCatcher) take() {
+	grab := func() {
+		signal.Reset(os.Interrupt, syscall.SIGTERM)
+		signal.Notify(c.ch, os.Interrupt, syscall.SIGTERM)
+	}
+	grab()
+	c.timer = time.AfterFunc(time.Second, grab)
+}
+
+// stop ends the handler after the run loop.
+func (c *signalCatcher) stop() {
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	signal.Stop(c.ch)
+	close(c.quit)
+	<-c.done
 }
 
 // newWorkspace creates the workspace manager; tests swap in a fake display backend.
@@ -150,6 +216,7 @@ type Shell struct {
 	reg            *command.Registry
 	menuBar        menuOpener
 	menuOpened     []int // menus opened by keys, for tests
+	shutdownDone   bool  // shutdown ran (Run saves projects and layout itself otherwise)
 	undoLabel      string
 	redoLabel      string
 	boundFor       *project        // project whose page commands are bound
@@ -158,7 +225,6 @@ type Shell struct {
 	dispatchingKey bool // a key (not the menu) is running a command
 	keySig         string
 	registered     []fyne.Shortcut
-	fullscreen     bool
 	deferRestore   bool // Run restores the workspace once the app has started
 	restarting     bool // quitting for a restart (settingsui.Restart)
 
@@ -347,6 +413,8 @@ func samePath(a, b string) bool {
 func (sh *Shell) addProject(proj *model.Project, path, firstPage string) *project {
 	s := session.New(proj)
 	s.Path = path
+	// The loop is not saved with a project: every tab starts with the setting.
+	s.Loop = settings.Get().Playback.LoopDefault
 	p := &project{sess: s, pages: map[string]page.Page{}, contents: map[string]fyne.CanvasObject{}, current: firstPage,
 		cmds: map[string][]command.Binding{}}
 	p.ctx = &page.Context{
@@ -405,7 +473,9 @@ func (sh *Shell) activate(p *project) {
 				sh.deactivatePage(old)
 			}
 			old.sess.SetPlaying(false)
+			sh.captureLayouts(old)
 		}
+		sh.applyLayouts(p) // the page layout is global: p shows what the user arranged
 		sh.active = p
 		sh.showPageContent(p)
 	case !visible:
@@ -474,6 +544,9 @@ func (sh *Shell) ensurePage(p *project, id string) page.Page {
 		t.SetToast(sh.notify)
 	}
 	if la, ok := pg.(page.LayoutAware); ok {
+		if sh.active != nil && sh.active != p {
+			sh.captureLayouts(sh.active) // what the user arranged in the shown tab
+		}
 		if l, ok := sh.pageLayouts[id]; ok {
 			la.ApplyLayout(l)
 		}

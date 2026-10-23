@@ -101,6 +101,32 @@ type Panel interface {
 	Close()
 }
 
+// ShortcutPanel is a Panel that handles key combinations with Ctrl, Alt or Super itself
+// (a detached window offers them to the panel before the command registry), e.g. the
+// edit panels run their own edit commands so Strg+A selects in the detached timeline.
+type ShortcutPanel interface {
+	Panel
+	Shortcut(key fyne.KeyName, mods fyne.KeyModifier) bool
+}
+
+// PanelPage returns the page a panel belongs to: its commands apply in the panel's
+// detached window.
+func PanelPage(panelID string) string {
+	switch panelID {
+	case PanelProgram, PanelCleanFeed, PanelTimeline, PanelInspector, PanelLibrary:
+		return Edit
+	case PanelMediaPool:
+		return Media
+	case PanelScopes:
+		return Color
+	case PanelMixer:
+		return Audio
+	case PanelQueue:
+		return Deliver
+	}
+	return ""
+}
+
 // PanelInfo registers a detachable panel. Owners register in their package init().
 type PanelInfo struct {
 	ID    string

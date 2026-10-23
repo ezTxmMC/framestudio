@@ -81,6 +81,16 @@ func (x *Panel) Content() fyne.CanvasObject { return x.content }
 // detached timeline cuts, trims and zooms like the page.
 func (x *Panel) TypedKey(k *fyne.KeyEvent) bool { return x.pg.TypedKey(k) }
 
+// Shortcut runs the edit command bound to a key combination with Ctrl, Alt or Super
+// (page.ShortcutPanel): Strg+A selects, Strg+Umschalt+D duplicates in the detached
+// window whatever page the main window shows.
+func (x *Panel) Shortcut(key fyne.KeyName, mods fyne.KeyModifier) bool {
+	if !x.pg.started || x.pg.closed {
+		return false
+	}
+	return x.pg.dispatch(key, mods)
+}
+
 // Close stops rendering, meters and loaders and releases the subscriptions.
 func (x *Panel) Close() { x.pg.Close() }
 

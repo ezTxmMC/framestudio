@@ -56,6 +56,11 @@ type MenuBar struct {
 
 	layer *layer
 	unsub func()
+
+	// OnCombo, when set, receives the key combinations typed while a menu is open (the
+	// menu closes first), so the window's aliases (Alt+1…5, Strg+Y) and keyboard rules
+	// apply as without the menu. Without it the registry dispatches them.
+	OnCombo func(key fyne.KeyName, mods fyne.KeyModifier)
 }
 
 // New builds the bar for window w. Leading/trailing objects (logo, tabs, status) are
@@ -175,6 +180,20 @@ func (m *MenuBar) HandleKeyUp(ev *fyne.KeyEvent) bool {
 		return true
 	}
 	return false
+}
+
+// WindowFocusLost forgets a held Alt key (call when the window loses the keyboard, e.g.
+// from Lifecycle OnExitedForeground). After a focus loss GLFW sends a synthetic release
+// for every pressed key; the Alt of Alt+Tab would otherwise look like Alt pressed alone
+// and leave the bar holding the keyboard when the user comes back.
+func (m *MenuBar) WindowFocusLost() {
+	if m.altHeld || m.altSolo {
+		m.altHeld, m.altSolo = false, false
+		m.Refresh()
+	}
+	if m.layer != nil {
+		m.layer.altSolo = false
+	}
 }
 
 // HandleShortcut opens the menu of an Alt+letter mnemonic. Returns true when it did.
@@ -306,8 +325,9 @@ func (m *MenuBar) CreateRenderer() fyne.WidgetRenderer {
 	return r
 }
 
-// openTint is Raised tinted towards Steel: the title whose menu is open.
-var openTint = mix(studiotheme.Raised, studiotheme.Steel, 0.3)
+// openTint is Raised tinted towards the accent: the title whose menu is open. Computed
+// when painting, so a changed accent shows at once.
+func openTint() color.NRGBA { return mix(studiotheme.Raised, studiotheme.Steel, 0.3) }
 
 func mix(a, b color.NRGBA, t float32) color.NRGBA {
 	f := func(x, y uint8) uint8 { return uint8(float32(x)*(1-t) + float32(y)*t + 0.5) }
@@ -365,7 +385,7 @@ func (r *barRenderer) update() {
 	for i := range r.text {
 		switch {
 		case i == m.active:
-			r.hl[i].FillColor = openTint
+			r.hl[i].FillColor = openTint()
 		case i == m.hover:
 			r.hl[i].FillColor = studiotheme.Raised
 		default:

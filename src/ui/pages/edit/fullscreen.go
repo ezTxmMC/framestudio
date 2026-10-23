@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
@@ -88,6 +89,7 @@ func (p *Page) enterFullscreen() {
 	c := p.ctx.Window.Canvas()
 	p.progBody.Remove(p.progBox)
 	host := newFSHost(p, p.progBox)
+	kit.SetPassiveOverlay(host, true) // command shortcuts (Strg+Z, Strg+S) keep working
 	c.Overlays().Add(host)
 	host.Resize(c.Size())
 	p.fs = &fullscreen{host: host, c: c}
@@ -103,6 +105,7 @@ func (p *Page) exitFullscreen() {
 	}
 	p.fs = nil
 	fs.c.Overlays().Remove(fs.host)
+	kit.SetPassiveOverlay(fs.host, false)
 	p.progBody.Add(p.progBox)
 	p.progBody.Refresh()
 	p.setViewerActive()

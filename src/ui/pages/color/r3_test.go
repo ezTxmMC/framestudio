@@ -305,3 +305,19 @@ func TestScopesPanelScreenshot(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Inside the shell (a registry exists) the page leaves keys to the registry, which knows
+// the modifiers and the user's key map.
+func TestKeysGoToRegistryInShell(t *testing.T) {
+	f := newFixture(t)
+	f.p.ctx.Commands = command.NewRegistry()
+	f.s.Seek(10)
+	for _, k := range []fyne.KeyName{fyne.KeySpace, fyne.KeyLeft, fyne.KeyRight, fyne.KeyUp, fyne.KeyDown} {
+		if f.p.TypedKey(&fyne.KeyEvent{Name: k}) {
+			t.Fatalf("%s used by the page", k)
+		}
+	}
+	if f.s.Playing || f.s.Playhead != 10 {
+		t.Fatal("the page acted on a key the registry owns")
+	}
+}

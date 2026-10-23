@@ -185,11 +185,14 @@ func (f *fakeDisplay) Maximize(w fyne.Window, id string) error {
 	if id != "" && !f.has(id) {
 		return display.ErrNoMonitor
 	}
+	w.SetFullScreen(false)
+	s.mode = layout.ModeMaximized
+	if id != "" && !f.canPos && id != s.mon {
+		return display.ErrNoPositioning // xdg maximize cannot pick an output
+	}
 	if id != "" {
 		s.mon = id
 	}
-	w.SetFullScreen(false)
-	s.mode = layout.ModeMaximized
 	return nil
 }
 
@@ -200,14 +203,14 @@ func (f *fakeDisplay) Place(w fyne.Window, id string, x, y, width, height int) e
 	if id != "" && !f.has(id) {
 		return display.ErrNoMonitor
 	}
-	s.mon = id
 	if !f.canPos {
 		s.r = layout.Rect{W: width, H: height}
-		if id != "" {
-			return display.ErrNoPositioning
+		if id != "" && id != s.mon {
+			return display.ErrNoPositioning // the compositor keeps it where it is
 		}
 		return nil
 	}
+	s.mon = id
 	s.r = layout.Rect{X: x, Y: y, W: width, H: height}
 	return nil
 }

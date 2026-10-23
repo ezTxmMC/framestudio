@@ -20,7 +20,11 @@ type Menu struct {
 }
 
 func Cmd(id string) Item { return Item{Command: id} }
-func Sep() Item          { return Item{Separator: true} }
+
+// CmdL is a command with a shorter label for its menu, e.g. "Seitenweise" in the
+// submenu "Timeline folgt dem Abspielkopf"; palette, keymap and help keep the full one.
+func CmdL(id, label string) Item { return Item{Command: id, Label: label} }
+func Sep() Item                  { return Item{Separator: true} }
 func Sub(title string, items ...Item) Item {
 	return Item{Label: title, Submenu: &Menu{Title: title, Items: items}}
 }
@@ -70,7 +74,7 @@ var MenuBar = []Menu{
 		Cmd("timeline.setIn"), Cmd("timeline.setOut"), Cmd("timeline.rangeFromSelection"), Cmd("timeline.clearRange"), Sep(),
 		Sub("Marker", Cmd("marker.add"), Cmd("marker.edit"), Cmd("marker.delete"), Sep(), Cmd("marker.next"), Cmd("marker.prev"), Sep(), Cmd("marker.deleteAll")),
 		Sep(), Cmd("timeline.zoomIn"), Cmd("timeline.zoomOut"), Cmd("timeline.zoomFit"),
-		Sub("Playhead folgen", Cmd("timeline.follow.page"), Cmd("timeline.follow.smooth"), Cmd("timeline.follow.off")),
+		Sub("Timeline folgt dem Abspielkopf", CmdL("timeline.follow.page", "Seitenweise"), CmdL("timeline.follow.smooth", "Fließend"), CmdL("timeline.follow.off", "Nicht folgen")),
 		Sep(), Cmd("timeline.showFilmstrip"), Cmd("timeline.showWaveforms"),
 	}},
 	{Title: "Wiedergabe", Items: []Item{
@@ -79,7 +83,8 @@ var MenuBar = []Menu{
 		Cmd("play.frameBack"), Cmd("play.frameForward"), Cmd("play.secondBack"), Cmd("play.secondForward"),
 		Cmd("play.prevEdit"), Cmd("play.nextEdit"), Sep(),
 		Cmd("play.loop"), Cmd("play.scrubAudio"), Cmd("play.mute"),
-		Sub("Vorschauqualität", Cmd("play.quality.auto"), Cmd("play.quality.full"), Cmd("play.quality.half"), Cmd("play.quality.quarter")),
+		Sub("Vorschauqualität", CmdL("play.quality.auto", "Automatisch"), CmdL("play.quality.full", "Volle Auflösung"),
+			CmdL("play.quality.half", "Halbe Auflösung"), CmdL("play.quality.quarter", "Viertel-Auflösung")),
 	}},
 	{Title: "Ansicht", Items: []Item{
 		Sub("Seite", Cmd("view.page.media"), Cmd("view.page.edit"), Cmd("view.page.color"), Cmd("view.page.audio"), Cmd("view.page.deliver")),

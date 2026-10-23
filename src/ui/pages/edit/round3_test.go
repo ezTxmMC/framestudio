@@ -75,7 +75,7 @@ func TestEveryEditCommandIsBound(t *testing.T) {
 	// the palette finds them
 	found := false
 	for _, c := range f.reg.Available() {
-		if c.ID == CmdHideViewer && command.Matches(c, "monitor ausblenden") {
+		if c.ID == CmdHideViewer && command.Matches(c, "monitor anzeigen") {
 			found = true
 		}
 	}
@@ -612,8 +612,8 @@ func TestLayoutRoundTripWithHiddenViewer(t *testing.T) {
 	if g.pg.vsplit != nil || g.pg.hsplit != nil || g.pg.rsplit == nil || g.pg.rsplit.Offset != 0.8 {
 		t.Fatal("layout not restored")
 	}
-	if !checked(g, CmdHideViewer) || !checked(g, CmdHideLibrary) || checked(g, CmdHideInspector) {
-		t.Fatal("hide toggles should be checked")
+	if checked(g, CmdHideViewer) || checked(g, CmdHideLibrary) || !checked(g, CmdHideInspector) {
+		t.Fatal("only the shown inspector should be checked")
 	}
 	g.w.Resize(fyne.NewSize(1300, 820))
 	if g.pg.rsplit.Offset != 0.8 {

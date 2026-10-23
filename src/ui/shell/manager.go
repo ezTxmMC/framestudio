@@ -56,7 +56,7 @@ type manager struct {
 	noMatch    *canvas.Text
 	noMatchBox fyne.CanvasObject
 	search     *widget.Entry
-	sortSel    *widget.Select
+	sortSel    *kit.Select
 	sortBy     store.SortOrder
 	all        []store.Details // library as read from disk
 	recent     *fyne.Container
@@ -111,7 +111,7 @@ func newManager(sh *Shell) *manager {
 	m.search.SetPlaceHolder("Projekte suchen")
 	m.search.ActionItem = widget.NewIcon(theme.SearchIcon())
 	m.search.OnChanged = func(string) { m.rebuild() }
-	m.sortSel = widget.NewSelect(sortLabels, func(string) {
+	m.sortSel = kit.NewSelect(sortLabels, func(string) {
 		if by := store.SortOrder(max(m.sortSel.SelectedIndex(), 0)); by != m.sortBy {
 			m.sortBy = by
 			m.rebuild()

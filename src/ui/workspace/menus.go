@@ -96,7 +96,8 @@ func (m *Manager) monitorItems() []command.Item {
 		sub := &command.Menu{Title: monitorLabel(mon), Items: []command.Item{
 			{Label: "Programm im Vollbild", Checked: check(fullOn(page.PanelProgram)), Run: toggle(page.PanelProgram), Enabled: panelOK(page.PanelProgram)},
 			{Label: "Clean-Feed im Vollbild", Checked: check(fullOn(page.PanelCleanFeed)), Run: toggle(page.PanelCleanFeed), Enabled: panelOK(page.PanelCleanFeed)},
-			{Label: "Hauptfenster hierher", Checked: check(mainMon == id), Run: func() { m.moveMain(id) }, Enabled: used},
+			{Label: "Hauptfenster hierher", Checked: check(mainMon == id), Run: func() { m.moveMain(id) },
+				Enabled: func() bool { return used() && m.canMoveMain() }},
 			{Separator: true},
 			{Label: "Nicht verwenden", Checked: check(m.unused[id]), Run: func() { m.setUnused(id, !m.unused[id]) },
 				Enabled: func() bool { return len(m.monitors()) > 1 || m.unused[id] }},
@@ -106,10 +107,17 @@ func (m *Manager) monitorItems() []command.Item {
 	return items
 }
 
+// canMoveMain reports whether the main window can be put on a chosen monitor: always on
+// X11, under Wayland only while it is fullscreen (maximizing cannot pick an output).
+func (m *Manager) canMoveMain() bool {
+	w := m.host.MainWindow()
+	return w != nil && (m.disp.CanPosition() || w.FullScreen())
+}
+
 // moveMain puts the main window on monitor id (keeps fullscreen, otherwise maximized).
 func (m *Manager) moveMain(id string) {
 	w := m.host.MainWindow()
-	if w == nil {
+	if w == nil || !m.canMoveMain() {
 		return
 	}
 	mode := layout.ModeMaximized

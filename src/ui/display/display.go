@@ -21,6 +21,7 @@ package display
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"sync"
@@ -190,6 +191,11 @@ func NormalizeLogical(ms []Monitor) {
 	// Positions are shared edges: scale them all with one factor per monitor's origin.
 	for i := range ms {
 		r := ratio[i]
+		if r > 0 {
+			// The derived factor is the real one (1.25), GLFW's content scale is the
+			// integer buffer scale (2).
+			ms[i].Scale = float32(math.Round(r*100) / 100)
+		}
 		if r <= 0 {
 			r = 1
 		}
@@ -325,10 +331,12 @@ func Place(w fyne.Window, monitorID string, x, y, width, height int) error {
 				if width > 0 && height > 0 {
 					vp.SetSize(width, height)
 				}
+				// The compositor places the window: only a request for the monitor it
+				// is already known to be on is honoured, others are not recorded.
 				mu.Lock()
-				wish[w] = monitorID
+				known := wish[w]
 				mu.Unlock()
-				if monitorID != "" {
+				if monitorID != "" && monitorID != known {
 					err = ErrNoPositioning
 				}
 				return
@@ -355,7 +363,8 @@ func Place(w fyne.Window, monitorID string, x, y, width, height int) error {
 }
 
 // Maximize maximizes w on monitor id ("" = where it is). On X11 the window is moved onto
-// the monitor first; on Wayland the compositor chooses the output.
+// the monitor first; on Wayland the compositor chooses the output, and a monitor other
+// than the one w is known to be on gives an error wrapping ErrNoPositioning.
 func Maximize(w fyne.Window, monitorID string) error {
 	if w == nil {
 		return nil
@@ -375,18 +384,28 @@ func Maximize(w fyne.Window, monitorID string) error {
 			}
 			if monitorID != "" {
 				mon := findMonitor(monitorID)
-				if mon == nil {
+				switch {
+				case mon == nil:
 					err = fmt.Errorf("%w (%s)", ErrNoMonitor, monitorID)
-				} else if glfw.GetPlatform() != glfw.PlatformWayland {
+				case glfw.GetPlatform() != glfw.PlatformWayland:
 					if vp.GetAttrib(glfw.Maximized) == glfw.True {
 						vp.Restore()
 					}
 					mx, my := mon.GetPos()
 					vp.SetPos(mx+40, my+40)
+					mu.Lock()
+					wish[w] = monitorID
+					mu.Unlock()
+				default:
+					// xdg maximize cannot pick an output: the window maximizes where the
+					// compositor has it. Only the monitor it is known to be on counts.
+					mu.Lock()
+					known := wish[w]
+					mu.Unlock()
+					if known != monitorID {
+						err = ErrNoPositioning
+					}
 				}
-				mu.Lock()
-				wish[w] = monitorID
-				mu.Unlock()
 			}
 			vp.Maximize()
 		})

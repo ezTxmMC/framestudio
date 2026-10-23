@@ -267,3 +267,18 @@ func write(t *testing.T, path string, c fyne.Canvas) {
 		t.Fatal(err)
 	}
 }
+
+// Menu letters and the shell's fixed alternatives cannot be given to a command.
+func TestReservedShortcutRefused(t *testing.T) {
+	h := newHarness(t)
+	h.reg.Bind(command.Global, command.Binding{ID: "marker.add", Run: func() {}})
+	h.e.rebuild()
+	test.Tap(h.row("marker.add").record)
+	h.press(fyne.KeyD, desktop.KeyAltLeft)
+	if got := h.reg.Shortcut("marker.add"); got != "M" {
+		t.Fatalf("marker.add took %q", got)
+	}
+	if !strings.Contains(h.e.status.Text, "Alt+D öffnet das Menü Datei") {
+		t.Fatalf("status %q", h.e.status.Text)
+	}
+}

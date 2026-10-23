@@ -90,6 +90,9 @@ func buildRows(reg *command.Registry, items []command.Item) []row {
 				r := row{label: it.Label}
 				if c, ok := reg.Get(id); ok {
 					if r.label == "" {
+						r.label = c.MenuLabel
+					}
+					if r.label == "" {
 						r.label = c.Label
 					}
 					r.shortcut = command.Display(c.Shortcut)
@@ -355,7 +358,7 @@ func (p *pane) paintHover() {
 	}
 	p.hl.FillColor = studiotheme.Steel
 	if p.dim {
-		p.hl.FillColor = openTint
+		p.hl.FillColor = openTint()
 	}
 	p.hl.Move(fyne.NewPos(4, p.tops[p.hover]))
 	p.hl.Resize(fyne.NewSize(p.size.Width-8, rowHeight))
@@ -842,17 +845,22 @@ func (l *layer) KeyUp(ev *fyne.KeyEvent) {
 	l.bar.Refresh()
 }
 
-// TypedShortcut: Alt+letter switches menus; any other shortcut closes the menu and runs
-// the command bound to it.
+// TypedShortcut: Alt+letter switches menus; any other shortcut (also the driver's own
+// types such as Strg+Z) closes the menu and goes to the window's key handling
+// (MenuBar.OnCombo), or to the registry.
 func (l *layer) TypedShortcut(sc fyne.Shortcut) {
 	l.altSolo = false
 	if l.bar.HandleShortcut(sc) {
 		return
 	}
-	cs, ok := sc.(*desktop.CustomShortcut)
+	key, mods, ok := command.ComboOf(sc)
 	if !ok {
 		return
 	}
 	l.bar.closeAll()
-	l.bar.reg.Dispatch(cs.KeyName, cs.Modifier)
+	if l.bar.OnCombo != nil {
+		l.bar.OnCombo(key, mods)
+		return
+	}
+	l.bar.reg.Dispatch(key, mods)
 }

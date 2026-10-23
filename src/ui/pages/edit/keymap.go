@@ -40,12 +40,12 @@ var KeyMap = []KeyGroup{
 		{"B", "Klingenwerkzeug"},
 		{"R", "Ripple-Trim-Werkzeug"},
 		{"N", "Rollen-Werkzeug"},
-		{"S", "Clip am Playhead teilen"},
+		{"S", "Clip am Abspielkopf teilen"},
 		{"M", "Marker setzen"},
 		{"Strg+A", "Alle Clips auswählen"},
 		{"Esc", "Auswahl aufheben"},
 		{"Entf / Rücktaste", "Ausgewählte Clips löschen"},
-		{"Eingabe", "Ausgewähltes Medium am Playhead einfügen"},
+		{"Eingabe", "Ausgewähltes Medium am Abspielkopf einfügen"},
 		{"+ / −", "Timeline vergrößern / verkleinern"},
 	}},
 }
@@ -66,7 +66,7 @@ func KeyMapFor(r *command.Registry) []KeyGroup {
 			}
 		}
 		if g.title == "Schnitt" {
-			kg.Keys = append(kg.Keys, [2]string{"Eingabe", "Ausgewähltes Medium am Playhead einfügen"})
+			kg.Keys = append(kg.Keys, [2]string{"Eingabe", "Ausgewähltes Medium am Abspielkopf einfügen"})
 		}
 		out = append(out, kg)
 	}

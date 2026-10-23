@@ -109,9 +109,9 @@ func (p *Page) bindings() []command.Binding {
 		{ID: "view.viewerFullscreen", Run: p.toggleFullscreen, Enabled: p.canFullscreen, Checked: func() bool { return p.fs != nil }},
 		{ID: "view.safeArea", Checked: func() bool { return p.prefs.Playback.SafeArea },
 			Run: func() { p.updateSettings(func(s *settings.Settings) { s.Playback.SafeArea = !s.Playback.SafeArea }) }},
-		p.hideBinding(CmdHideViewer, areaViewer, "Programm-Monitor ausblenden", onPage),
-		p.hideBinding(CmdHideLibrary, areaLibrary, "Bibliothek ausblenden", onPage),
-		p.hideBinding(CmdHideInspector, areaInspector, "Inspector ausblenden", onPage),
+		p.hideBinding(CmdHideViewer, areaViewer, "Programm-Monitor anzeigen", onPage),
+		p.hideBinding(CmdHideLibrary, areaLibrary, "Bibliothek anzeigen", onPage),
+		p.hideBinding(CmdHideInspector, areaInspector, "Inspector anzeigen", onPage),
 	}
 	for _, d := range toolDefs {
 		t := d.tool
@@ -144,7 +144,7 @@ func (p *Page) hideBinding(id, area, label string, enabled func() bool) command.
 	return command.Binding{ID: id, Info: &command.Info{Label: label, Category: "Ansicht"},
 		Run:     func() { p.setHidden(area, !p.hidden[area]) },
 		Enabled: enabled,
-		Checked: func() bool { return p.hidden[area] }}
+		Checked: func() bool { return !p.hidden[area] }} // checked = shown, like the rest of Ansicht
 }
 
 func followMode(m string) string {

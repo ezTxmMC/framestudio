@@ -328,7 +328,7 @@ func TestContextMenuActions(t *testing.T) {
 		t.Fatalf("menu item %q missing", label)
 		return nil
 	}
-	find(m, "Teilen am Playhead").Action()
+	find(m, "Am Abspielkopf teilen").Action()
 	if n := len(f.track("V1").Clips); n != 3 {
 		t.Fatalf("split at playhead: %d clips", n)
 	}

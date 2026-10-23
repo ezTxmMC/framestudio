@@ -140,7 +140,7 @@ func TestOpenHoverSwitchAndClose(t *testing.T) {
 	}
 	// hovering another title switches the open menu
 	test.MoveMouse(h.c(), h.titlePos(h.menuIndex("Clip")))
-	if h.bar.active != h.menuIndex("Clip") || h.pane(0).rows[0].label != "Am Playhead teilen" {
+	if h.bar.active != h.menuIndex("Clip") || h.pane(0).rows[0].label != "Am Abspielkopf teilen" {
 		t.Fatal("hover did not switch to Clip")
 	}
 	// clicking the open title closes
@@ -222,7 +222,7 @@ func TestSubmenuHoverAndCheckMarks(t *testing.T) {
 		t.Fatal("submenu not on the right")
 	}
 	// moving to another plain row closes the submenu
-	test.MoveMouse(h.c(), h.rowPos(0, "Am Playhead teilen"))
+	test.MoveMouse(h.c(), h.rowPos(0, "Am Abspielkopf teilen"))
 	if len(h.bar.layer.panes) != 1 {
 		t.Fatal("submenu stayed open")
 	}
@@ -237,12 +237,12 @@ func TestSubmenuHoverAndCheckMarks(t *testing.T) {
 	}
 	// the toggle state is read at open time
 	h.openTitle("Timeline")
-	if h.pane(0).rows[h.rowIndex(0, "Einrasten")].checked {
+	if h.pane(0).rows[h.rowIndex(0, "Magnetisch einrasten")].checked {
 		t.Fatal("snapping checked too early")
 	}
-	test.TapCanvas(h.c(), h.rowPos(0, "Einrasten"))
+	test.TapCanvas(h.c(), h.rowPos(0, "Magnetisch einrasten"))
 	h.openTitle("Timeline")
-	if !h.pane(0).rows[h.rowIndex(0, "Einrasten")].checked {
+	if !h.pane(0).rows[h.rowIndex(0, "Magnetisch einrasten")].checked {
 		t.Fatal("snapping not checked after toggle")
 	}
 }
@@ -337,7 +337,7 @@ func TestKeyboardNavigation(t *testing.T) {
 		t.Fatal("layer has no focus")
 	}
 	p := h.pane(0)
-	if p.rows[p.hover].label != "Am Playhead teilen" {
+	if p.rows[p.hover].label != "Am Abspielkopf teilen" {
 		t.Fatal("first row not selected")
 	}
 	// down to Clipfarbe: split, splitAll(disabled), rename, Clipfarbe
@@ -485,7 +485,7 @@ func TestSafeTriangleAndDelays(t *testing.T) {
 		t.Fatal("reaching the submenu did not keep it")
 	}
 	// closing stops pending timers
-	test.MoveMouse(h.c(), h.rowPos(0, "Am Playhead teilen"))
+	test.MoveMouse(h.c(), h.rowPos(0, "Am Abspielkopf teilen"))
 	h.bar.Close()
 	time.Sleep(80 * time.Millisecond)
 	q.Drain()

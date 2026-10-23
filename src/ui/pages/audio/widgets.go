@@ -27,6 +27,10 @@ var (
 	lockOn  = lockIcon(studiotheme.Gap)
 )
 
+// accent as a toggle's active colour means the current accent (studiotheme.Steel, read
+// when painting, so a changed accent shows at once).
+var accent color.NRGBA
+
 // toggle is a compact console button (M, S, lock) that lights up in its active colour.
 type toggle struct {
 	widget.BaseWidget
@@ -105,7 +109,11 @@ func (r *toggleRenderer) Refresh() {
 	t := r.t
 	switch {
 	case t.on:
-		r.bg.FillColor, r.bg.StrokeColor = t.active, t.active
+		c := t.active
+		if c == accent {
+			c = studiotheme.Steel
+		}
+		r.bg.FillColor, r.bg.StrokeColor = c, c
 		r.text.Color = studiotheme.Gap
 	case t.hovered:
 		r.bg.FillColor, r.bg.StrokeColor = studiotheme.Border, studiotheme.Faint

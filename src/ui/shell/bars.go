@@ -61,6 +61,11 @@ func newBars(sh *Shell) *bars {
 
 	// Row 1: wordmark and menu bar.
 	b.menu = menubar.New(sh.win, sh.reg, command.MenuBar)
+	b.menu.OnCombo = func(k fyne.KeyName, m fyne.KeyModifier) {
+		if !sh.modal() { // the menu closed; another dialog may still be open
+			sh.combo(k, m)
+		}
+	}
 	sh.menuBar = b.menu
 	b.project = text("", studiotheme.Faint, 11, false)
 	b.menuRow = bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
@@ -97,19 +102,50 @@ func newBars(sh *Shell) *bars {
 	return b
 }
 
-// wordmark is the app name with a small Steel frame glyph.
+// wordmark is the app name with a small frame glyph in the accent colour.
 func wordmark() fyne.CanvasObject {
-	glyph := canvas.NewRectangle(color.Transparent)
-	glyph.StrokeColor = studiotheme.Steel
-	glyph.StrokeWidth = 2
-	glyph.CornerRadius = 2
-	dot := canvas.NewRectangle(studiotheme.Steel)
-	dot.CornerRadius = 1
-	mark := container.NewStack(container.NewGridWrap(fyne.NewSize(14, 11), glyph),
-		container.NewCenter(container.NewGridWrap(fyne.NewSize(4, 3), dot)))
 	name := text("Frame Studio", studiotheme.Text, 12, true)
-	return container.NewHBox(container.NewCenter(mark), strut(1, 0), container.NewCenter(name))
+	return container.NewHBox(container.NewCenter(newMarkGlyph()), strut(1, 0), container.NewCenter(name))
 }
+
+// markGlyph is the wordmark's frame glyph. It reads the accent when painting, so a
+// changed accent (Einstellungen › Darstellung) shows without a restart.
+type markGlyph struct{ widget.BaseWidget }
+
+func newMarkGlyph() *markGlyph {
+	g := &markGlyph{}
+	g.ExtendBaseWidget(g)
+	return g
+}
+
+func (g *markGlyph) MinSize() fyne.Size { return fyne.NewSize(14, 11) }
+
+func (g *markGlyph) CreateRenderer() fyne.WidgetRenderer {
+	frame := canvas.NewRectangle(color.Transparent)
+	frame.StrokeWidth = 2
+	frame.CornerRadius = 2
+	dot := canvas.NewRectangle(color.Transparent)
+	dot.CornerRadius = 1
+	r := &markRenderer{frame: frame, dot: dot}
+	r.Refresh()
+	return r
+}
+
+type markRenderer struct{ frame, dot *canvas.Rectangle }
+
+func (r *markRenderer) Layout(s fyne.Size) {
+	r.frame.Resize(s)
+	r.dot.Move(fyne.NewPos((s.Width-4)/2, (s.Height-3)/2))
+	r.dot.Resize(fyne.NewSize(4, 3))
+}
+func (r *markRenderer) MinSize() fyne.Size { return fyne.NewSize(14, 11) }
+func (r *markRenderer) Refresh() {
+	r.frame.StrokeColor, r.dot.FillColor = studiotheme.Steel, studiotheme.Steel
+	r.frame.Refresh()
+	r.dot.Refresh()
+}
+func (r *markRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.frame, r.dot} }
+func (r *markRenderer) Destroy()                     {}
 
 // applyDisplay shows the parts of the bottom bar the settings ask for: page buttons
 // (Display.PageBar) and the status line (Display.StatusBar); with neither it is hidden.

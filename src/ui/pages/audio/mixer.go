@@ -137,7 +137,7 @@ func newStrip(pg *Page, id string) *strip {
 	st.name = newNameLabel(13, fyne.TextAlignCenter, func() { pg.s.SelectTrack(id) },
 		func(name string) { pg.renameTrack(id, name) })
 	st.name.fullName = func() string { return pg.track(id).Name }
-	st.mute = newToggle("M", studiotheme.Steel, func() { pg.toggleMute(id) })
+	st.mute = newToggle("M", accent, func() { pg.toggleMute(id) })
 	st.solo = newToggle("S", amber, func() { pg.toggleSolo(id) })
 
 	st.fader = kit.NewSlider(MinDB, MaxDB)

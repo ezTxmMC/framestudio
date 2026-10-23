@@ -20,7 +20,8 @@ type monPlan struct {
 type plan map[string]*monPlan
 
 // planFrom describes a layout per monitor. Windows without a known monitor (Wayland)
-// count as on the primary monitor.
+// count as on the primary monitor; windows waiting for a monitor that is not connected
+// are left out (keepWaiting carries them through).
 func planFrom(l layout.Layout, ms []display.Monitor, unused map[string]bool) plan {
 	p := plan{}
 	primary := ""
@@ -33,6 +34,9 @@ func planFrom(l layout.Layout, ms []display.Monitor, unused map[string]bool) pla
 	seen := map[string]bool{}
 	for _, w := range l.Windows {
 		mp := p[w.Monitor]
+		if mp == nil && w.Monitor != "" && w.Panel != "" {
+			continue // waits for its monitor
+		}
 		if mp == nil {
 			mp = p[primary]
 		}
@@ -50,6 +54,25 @@ func planFrom(l layout.Layout, ms []display.Monitor, unused map[string]bool) pla
 		}
 	}
 	return p
+}
+
+// keepWaiting adds the windows of base that wait for a monitor not in ms to l, unless
+// the plan put that panel somewhere else: plugging the monitor back in brings them back.
+func keepWaiting(l *layout.Layout, base layout.Layout, ms []display.Monitor) {
+	present := map[string]bool{}
+	for _, mon := range ms {
+		present[mon.ID] = true
+	}
+	placed := map[string]bool{}
+	for _, w := range l.Windows {
+		placed[w.Panel] = true
+	}
+	for _, w := range base.Windows {
+		if w.Panel != "" && w.Monitor != "" && !present[w.Monitor] && !placed[w.Panel] {
+			l.Windows = append(l.Windows, w)
+			placed[w.Panel] = true
+		}
+	}
 }
 
 // setMain puts the main window on monitor id only.
@@ -112,16 +135,22 @@ func (m *Manager) presets(ms []display.Monitor) []preset {
 	}
 	if len(ms) >= 3 {
 		left, mid, right := threeAcross(ms)
-		out = append(out, preset{Label: "Drei Monitore: Medien | Schnitt | Programm + Scopes", Page: page.Edit, Build: func() plan {
+		label := "Drei Monitore: Medien | Schnitt | Programm + Scopes"
+		if wayland {
+			// Only fullscreen reaches a chosen monitor under Wayland, so each side
+			// monitor gets one fullscreen panel; a second window there could not be placed.
+			label = "Drei Monitore: Medien | Schnitt | Programm"
+		}
+		out = append(out, preset{Label: label, Page: page.Edit, Build: func() plan {
 			p := empty()
 			p[mid].Main = true
 			p[left].Panels = []string{page.PanelMediaPool}
 			p[right].Panels = []string{page.PanelProgram, page.PanelScopes}
 			p[right].Mode = layout.ModeWindow // side by side
 			if wayland {
-				// Only fullscreen reaches a chosen monitor under Wayland.
 				p[left].Mode = layout.ModeFullscreen
 				p[right].Mode = layout.ModeFullscreen
+				p[right].Panels = []string{page.PanelProgram}
 			}
 			return p
 		}})

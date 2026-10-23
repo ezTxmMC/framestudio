@@ -2,6 +2,7 @@ package application
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2/test"
@@ -24,12 +25,12 @@ func TestStartEnv(t *testing.T) {
 	}
 	s.Display.Platform = "X11"
 	s.Display.Scale = 1.25
-	got := StartEnv(s, env(nil))
+	got := StartEnv(s, env(map[string]string{"DISPLAY": ":0"}))
 	if got["FYNE_PLATFORM"] != "x11" || got["FYNE_SCALE"] != "1.25" {
 		t.Fatalf("got %v", got)
 	}
 	s.Display.Platform = "wayland"
-	if StartEnv(s, env(nil))["FYNE_PLATFORM"] != "wayland" {
+	if StartEnv(s, env(map[string]string{"WAYLAND_DISPLAY": "wayland-0"}))["FYNE_PLATFORM"] != "wayland" {
 		t.Fatal("wayland")
 	}
 	// The user's own environment wins.
@@ -108,5 +109,38 @@ func TestMediaConfig(t *testing.T) {
 	s := settings.Defaults()
 	if got := MediaConfig(s); got != (media.Config{FrameCacheMB: 512, StillCacheMB: 256, MaxDecoders: 4}) {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A window system without a display is not forced: the start would crash in GLFW.
+func TestStartEnvNeedsTheDisplay(t *testing.T) {
+	s := settings.Defaults()
+	s.Display.Platform = "wayland"
+	x11 := env(map[string]string{"DISPLAY": ":0"})
+	if got := StartEnv(s, x11); got["FYNE_PLATFORM"] != "" {
+		t.Fatalf("Wayland forced without WAYLAND_DISPLAY: %v", got)
+	}
+	if w := StartWarning(s, x11); !strings.Contains(w, "WAYLAND_DISPLAY fehlt") {
+		t.Fatalf("warning %q", w)
+	}
+	s.Display.Platform = "x11"
+	wl := env(map[string]string{"WAYLAND_DISPLAY": "wayland-0"})
+	if got := StartEnv(s, wl); got["FYNE_PLATFORM"] != "" || !strings.Contains(StartWarning(s, wl), "DISPLAY fehlt") {
+		t.Fatalf("X11 forced without DISPLAY: %v", got)
+	}
+	both := env(map[string]string{"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"})
+	if StartEnv(s, both)["FYNE_PLATFORM"] != "x11" || StartWarning(s, both) != "" {
+		t.Fatal("XWayland available but not used")
+	}
+	// The user's own variable decides; no warning then.
+	if StartWarning(s, env(map[string]string{"FYNE_PLATFORM": "wayland"})) != "" {
+		t.Fatal("warning although FYNE_PLATFORM decides")
+	}
+}
+
+func TestEnvOverrides(t *testing.T) {
+	got := EnvOverrides(env(map[string]string{"FYNE_SCALE": "1.5"}))
+	if got["Skalierung"] != "FYNE_SCALE=1.5" || got["Fenstersystem"] != "" {
+		t.Fatalf("overrides %v", got)
 	}
 }

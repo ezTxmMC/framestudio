@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/ui/command"
@@ -345,6 +346,16 @@ func (r *paletteRow) CreateRenderer() fyne.WidgetRenderer {
 		pr.label.TextSize = labelSize
 		pr.cat = canvas.NewText(r.e.cmd.Category, studiotheme.Muted)
 		pr.cat.TextSize = 11
+		if r.e.cmd.Toggle { // on/off state like the menus: a check mark, or an empty box
+			if r.e.cmd.Checked {
+				pr.check = canvas.NewImageFromResource(theme.ConfirmIcon())
+				pr.check.FillMode = canvas.ImageFillContain
+			} else {
+				pr.box = canvas.NewRectangle(color.Transparent)
+				pr.box.StrokeWidth = 1
+				pr.box.CornerRadius = 2
+			}
+		}
 		if sc := command.Display(r.e.cmd.Shortcut); sc != "" {
 			pr.sc = canvas.NewText(sc, studiotheme.Muted)
 			pr.sc.TextSize = scSize
@@ -365,9 +376,14 @@ type paletteRowRenderer struct {
 	label, cat *canvas.Text
 	sc         *canvas.Text
 	chip       *canvas.Rectangle
+	check      *canvas.Image     // toggle that is on
+	box        *canvas.Rectangle // toggle that is off
 }
 
-const catColW = 120
+const (
+	catColW   = 120
+	checkColW = 22 // state column of toggles, kept for every row so labels align
+)
 
 func (pr *paletteRowRenderer) Layout(size fyne.Size) {
 	pr.bg.Move(fyne.NewPos(6, 1))
@@ -381,8 +397,16 @@ func (pr *paletteRowRenderer) Layout(size fyne.Size) {
 	cs := pr.cat.MinSize()
 	pr.cat.Move(fyne.NewPos(16, (size.Height-cs.Height)/2))
 	pr.cat.Resize(cs)
-	pr.label.Move(fyne.NewPos(16+catColW, (size.Height-ls.Height)/2))
+	pr.label.Move(fyne.NewPos(16+catColW+checkColW, (size.Height-ls.Height)/2))
 	pr.label.Resize(ls)
+	if pr.check != nil {
+		pr.check.Move(fyne.NewPos(16+catColW, (size.Height-14)/2))
+		pr.check.Resize(fyne.NewSquareSize(14))
+	}
+	if pr.box != nil {
+		pr.box.Move(fyne.NewPos(16+catColW+2, (size.Height-11)/2))
+		pr.box.Resize(fyne.NewSquareSize(11))
+	}
 	if pr.sc != nil {
 		ss := pr.sc.MinSize()
 		x := size.Width - 16 - ss.Width
@@ -414,6 +438,19 @@ func (pr *paletteRowRenderer) update() {
 			pr.bg.FillColor = studiotheme.Raised
 		}
 	}
+	if pr.box != nil {
+		pr.box.StrokeColor = studiotheme.Faint
+		if sel && enabled {
+			pr.box.StrokeColor = color.NRGBA{0xFF, 0xFF, 0xFF, 0xB0}
+		}
+	}
+	if pr.check != nil {
+		res := theme.ConfirmIcon()
+		if !enabled {
+			res = theme.NewDisabledResource(res)
+		}
+		pr.check.Resource = res
+	}
 	if pr.sc != nil {
 		pr.sc.Color = studiotheme.Muted
 		pr.chip.FillColor, pr.chip.StrokeColor = studiotheme.Lane, studiotheme.Border
@@ -442,6 +479,12 @@ func (pr *paletteRowRenderer) Objects() []fyne.CanvasObject {
 	objs = append(objs, pr.label)
 	if pr.cat != nil {
 		objs = append(objs, pr.cat)
+	}
+	if pr.check != nil {
+		objs = append(objs, pr.check)
+	}
+	if pr.box != nil {
+		objs = append(objs, pr.box)
 	}
 	return objs
 }

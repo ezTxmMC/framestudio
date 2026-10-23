@@ -81,7 +81,7 @@ func newLibrary(pg *Page) *library {
 		l.genRows = append(l.genRows, r)
 		genList.Add(r)
 	}
-	genBtn := widget.NewButtonWithIcon("Am Playhead einfügen", theme.ContentAddIcon(), func() {
+	genBtn := widget.NewButtonWithIcon("Am Abspielkopf einfügen", theme.ContentAddIcon(), func() {
 		pg.insertGenerator(generators[l.gen].ID)
 	})
 	l.selectGenerator(0)

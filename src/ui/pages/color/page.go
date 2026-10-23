@@ -242,7 +242,13 @@ func (p *Page) Close() {
 }
 
 // TypedKey: Left/Right step one frame, Up/Down jump to the previous/next clip, Space plays.
+// With a command registry (the shell) these keys are left to it: the global transport
+// commands and this page's play.prevEdit/nextEdit bindings then follow the user's key map
+// and see the modifiers (Umschalt+Links is a second back, Umschalt+Leertaste In bis Out).
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
+	if p.ctx != nil && p.ctx.Commands != nil {
+		return false
+	}
 	switch k.Name {
 	case fyne.KeyLeft:
 		p.s.Seek(p.s.Playhead - 1)

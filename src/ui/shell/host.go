@@ -55,6 +55,27 @@ func (sh *Shell) PageLayouts() map[string]wslayout.Page {
 	return out
 }
 
+// captureLayouts records the layout of p's created pages as the global page layout
+// (one arrangement for all tabs; the user changes it in the shown tab).
+func (sh *Shell) captureLayouts(p *project) {
+	for id, pg := range p.pages {
+		if la, ok := pg.(page.LayoutAware); ok {
+			sh.pageLayouts[id] = la.LayoutState()
+		}
+	}
+}
+
+// applyLayouts gives p's created pages the global page layout.
+func (sh *Shell) applyLayouts(p *project) {
+	for id, pg := range p.pages {
+		if l, ok := sh.pageLayouts[id]; ok {
+			if la, ok := pg.(page.LayoutAware); ok {
+				la.ApplyLayout(l)
+			}
+		}
+	}
+}
+
 // ApplyPageLayouts restores page layouts in every open project; pages created later
 // (also of projects opened later) start with them.
 func (sh *Shell) ApplyPageLayouts(ls map[string]wslayout.Page) {

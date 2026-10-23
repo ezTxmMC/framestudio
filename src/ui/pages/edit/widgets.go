@@ -263,8 +263,8 @@ func (n *note) show(err error) {
 
 func rgba(c color.NRGBA) model.RGBA { return model.FromNRGBA(c) }
 
-func newSelect(options []string, changed func(string)) *widget.Select {
-	s := widget.NewSelect(options, changed)
+func newSelect(options []string, changed func(string)) *kit.Select {
+	s := kit.NewSelect(options, changed)
 	s.PlaceHolder = "Auswählen"
 	return s
 }

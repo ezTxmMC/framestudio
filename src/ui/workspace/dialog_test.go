@@ -110,7 +110,7 @@ func TestMonitorDialogPresetAndHint(t *testing.T) {
 		t.Fatalf("preset plan %+v", md.plan)
 	}
 	md.apply.OnTapped()
-	if got := h.m.Windows(); !reflect.DeepEqual(got, []string{page.PanelMediaPool, page.PanelProgram, page.PanelScopes}) {
+	if got := h.m.Windows(); !reflect.DeepEqual(got, []string{page.PanelMediaPool, page.PanelProgram}) {
 		t.Fatalf("windows %v", got)
 	}
 	hint := false

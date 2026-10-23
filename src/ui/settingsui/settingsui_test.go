@@ -5,6 +5,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/display"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/layout"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
@@ -179,7 +181,7 @@ func TestControlsUpdateSettingsLive(t *testing.T) {
 	}
 
 	lat := f.field("Latenzausgleich")
-	e := lat.input.(*widget.Entry)
+	e := lat.input.(*commitEntry)
 	e.SetText("")
 	test.Type(e, "abc")
 	if lat.errText.Hidden || settings.Get().Audio.LatencyMS != 0 {
@@ -202,7 +204,7 @@ func TestControlsUpdateSettingsLive(t *testing.T) {
 	}
 
 	// Decimal comma in a float field.
-	still := f.field("Dauer von Standbildern").input.(*widget.Entry)
+	still := f.field("Dauer von Standbildern").input.(*commitEntry)
 	still.SetText("2,5")
 	if settings.Get().Timeline.StillSeconds != 2.5 {
 		t.Fatalf("still seconds %v", settings.Get().Timeline.StillSeconds)
@@ -247,7 +249,7 @@ func TestExternalChangesSyncControls(t *testing.T) {
 	if !muted.Checked {
 		t.Fatal("check follows the settings")
 	}
-	if e := f.field("Latenzausgleich").input.(*widget.Entry); e.Text != "77" {
+	if e := f.field("Latenzausgleich").input.(*commitEntry); e.Text != "77" {
 		t.Fatalf("entry %q", e.Text)
 	}
 	if sl := f.field("Gleichzeitige Decoder").input.(*kit.Slider); sl.Value != 6 {
@@ -359,7 +361,7 @@ func TestRestartBadgeAndBanner(t *testing.T) {
 	}
 	restarted := false
 	Restart = func() { restarted = true }
-	f.field("Skalierung").input.(*widget.Select).SetSelected("150 %")
+	f.field("Skalierung").input.(*widget.Select).SetSelected("System × 1,5")
 	if !f.w.restartBtn.Visible() || !strings.Contains(f.w.bannerText.Text, "Fenstersystem und Skalierung") {
 		t.Fatalf("banner %q", f.w.bannerText.Text)
 	}
@@ -507,5 +509,75 @@ func capture(t *testing.T, w fyne.Window, path string) {
 	defer out.Close()
 	if err := png.Encode(out, w.Canvas().Capture()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Autosave takes 0 or 10…3600 seconds and saves when the field is left, not per key.
+func TestAutosaveFieldRangeAndCommit(t *testing.T) {
+	f := newFixture(t, "")
+	fl := f.field("Automatisch speichern alle")
+	e := fl.input.(*commitEntry)
+	writes := 0
+	unsub := settings.Subscribe(func(settings.Settings) { writes++ })
+	defer unsub()
+	e.SetText("5")
+	if fl.errText.Hidden || !strings.Contains(fl.errText.Text, "0 oder 10 bis 3600") {
+		t.Fatalf("5 s accepted: %q", fl.errText.Text)
+	}
+	e.FocusLost()
+	if settings.Get().General.AutosaveSeconds == 5 {
+		t.Fatal("5 s saved")
+	}
+	e.SetText("")
+	test.Type(e, "120")
+	if writes != 0 {
+		t.Fatalf("saved while typing (%d writes)", writes)
+	}
+	e.FocusLost()
+	if settings.Get().General.AutosaveSeconds != 120 || writes != 1 {
+		t.Fatalf("after leaving: %d s, %d writes", settings.Get().General.AutosaveSeconds, writes)
+	}
+	e.SetText("0")
+	e.OnSubmitted(e.Text)
+	if settings.Get().General.AutosaveSeconds != 0 {
+		t.Fatal("0 (off) not accepted on Enter")
+	}
+}
+
+// "Layout beim Start" lists the layouts saved while the window is open and keeps a
+// value whose file is missing instead of showing "Eigener Wert".
+func TestStartLayoutChoicesFollowLayouts(t *testing.T) {
+	f := newFixture(t, "")
+	sel := f.field("Layout beim Start").input.(*widget.Select)
+	l := layout.Default()
+	l.Name = "Drei Monitore"
+	if err := layout.Save(l, false); err != nil {
+		t.Fatal(err)
+	}
+	f.w.showCategory(catMonitors)
+	if !slices.Contains(sel.Options, "Drei Monitore") {
+		t.Fatalf("options %v", sel.Options)
+	}
+	_ = settings.Update(func(s *settings.Settings) { s.Display.Layout = "Umbenannt" })
+	if sel.Selected != "Umbenannt" {
+		t.Fatalf("selected %q (placeholder shown)", sel.Selected)
+	}
+	sel.SetSelected("Drei Monitore")
+	if settings.Get().Display.Layout != "Drei Monitore" {
+		t.Fatal("choice not saved")
+	}
+}
+
+// A restart-only setting decided by the environment shows that instead of the banner.
+func TestEnvOverrideInsteadOfRestartBanner(t *testing.T) {
+	SetEnvOverrides(map[string]string{"Skalierung": "FYNE_SCALE=1.5"})
+	t.Cleanup(func() { SetEnvOverrides(nil) })
+	f := newFixture(t, "")
+	f.field("Skalierung").input.(*widget.Select).SetSelected("System × 1,2")
+	if f.w.banner.Visible() {
+		t.Fatal("restart banner promises a change the environment overrides")
+	}
+	if !strings.Contains(test.RenderObjectToMarkup(f.field("Skalierung").row), "Wird durch FYNE_SCALE=1.5 überschrieben") {
+		t.Fatal("row does not name the variable")
 	}
 }

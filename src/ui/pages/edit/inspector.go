@@ -392,12 +392,12 @@ func (in *clipEditor) titleSection() fyne.CanvasObject {
 	fg := newSwatches(textColors, func(col model.RGBA) {
 		in.set("textcolor", "Schriftfarbe ändern", false, func(c *model.Clip) { c.Title.Color = col })
 	})
-	bold := widget.NewCheck("Fett", func(on bool) {
+	bold := kit.NewCheck("Fett", func(on bool) {
 		in.set("bold", "Schriftstil ändern", false, func(c *model.Clip) { c.Title.Bold = on })
 	})
 	aligns := []model.Align{model.AlignLeft, model.AlignCenter, model.AlignRight}
 	alignNames := []string{"Links", "Mitte", "Rechts"}
-	align := widget.NewRadioGroup(alignNames, func(s string) {
+	align := kit.NewRadioGroup(alignNames, func(s string) {
 		for i, n := range alignNames {
 			if n == s {
 				in.set("align", "Ausrichtung ändern", false, func(c *model.Clip) { c.Title.Align = aligns[i] })
@@ -406,7 +406,7 @@ func (in *clipEditor) titleSection() fyne.CanvasObject {
 	})
 	align.Horizontal = true
 	align.Required = true
-	bgOn := widget.NewCheck("Anzeigen", func(on bool) {
+	bgOn := kit.NewCheck("Anzeigen", func(on bool) {
 		in.set("background", "Hintergrund ändern", false, func(c *model.Clip) {
 			switch {
 			case on && c.Title.Background.A == 0:
@@ -464,7 +464,7 @@ func (in *clipEditor) compositeSection(c *model.Clip) fyne.CanvasObject {
 	rows := []fyne.CanvasObject{sliderField("Deckkraft", opacity, opVal)}
 	fits := []model.Fit{model.FitContain, model.FitCover, model.FitStretch}
 	fitNames := []string{"Einpassen", "Füllen", "Strecken"}
-	var fit *widget.Select
+	var fit *kit.Select
 	if c.Kind == model.KindImage || c.Kind == model.KindVideo {
 		fit = newSelect(fitNames, func(s string) {
 			for i, n := range fitNames {

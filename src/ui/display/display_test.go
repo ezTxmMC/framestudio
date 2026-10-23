@@ -11,9 +11,9 @@ import (
 func TestNormalizeLogicalKDE125(t *testing.T) {
 	// KDE Plasma Wayland at 125 %: three 2560x1440 outputs reported at logical 0/2048/4096.
 	ms := []Monitor{
-		{ID: "DP-2", X: 2048, W: 2560, H: 1440, Primary: true},
-		{ID: "DP-3", X: 0, W: 2560, H: 1440},
-		{ID: "HDMI-A-1", X: 4096, W: 2560, H: 1440},
+		{ID: "DP-2", X: 2048, W: 2560, H: 1440, Primary: true, Scale: 2},
+		{ID: "DP-3", X: 0, W: 2560, H: 1440, Scale: 2},
+		{ID: "HDMI-A-1", X: 4096, W: 2560, H: 1440, Scale: 2},
 	}
 	NormalizeLogical(ms)
 	SortMonitors(ms)
@@ -24,6 +24,10 @@ func TestNormalizeLogicalKDE125(t *testing.T) {
 	for i, w := range want {
 		if ms[i].ID != w.id || ms[i].X != w.x {
 			t.Fatalf("monitor %d = %s x=%d, want %s x=%d", i, ms[i].ID, ms[i].X, w.id, w.x)
+		}
+		// GLFW's integer buffer scale (2) becomes the real factor, 125 %.
+		if ms[i].Scale != 1.25 {
+			t.Fatalf("monitor %s scale %v, want 1.25", ms[i].ID, ms[i].Scale)
 		}
 	}
 }

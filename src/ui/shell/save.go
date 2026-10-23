@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
@@ -221,8 +222,24 @@ func (sh *Shell) quit() {
 }
 
 // quitSaved quits, asking once about all unsaved projects.
+// Without the ConfirmClose setting, projects with a file are saved without asking (as
+// when closing a tab); only untitled ones are asked about.
 func (sh *Shell) quitSaved() {
 	dirty := dirtyProjects(sh.projects)
+	if !settings.Get().General.ConfirmClose {
+		var ask []*project
+		for _, p := range dirty {
+			if p.sess.Path == "" {
+				ask = append(ask, p)
+				continue
+			}
+			if err := sh.Save(p); err != nil {
+				sh.showErr(err)
+				return
+			}
+		}
+		dirty = ask
+	}
 	if len(dirty) == 0 {
 		sh.shutdown()
 		return
@@ -262,6 +279,7 @@ func (sh *Shell) quitSaved() {
 // shutdown remembers the open projects for the next start, lets the workspace save its
 // layout and close the detached windows, releases all projects and closes the window.
 func (sh *Shell) shutdown() {
+	sh.shutdownDone = true
 	if sh.restarting {
 		settingsui.RequestRestart() // quitting is certain now; application.Run restarts
 	}
@@ -270,6 +288,7 @@ func (sh *Shell) shutdown() {
 	}
 	sh.saveLastOpen()
 	sh.ws.Shutdown()
+	settingsui.Close() // an open settings window would keep the run loop alive
 	sh.releaseAll()
 	sh.dispose()
 	sh.closeWindow()
@@ -309,6 +328,9 @@ func (sh *Shell) closeNowQuiet(p *project) {
 // closePages closes p's pages (cancelling exports and previews) and its media decodes,
 // and returns the pages that finish cleanup in the background.
 func (sh *Shell) closePages(p *project) []page.Waiter {
+	if p == sh.active {
+		sh.captureLayouts(p) // the next tab and the saved layout keep the arrangement
+	}
 	var waiters []page.Waiter
 	for _, id := range slices.Sorted(maps.Keys(p.pages)) {
 		pg := p.pages[id]

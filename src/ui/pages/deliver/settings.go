@@ -45,14 +45,14 @@ type settingsForm struct {
 	name, folder      *widget.Entry
 	width, height     *widget.Entry
 	ext               *canvas.Text
-	format            *widget.Select
-	res               *widget.Select
+	format            *kit.Select
+	res               *kit.Select
 	resolutions       []resolution
 	customRow         fyne.CanvasObject
 	quality           *segmented
-	rng               *widget.Select
+	rng               *kit.Select
 	rangeInfo         *canvas.Text
-	audio             *widget.Check
+	audio             *kit.Check
 	audioWanted       bool
 	sumPath, sumVideo *canvas.Text
 	sumAudio, sumTime *canvas.Text
@@ -97,9 +97,9 @@ func newSettingsForm(pg *Page) *settingsForm {
 	for _, ft := range export.Formats() {
 		labels = append(labels, export.Label(ft))
 	}
-	f.format = widget.NewSelect(labels, func(string) { f.formatChanged() })
+	f.format = kit.NewSelect(labels, func(string) { f.formatChanged() })
 
-	f.res = widget.NewSelect(nil, func(string) { f.resChanged() })
+	f.res = kit.NewSelect(nil, func(string) { f.resChanged() })
 	f.width, f.height = widget.NewEntry(), widget.NewEntry()
 	f.width.OnChanged = func(string) { f.changed() }
 	f.height.OnChanged = func(string) { f.changed() }
@@ -112,10 +112,10 @@ func newSettingsForm(pg *Page) *settingsForm {
 		[]string{string(export.QualityHigh), string(export.QualityMedium), string(export.QualityLow)},
 		func(string) { f.changed() })
 
-	f.rng = widget.NewSelect([]string{rangeAll}, func(string) { f.rangeChanged() })
+	f.rng = kit.NewSelect([]string{rangeAll}, func(string) { f.rangeChanged() })
 	f.rangeInfo = kit.MonoText("", studiotheme.Faint, 11)
 
-	f.audio = widget.NewCheck("Audio exportieren", func(on bool) {
+	f.audio = kit.NewCheck("Audio exportieren", func(on bool) {
 		if !f.updating {
 			f.audioWanted = on
 		}

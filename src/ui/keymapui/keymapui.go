@@ -320,6 +320,13 @@ func (e *editor) cancelRecording() {
 // captured receives a recorded shortcut: applied at once, or held as a conflict.
 func (e *editor) captured(id, sc string) {
 	e.recording = ""
+	if why := command.Reserved(sc); why != "" {
+		e.pending = nil
+		e.status.Text = why + " und lässt sich keinem Befehl zuweisen."
+		e.status.Refresh()
+		e.rebuild()
+		return
+	}
 	if others := e.reg.Conflicts(sc, id); len(others) > 0 {
 		e.pending = &conflict{id: id, sc: sc, others: others}
 		e.rebuild()

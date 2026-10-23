@@ -37,6 +37,9 @@ type detached struct {
 	rect    fslayout.Rect // windowed geometry relative to the monitor
 	// fallbackFrom is the monitor the layout wanted while it is missing; wantMode its mode.
 	fallbackFrom, wantMode string
+	// unplaced: the window system could not put the window on monitor (Wayland); the
+	// header says so instead of claiming the monitor.
+	unplaced bool
 
 	header   *fyne.Container
 	title    *canvas.Text
@@ -49,12 +52,12 @@ type detached struct {
 	done      bool
 	shortcuts map[string]*desktop.CustomShortcut
 	standard  bool
-	handlers  map[string]func()
+	handlers  map[string]func(fyne.Shortcut)
 	unsub     func()
 }
 
 func newDetached(m *Manager, info page.PanelInfo) *detached {
-	d := &detached{m: m, id: info.ID, info: info, shortcuts: map[string]*desktop.CustomShortcut{}, handlers: map[string]func(){}}
+	d := &detached{m: m, id: info.ID, info: info, shortcuts: map[string]*desktop.CustomShortcut{}, handlers: map[string]func(fyne.Shortcut){}}
 	d.win = m.host.App().NewWindow(info.Title + " — Frame Studio")
 	if info.Icon != nil {
 		d.win.SetIcon(info.Icon)
@@ -112,12 +115,27 @@ func (d *detached) buildChrome() {
 	if d.cleanFeed() {
 		backdrop.FillColor = studiotheme.MonitorOut
 	}
-	stack := container.NewStack(backdrop, d.body)
+	floor := canvas.NewRectangle(color.Transparent)
+	floor.SetMinSize(panelMinSize(d.id))
+	stack := container.NewStack(backdrop, floor, d.body)
 	if d.cleanFeed() {
 		d.idle = newIdleArea(d)
 		stack.Add(d.idle)
 	}
 	d.win.SetContent(container.NewBorder(d.header, nil, nil, nil, stack))
+}
+
+// panelMinSize is the smallest body a detached panel stays usable at: the scopes need
+// room for the graph, the mixer for its fader scale (their own minimums are what they
+// need inside a page, where the page gives them more).
+func panelMinSize(id string) fyne.Size {
+	switch id {
+	case page.PanelScopes:
+		return fyne.NewSize(420, 300)
+	case page.PanelMixer:
+		return fyne.NewSize(420, 440)
+	}
+	return fyne.Size{}
 }
 
 // headerButton is a flat, compact button for the window header.
@@ -188,6 +206,11 @@ func (d *detached) updateHeader() {
 		where = mon.Name
 	}
 	switch {
+	case d.unplaced && !full:
+		where = "Fenster · Unter Wayland selbst auf " + d.monitor + " ziehen oder „Vollbild“ wählen"
+		if d.fallbackFrom != "" {
+			where += " · Ersatz für " + d.fallbackFrom + " (nicht angeschlossen)"
+		}
 	case d.fallbackFrom != "":
 		where += " · Ersatz für " + d.fallbackFrom + " (nicht angeschlossen)"
 	case full:
@@ -217,6 +240,8 @@ func (d *detached) updateHeader() {
 func (d *detached) toggleFullscreen() { d.setFullscreen(!d.win.FullScreen()) }
 
 func (d *detached) setFullscreen(on bool) {
+	// An explicit choice replaces the arrangement remembered for a missing monitor.
+	d.fallbackFrom, d.wantMode = "", ""
 	mon := d.monitor
 	if mon == "" || !d.m.available(mon) {
 		if id, _, _, _, _, ok := d.m.disp.Geometry(d.win); ok && id != "" {
@@ -322,22 +347,26 @@ func (d *detached) typedKey(k *fyne.KeyEvent) {
 		return
 	}
 	if reg := d.m.host.Commands(); reg != nil {
-		reg.Dispatch(k.Name, mods)
+		d.regDispatch(reg, k.Name, mods)
 	}
 }
 
-// standardShortcuts are the driver's named shortcuts and the key chords they stand for.
-var standardShortcuts = []struct {
-	sc   fyne.Shortcut
-	key  fyne.KeyName
-	mods fyne.KeyModifier
-}{
-	{&fyne.ShortcutUndo{}, fyne.KeyZ, fyne.KeyModifierShortcutDefault},
-	{&fyne.ShortcutRedo{}, fyne.KeyY, fyne.KeyModifierShortcutDefault},
-	{&fyne.ShortcutCopy{}, fyne.KeyC, fyne.KeyModifierShortcutDefault},
-	{&fyne.ShortcutPaste{}, fyne.KeyV, fyne.KeyModifierShortcutDefault},
-	{&fyne.ShortcutCut{}, fyne.KeyX, fyne.KeyModifierShortcutDefault},
-	{&fyne.ShortcutSelectAll{}, fyne.KeyA, fyne.KeyModifierShortcutDefault},
+// regDispatch runs the registry command of a key in this window: the commands of the
+// panel's own page apply (a detached timeline cuts with the edit page's commands while
+// the main window shows Farbe), not those of the page the main window shows.
+func (d *detached) regDispatch(reg *command.Registry, key fyne.KeyName, mods fyne.KeyModifier) bool {
+	if pg := page.PanelPage(d.id); pg != "" {
+		return reg.DispatchAs(command.PageScope(pg), key, mods)
+	}
+	return reg.Dispatch(key, mods)
+}
+
+// standardShortcuts are the driver's named shortcuts. They are matched by name only, so
+// one handler serves e.g. Strg+X and Umschalt+Entf (ShortcutCut with Secondary set): the
+// handler maps the shortcut it receives with command.ComboOf, as the main window does.
+var standardShortcuts = []fyne.Shortcut{
+	&fyne.ShortcutUndo{}, &fyne.ShortcutRedo{}, &fyne.ShortcutCopy{},
+	&fyne.ShortcutPaste{}, &fyne.ShortcutCut{}, &fyne.ShortcutSelectAll{},
 }
 
 // installShortcuts registers every Ctrl/Alt/Super chord of the registry on the window's
@@ -385,40 +414,69 @@ func (d *detached) installShortcuts() {
 			continue
 		}
 		d.shortcuts[name] = sc
-		key, mods := sc.KeyName, sc.Modifier
-		d.addShortcut(sc, func() { d.dispatch(key, mods) })
+		d.addShortcut(sc, d.shortcutTyped)
 	}
 	if !d.standard {
 		d.standard = true
-		for _, s := range standardShortcuts {
-			key, mods := s.key, s.mods
-			d.addShortcut(s.sc, func() {
-				if !d.dispatch(key, mods) && key == fyne.KeyY {
-					d.m.host.Commands().Run("edit.redo")
-				}
-			})
+		for _, sc := range standardShortcuts {
+			d.addShortcut(sc, d.shortcutTyped)
 		}
 	}
 }
 
-// addShortcut registers fn for sc on the window canvas (handlers keeps it for tests).
-func (d *detached) addShortcut(sc fyne.Shortcut, fn func()) {
-	d.handlers[sc.ShortcutName()] = fn
-	d.win.Canvas().AddShortcut(sc, func(fyne.Shortcut) { fn() })
+// shortcutTyped handles every registered shortcut of the window.
+func (d *detached) shortcutTyped(sc fyne.Shortcut) {
+	key, mods, ok := command.ComboOf(sc)
+	if !ok {
+		return
+	}
+	if !d.dispatch(key, mods) && key == fyne.KeyY && mods == fyne.KeyModifierShortcutDefault {
+		if reg := d.m.host.Commands(); reg != nil && !d.modal() && !d.closing {
+			reg.Run("edit.redo")
+		}
+	}
 }
 
+// TypeShortcut delivers sc to the detached window of panelID as its canvas would (for UI
+// automation and integration tests). It reports whether the window has a handler for it.
+func (m *Manager) TypeShortcut(panelID string, sc fyne.Shortcut) bool {
+	d := m.find(panelID)
+	if d == nil {
+		return false
+	}
+	fn := d.handlers[sc.ShortcutName()]
+	if fn == nil {
+		return false
+	}
+	fn(sc)
+	return true
+}
+
+// addShortcut registers fn for sc on the window canvas (handlers keeps it for tests).
+func (d *detached) addShortcut(sc fyne.Shortcut, fn func(fyne.Shortcut)) {
+	d.handlers[sc.ShortcutName()] = fn
+	d.win.Canvas().AddShortcut(sc, fn)
+}
+
+// dispatch runs a key combination with Ctrl, Alt or Super: F11 (view.fullscreen) is
+// this window's fullscreen, then the panel gets it (page.ShortcutPanel), then the
+// registry with the panel's page scope.
 func (d *detached) dispatch(key fyne.KeyName, mods fyne.KeyModifier) bool {
 	if d.modal() || d.closing {
 		return false
 	}
-	if reg := d.m.host.Commands(); reg != nil {
-		if command.Format(key, mods) == command.Normalize(reg.Shortcut("view.fullscreen")) {
-			d.toggleFullscreen()
-			return true
-		}
-		return reg.Dispatch(key, mods)
+	reg := d.m.host.Commands()
+	if reg == nil {
+		return false
 	}
-	return false
+	if command.Format(key, mods) == command.Normalize(reg.Shortcut("view.fullscreen")) {
+		d.toggleFullscreen()
+		return true
+	}
+	if sp, ok := d.panel.(page.ShortcutPanel); ok && sp.Shortcut(key, mods) {
+		return true
+	}
+	return d.regDispatch(reg, key, mods)
 }
 
 // idleArea covers a clean feed: it hides the pointer after cursorIdle without movement

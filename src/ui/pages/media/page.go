@@ -82,7 +82,7 @@ type Page struct {
 
 	grid     *widget.GridWrap
 	search   *widget.Entry
-	kindSel  *widget.Select
+	kindSel  *kit.Select
 	count    *canvas.Text
 	tools    *fyne.Container
 	empty    *fyne.Container
@@ -93,7 +93,7 @@ type Page struct {
 	importing   bool
 	importBtn   *widget.Button
 	folderBtn   *widget.Button
-	recursive   *widget.Check
+	recursive   *kit.Check
 	progress    *widget.ProgressBar
 	progressMsg *canvas.Text
 	progressBox *fyne.Container
@@ -318,7 +318,7 @@ func (p *Page) build() fyne.CanvasObject {
 	p.importBtn = widget.NewButtonWithIcon("Importieren", theme.ContentAddIcon(), p.showImportDialog)
 	p.importBtn.Importance = widget.HighImportance
 	p.folderBtn = widget.NewButtonWithIcon("Ordner importieren", theme.FolderOpenIcon(), p.showFolderDialog)
-	p.recursive = widget.NewCheck("Unterordner einbeziehen", nil)
+	p.recursive = kit.NewCheck("Unterordner einbeziehen", nil)
 	p.recursive.Checked = settings.Get().Media.ImportRecursive
 	p.progress = widget.NewProgressBar()
 	p.progressMsg = canvas.NewText("", studiotheme.Muted)
@@ -354,7 +354,7 @@ func (p *Page) buildPool(extra fyne.CanvasObject) fyne.CanvasObject {
 	for i, c := range kindChoices {
 		labels[i] = c.label
 	}
-	p.kindSel = widget.NewSelect(labels, nil)
+	p.kindSel = kit.NewSelect(labels, nil)
 	p.kindSel.PlaceHolder = "Typ"
 	p.kindSel.Selected = labels[0]
 	p.kindSel.OnChanged = func(s string) {
@@ -406,7 +406,7 @@ func (p *Page) buildPool(extra fyne.CanvasObject) fyne.CanvasObject {
 	if !media.FFmpegAvailable() {
 		body = container.NewBorder(ffmpegNotice(), nil, nil, nil, body)
 	}
-	return kit.Panel("Media Pool", p.tools, body)
+	return kit.Panel("Medienpool", p.tools, body)
 }
 
 // ffmpegNotice explains why video and audio cannot be used.

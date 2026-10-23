@@ -310,6 +310,7 @@ func (md *monitorDialog) applyPlan() {
 		base.ActivePage = ""
 	}
 	l := md.m.planLayout(md.plan, md.ms, base)
+	keepWaiting(&l, base, md.ms)
 	md.m.Apply(l)
 	md.dirty = false
 	md.page = ""
@@ -699,6 +700,9 @@ func hintBox(text string) fyne.CanvasObject {
 	icon := widget.NewIcon(theme.InfoIcon())
 	return container.NewStack(bg, container.NewBorder(nil, nil, container.NewHBox(bar, container.NewVBox(icon)), nil, l))
 }
+
+// PlatformName is the display name of a window system ID ("wayland" → "Wayland").
+func PlatformName(p string) string { return platformName(p) }
 
 func platformName(p string) string {
 	switch p {

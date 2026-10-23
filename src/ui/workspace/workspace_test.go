@@ -85,7 +85,8 @@ func TestPresetsForOneTwoThreeMonitors(t *testing.T) {
 func TestThreeMonitorPresetOnWaylandUsesFullscreen(t *testing.T) {
 	h := newHarness(t, false)
 	l := h.m.planLayout(presetByPrefix(t, h.m, "Drei").Build(), h.m.monitors(), h.m.Current())
-	want := []string{"main@DP-2:maximized", "mediapool@DP-3:fullscreen", "program@HDMI-A-1:fullscreen", "scopes@HDMI-A-1:window"}
+	// A second window on HDMI-A-1 could not be placed there under Wayland: no scopes.
+	want := []string{"main@DP-2:maximized", "mediapool@DP-3:fullscreen", "program@HDMI-A-1:fullscreen"}
 	if got := ids(l.Windows); !reflect.DeepEqual(got, want) {
 		t.Fatalf("wayland three monitors: %v", got)
 	}
@@ -601,7 +602,7 @@ func TestKeysInDetachedWindow(t *testing.T) {
 	d := h.m.find(page.PanelProgram)
 	sc := shortcutTyper(func(s fyne.Shortcut) {
 		if fn := d.handlers[s.ShortcutName()]; fn != nil {
-			fn()
+			fn(s)
 		}
 	})
 	sc.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierControl})

@@ -90,6 +90,10 @@ func fileName(name string) string {
 	return clean + ".json"
 }
 
+// SameFile reports whether layouts named a and b are stored in the same file: names that
+// differ only in characters a file name cannot hold ("Schnitt/Farbe", "Schnitt_Farbe").
+func SameFile(a, b string) bool { return fileName(a) == fileName(b) }
+
 // Save writes l under its name (or "_current" when current is true).
 func Save(l Layout, current bool) error {
 	d, err := dir()

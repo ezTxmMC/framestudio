@@ -27,7 +27,41 @@ var (
 	restarting bool
 	startup    *settings.Settings // settings in effect since start (restart fields)
 	startupErr error
+	startWarn  string
+	envOver    map[string]string // setting label → "FYNE_SCALE=1.5"
 )
+
+// SetStartupWarning keeps a start-up notice (the chosen window system was not
+// available) until the shell shows it.
+func SetStartupWarning(msg string) {
+	stateMu.Lock()
+	startWarn = msg
+	stateMu.Unlock()
+}
+
+// TakeStartupWarning returns the notice of SetStartupWarning once ("" after).
+func TakeStartupWarning() string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	msg := startWarn
+	startWarn = ""
+	return msg
+}
+
+// SetEnvOverrides records which restart-only settings the user's environment decides
+// (label "Fenstersystem" or "Skalierung" → "FYNE_SCALE=1.5"). Their rows say so, and
+// changing them shows no restart banner, since a restart would not apply them.
+func SetEnvOverrides(m map[string]string) {
+	stateMu.Lock()
+	envOver = m
+	stateMu.Unlock()
+}
+
+func envOverride(label string) string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return envOver[label]
+}
 
 // RequestRestart marks that the program should start again after it quits.
 func RequestRestart() {

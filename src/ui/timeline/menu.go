@@ -76,7 +76,7 @@ func (t *Timeline) edit(label string, fn func(p *model.Project) error) {
 
 func (t *Timeline) clipMenu(c model.Clip) *fyne.Menu {
 	id := c.ID
-	split := fyne.NewMenuItem("Teilen am Playhead", func() {
+	split := fyne.NewMenuItem("Am Abspielkopf teilen", func() {
 		ph := t.s.Playhead
 		t.edit("Clip teilen", func(p *model.Project) error {
 			_, err := p.SplitClip(id, ph)

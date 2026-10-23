@@ -41,8 +41,8 @@ func (m *Manager) showSaveLayout() {
 			}
 			d.Hide()
 		}
-		if name != m.name && slices.Contains(layout.List(), name) {
-			dialog.ShowConfirm("Layout ersetzen?", "Es gibt schon ein Layout „"+name+"“. Ersetzen?", func(ok bool) {
+		if other := layoutWithFile(name); other != "" && !layout.SameFile(name, m.name) {
+			dialog.ShowConfirm("Layout ersetzen?", "Es gibt schon ein Layout „"+other+"“. Ersetzen?", func(ok bool) {
 				if ok {
 					doSave()
 				}
@@ -255,10 +255,11 @@ func (m *Manager) RenameLayout(old, name string) error {
 	if name == "" || strings.HasPrefix(name, "_") {
 		return errors.New("Bitte einen Namen eingeben, der nicht mit „_“ beginnt.")
 	}
-	if slices.Contains(layout.List(), name) {
-		return errors.New("Es gibt schon ein Layout „" + name + "“.")
+	same := layout.SameFile(old, name) // e.g. "Schnitt/Farbe" to "Schnitt_Farbe": one file
+	if other := layoutWithFile(name); other != "" && !same {
+		return errors.New("Es gibt schon ein Layout „" + other + "“.")
 	}
-	if err := m.copyLayout(old, name, true); err != nil {
+	if err := m.copyLayout(old, name, !same); err != nil {
 		return err
 	}
 	if m.name == old {
@@ -271,13 +272,28 @@ func (m *Manager) RenameLayout(old, name string) error {
 	return nil
 }
 
-// DeleteLayout removes a saved layout.
+// DeleteLayout removes a saved layout. When it was the start layout, the start layout
+// goes back to the default.
 func (m *Manager) DeleteLayout(name string) error {
 	if err := layout.Delete(name); err != nil {
 		return errors.New("Das Layout ließ sich nicht löschen: " + plainErr(err))
 	}
+	if cur := settings.Get().Display.Layout; cur != "" && layout.SameFile(cur, name) {
+		def := settings.Defaults().Display.Layout
+		_ = settings.Update(func(s *settings.Settings) { s.Display.Layout = def })
+	}
 	m.refresh()
 	return nil
+}
+
+// layoutWithFile returns the saved layout stored in the file name would use ("" none).
+func layoutWithFile(name string) string {
+	for _, n := range layout.List() {
+		if layout.SameFile(n, name) {
+			return n
+		}
+	}
+	return ""
 }
 
 func (m *Manager) copyLayout(from, to string, move bool) error {
@@ -297,14 +313,17 @@ func (m *Manager) copyLayout(from, to string, move bool) error {
 	return nil
 }
 
-// uniqueName appends a number until name is not taken.
+// uniqueName appends a number until name is not taken (nor stored in a taken file).
 func uniqueName(name string, taken []string) string {
-	if !slices.Contains(taken, name) {
+	used := func(n string) bool {
+		return slices.ContainsFunc(taken, func(t string) bool { return layout.SameFile(t, n) })
+	}
+	if !used(name) {
 		return name
 	}
 	for i := 2; ; i++ {
 		n := name + " " + strconv.Itoa(i)
-		if !slices.Contains(taken, n) {
+		if !used(n) {
 			return n
 		}
 	}

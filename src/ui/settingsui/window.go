@@ -189,6 +189,10 @@ func (w *window) layout() fyne.CanvasObject {
 
 	// Status line.
 	w.status = canvas.NewText(statusIdle, studiotheme.Muted)
+	if err := settings.Blocked(); err != nil {
+		w.status.Text = "Änderungen wirken, werden aber nicht gespeichert: " + err.Error()
+		w.status.Color = warning
+	}
 	w.status.TextSize = 11
 
 	w.body = container.NewStack()
@@ -396,10 +400,10 @@ func (w *window) load(s settings.Settings) {
 func pendingRestart(s settings.Settings) []string {
 	st := startupSettings()
 	var out []string
-	if normPlatform(s.Display.Platform) != normPlatform(st.Display.Platform) {
+	if normPlatform(s.Display.Platform) != normPlatform(st.Display.Platform) && envOverride("Fenstersystem") == "" {
 		out = append(out, "Fenstersystem")
 	}
-	if s.Display.Scale != st.Display.Scale {
+	if s.Display.Scale != st.Display.Scale && envOverride("Skalierung") == "" {
 		out = append(out, "Skalierung")
 	}
 	return out

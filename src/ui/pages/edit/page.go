@@ -470,7 +470,7 @@ func (p *Page) split() {
 func (p *Page) splitAll() {
 	f := p.ctx.Session.Playhead
 	if !p.canSplitAll() {
-		p.showErr(errors.New("Am Playhead liegt kein Clip zum Teilen. Playhead in einen Clip auf einer entsperrten Spur setzen"))
+		p.showErr(errors.New("Am Abspielkopf liegt kein Clip zum Teilen. Abspielkopf in einen Clip auf einer entsperrten Spur setzen"))
 		return
 	}
 	p.edit("Alle Spuren teilen", func(pr *model.Project) error {

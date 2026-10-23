@@ -222,7 +222,7 @@ func TestInspectorTitleText(t *testing.T) {
 	if got := clipNamed(t, f.s.Project, "Titel").Title.Text; got != "Hallo Welt" {
 		t.Fatalf("title text %q", got)
 	}
-	checks := find[*widget.Check](f.pg.insp.box)
+	checks := find[*kit.Check](f.pg.insp.box)
 	test.Tap(checks[0]) // Fett off
 	if clipNamed(t, f.s.Project, "Titel").Title.Bold {
 		t.Fatal("bold not toggled")
@@ -385,8 +385,8 @@ func TestProjectFPSChange(t *testing.T) {
 	p.AddMarker(50, "M")
 	f := newFixture(t, p)
 	f.s.Seek(50)
-	var rate *widget.Select
-	for _, s := range find[*widget.Select](f.pg.insp.box) {
+	var rate *kit.Select
+	for _, s := range find[*kit.Select](f.pg.insp.box) {
 		if s.Selected == "25 fps" {
 			rate = s
 		}

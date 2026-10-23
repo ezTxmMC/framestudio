@@ -28,6 +28,9 @@ type Binding struct {
 	Icon    fyne.Resource
 	// Info overrides or supplies label/category/shortcut for IDs outside the catalog.
 	Info *Info
+	// MenuLabel, when set, gives the label menus show right now ("Rückgängig: Clip
+	// teilen"); help, palette and keymap editor keep the fixed catalog label.
+	MenuLabel func() string
 }
 
 // Command is a resolved, currently registered command.
@@ -38,6 +41,8 @@ type Command struct {
 	Checked   bool
 	Enabled   bool
 	Available bool // a binding exists in an active scope
+	// MenuLabel is the label for menus: Binding.MenuLabel when set, else Label.
+	MenuLabel string
 }
 
 // Global is the scope of bindings that are always active.
@@ -60,6 +65,10 @@ type Registry struct {
 	dynamic   map[string]func() []Item
 	listeners map[int]func()
 	next      int
+
+	// asScope, while asActive, stands in for the active page scope (DispatchAs).
+	asScope  string
+	asActive bool
 }
 
 // NewRegistry returns a registry preloaded with the catalog.
@@ -163,7 +172,7 @@ func (r *Registry) current(id string) (binding, bool) {
 	best, rank := -1, -1
 	for i := len(list) - 1; i >= 0; i-- {
 		sc := list[i].scope
-		if !r.active[sc] {
+		if !r.isActive(sc) {
 			continue
 		}
 		k := 0
@@ -183,6 +192,14 @@ func (r *Registry) current(id string) (binding, bool) {
 	return list[best], true
 }
 
+// isActive reports whether scope's bindings apply now.
+func (r *Registry) isActive(scope string) bool {
+	if r.asActive && strings.HasPrefix(scope, "page:") {
+		return scope == r.asScope
+	}
+	return r.active[scope]
+}
+
 // Get resolves a command. Unknown IDs return ok=false.
 func (r *Registry) Get(id string) (Command, bool) {
 	in, ok := r.catalog[id]
@@ -190,8 +207,13 @@ func (r *Registry) Get(id string) (Command, bool) {
 		return Command{}, false
 	}
 	in.Shortcut = r.Shortcut(id)
-	c := Command{Info: in}
+	c := Command{Info: in, MenuLabel: in.Label}
 	if b, ok := r.current(id); ok {
+		if b.MenuLabel != nil {
+			if l := b.MenuLabel(); l != "" {
+				c.MenuLabel = l
+			}
+		}
 		c.Available = true
 		c.Icon = b.Icon
 		c.Enabled = b.Run != nil && (b.Enabled == nil || b.Enabled())
@@ -320,6 +342,21 @@ func (r *Registry) Dispatch(key fyne.KeyName, mods fyne.KeyModifier) bool {
 		return r.Run(global)
 	}
 	return false
+}
+
+// DispatchAs is Dispatch with scope standing in for the active page scope: the bindings
+// of scope apply (whether or not it is active) and those of every other page scope do
+// not. Detached windows use it, so a key in a detached timeline runs the edit page's
+// commands whatever page the main window shows.
+func (r *Registry) DispatchAs(scope string, key fyne.KeyName, mods fyne.KeyModifier) bool {
+	oldScope, oldActive := r.asScope, r.asActive
+	r.asScope, r.asActive = scope, true
+	ran := r.Dispatch(key, mods)
+	r.asScope, r.asActive = oldScope, oldActive
+	if ran {
+		r.notify() // menus saw the stand-in scope while the command ran
+	}
+	return ran
 }
 
 // Subscribe is called after registrations, scope switches, keymap changes and runs

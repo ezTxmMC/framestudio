@@ -20,7 +20,7 @@ import (
 // buildCategories creates every category and its fields.
 func (w *window) buildCategories() []*category {
 	general := &category{id: catGeneral, title: "Allgemein", icon: theme.HomeIcon(),
-		desc: "Start, Sichern und neue Projekte."}
+		desc: "Start, Speichern und neue Projekte."}
 	playback := &category{id: catPlayback, title: "Wiedergabe", icon: theme.MediaPlayIcon(),
 		desc: "Vorschauqualität und wie die Timeline der Wiedergabe folgt."}
 	audioCat := &category{id: catAudio, title: "Audio", icon: theme.VolumeUpIcon(),
@@ -42,8 +42,13 @@ func (w *window) buildCategories() []*category {
 	choice(w, general, "Beim Start", "Was Frame Studio nach dem Öffnen zeigt.", []option[string]{
 		{"manager", "Projektverwaltung"}, {"last", "Zuletzt geöffnete Projekte"}, {"new", "Neues leeres Projekt"},
 	}, func(s *settings.Settings) *string { return &s.General.Startup })
-	w.intNumber(general, "Automatisch sichern alle", "Geänderte Projekte mit Datei werden in diesem Abstand gesichert. 0 schaltet es aus.",
-		"Sekunden", 0, 3600, func(s *settings.Settings) *int { return &s.General.AutosaveSeconds })
+	autosave := func(s *settings.Settings) *int { return &s.General.AutosaveSeconds }
+	w.number(general, "Automatisch speichern alle", "Geänderte Projekte mit Datei werden in diesem Abstand gespeichert: 0 schaltet es aus, sonst 10 bis 3600 Sekunden.",
+		"Sekunden", 0, 3600, 0,
+		func(s settings.Settings) float64 { return float64(*autosave(&s)) },
+		func(s *settings.Settings, v float64) { *autosave(s) = int(v) }, resetter(autosave),
+		numberOpts{allowed: func(v float64) bool { return v == 0 || v >= 10 },
+			rangeMsg: "Bitte 0 oder 10 bis 3600 Sekunden eingeben.", lazy: true})
 	w.folder(general, "Projektordner", "Hier legt Frame Studio neue Projekte ab.", "Standardbibliothek",
 		"Projektordner wählen", func(s *settings.Settings) *string { return &s.General.ProjectsDir })
 	tpl := make([]option[string], len(Templates))
@@ -52,20 +57,20 @@ func (w *window) buildCategories() []*category {
 	}
 	choice(w, general, "Vorlage für neue Projekte", "Auflösung und Bildrate, die „Neues Projekt“ vorschlägt.", tpl,
 		func(s *settings.Settings) *string { return &s.General.DefaultTemplate })
-	w.check(general, "Beim Schließen nachfragen", "Vor dem Schließen von Projekten mit ungesicherten Änderungen fragen.",
+	w.check(general, "Beim Schließen nachfragen", "Vor dem Schließen oder Beenden mit ungespeicherten Änderungen fragen. Aus: Projekte mit Datei werden ohne Rückfrage gespeichert.",
 		func(s *settings.Settings) *bool { return &s.General.ConfirmClose })
 
 	// Wiedergabe
 	choice(w, playback, "Vorschauqualität", "Geringere Auflösung hält die Wiedergabe bei schweren Projekten flüssig.", []option[string]{
 		{"auto", "Automatisch"}, {"full", "Volle Auflösung"}, {"half", "Halbe Auflösung"}, {"quarter", "Viertel-Auflösung"},
 	}, func(s *settings.Settings) *string { return &s.Playback.PreviewQuality })
-	choice(w, playback, "Höchste Vorschauhöhe", "Obergrenze für die Bildhöhe im Viewer, unabhängig von der Projektauflösung.", []option[int]{
+	choice(w, playback, "Höchste Vorschauhöhe", "Obergrenze für die Bildhöhe während der Wiedergabe, unabhängig von der Projektauflösung. Gilt nicht bei „Volle Auflösung“.", []option[int]{
 		{360, "360 Pixel"}, {540, "540 Pixel"}, {720, "720 Pixel"}, {1080, "1080 Pixel"}, {1440, "1440 Pixel"}, {2160, "2160 Pixel"},
 	}, func(s *settings.Settings) *int { return &s.Playback.MaxPreviewH })
 	choice(w, playback, "Timeline folgt dem Abspielkopf", "Wie die Timeline mitläuft, wenn der Abspielkopf den sichtbaren Bereich verlässt.", []option[string]{
 		{"page", "Seitenweise"}, {"smooth", "Fließend"}, {"off", "Nicht folgen"},
 	}, func(s *settings.Settings) *string { return &s.Playback.Follow })
-	w.check(playback, "Schleife als Standard", "Neue Projekte spielen den Bereich in einer Schleife ab.",
+	w.check(playback, "Schleife als Standard", "Neu angelegte und geöffnete Projekte starten mit eingeschalteter Schleife.",
 		func(s *settings.Settings) *bool { return &s.Playback.LoopDefault })
 	w.check(playback, "Sicherheitsrahmen anzeigen", "Title- und Action-Safe-Rahmen im Viewer einblenden.",
 		func(s *settings.Settings) *bool { return &s.Playback.SafeArea })
@@ -145,32 +150,31 @@ func (w *window) buildCategories() []*category {
 	w.accent(display, "Akzentfarbe", "Farbe für Auswahl, Fokus und aktive Bedienelemente.")
 	w.check(display, "Kompakte Darstellung", "Weniger Abstand und etwas kleinere Schrift für mehr Platz.",
 		func(s *settings.Settings) *bool { return &s.Display.Compact })
-	w.check(display, "Seitenleiste anzeigen", "Die Leiste mit Medien, Schnitt, Farbe, Ton und Export.",
+	w.check(display, "Seitenwechsler anzeigen", "Die Leiste am unteren Rand mit Medien, Schnitt, Farbe, Ton und Export.",
 		func(s *settings.Settings) *bool { return &s.Display.PageBar })
 	w.check(display, "Statusleiste anzeigen", "Die Leiste am unteren Fensterrand.",
 		func(s *settings.Settings) *bool { return &s.Display.StatusBar })
-	choice(w, display, "Skalierung", "Größe der Bedienoberfläche. „System“ übernimmt die Einstellung der Arbeitsumgebung.", []option[float64]{
-		{0, "System"}, {1, "100 %"}, {1.25, "125 %"}, {1.5, "150 %"}, {1.75, "175 %"}, {2, "200 %"},
+	// Fyne multiplies FYNE_SCALE with the scale it detects and rounds to tenths: offer
+	// only factors that survive the rounding, labelled as what they are.
+	choice(w, display, "Skalierung", "Größe der Bedienoberfläche als Faktor auf die Größe, die das System vorgibt. „System“ übernimmt sie unverändert.", []option[float64]{
+		{0, "System"}, {0.8, "System × 0,8"}, {0.9, "System × 0,9"}, {1.1, "System × 1,1"}, {1.2, "System × 1,2"},
+		{1.3, "System × 1,3"}, {1.5, "System × 1,5"}, {1.8, "System × 1,8"}, {2, "System × 2"},
 	}, func(s *settings.Settings) *float64 { return &s.Display.Scale })
 
 	// Monitore & Fenster
 	choice(w, monitors, "Fenstersystem", "Unter Wayland lassen sich Fenster nur im Vollbild einem Monitor zuordnen. Mit X11 (XWayland) lassen sie sich frei platzieren.", []option[string]{
 		{"auto", "Automatisch"}, {"wayland", "Wayland"}, {"x11", "X11 (XWayland)"},
 	}, func(s *settings.Settings) *string { return &s.Display.Platform })
-	w.check(monitors, "Layout beim Beenden sichern", "Fenster, Monitore und Bereiche beim nächsten Start so wiederherstellen.",
+	w.check(monitors, "Layout beim Beenden speichern", "Fenster, Monitore und Bereiche beim nächsten Start so wiederherstellen.",
 		func(s *settings.Settings) *bool { return &s.Display.SaveLayoutOnQuit })
-	layouts := []option[string]{{"Standard", "Standard"}}
-	for _, n := range layout.List() {
-		if !slices.ContainsFunc(layouts, func(o option[string]) bool { return o.value == n }) {
-			layouts = append(layouts, option[string]{n, n})
-		}
-	}
-	choice(w, monitors, "Layout beim Start", "Welches gesicherte Layout beim Start gilt, wenn das letzte nicht gesichert wurde.", layouts,
-		func(s *settings.Settings) *string { return &s.Display.Layout })
+	startLayout := w.layoutChoice(monitors)
 	restartFields(w, "Fenstersystem", "Skalierung")
 	ov := newMonitorOverview(w)
 	monitors.extra = ov.view
-	monitors.onShow = ov.refresh
+	monitors.onShow = func() {
+		startLayout.load(settings.Get()) // layouts saved, renamed or deleted meanwhile
+		ov.refresh()
+	}
 
 	// Tastenkürzel
 	keymap.full = func() fyne.CanvasObject {
@@ -189,6 +193,36 @@ func (w *window) buildCategories() []*category {
 	return []*category{general, playback, audioCat, timeline, media, exp, display, monitors, keymap}
 }
 
+// layoutChoice is "Layout beim Start": its options are the saved layouts at the time
+// it is shown or the settings change (layouts are saved, renamed and deleted while the
+// window is open), plus the current value if its file is missing.
+func (w *window) layoutChoice(c *category) *field {
+	sel := widget.NewSelect(nil, nil)
+	sel.PlaceHolder = "Standard"
+	f := &field{label: "Layout beim Start", help: "Welches gespeicherte Layout beim Start gilt, wenn das letzte nicht gespeichert wurde.",
+		control: sel, input: sel, reset: resetter(func(s *settings.Settings) *string { return &s.Display.Layout })}
+	f.load = func(s settings.Settings) {
+		opts := []string{"Standard"}
+		for _, n := range layout.List() {
+			if !slices.Contains(opts, n) {
+				opts = append(opts, n)
+			}
+		}
+		cur := s.Display.Layout
+		if cur != "" && !slices.Contains(opts, cur) {
+			opts = append(opts, cur) // e.g. renamed by hand; still shown, not "Eigener Wert"
+		}
+		sel.OnChanged = nil
+		sel.Options = opts
+		if cur == "" {
+			cur = "Standard"
+		}
+		sel.SetSelected(cur)
+		sel.OnChanged = func(v string) { w.set(func(s *settings.Settings) { s.Display.Layout = v }) }
+	}
+	return w.add(c, f)
+}
+
 // restartFields marks the fields with the given labels as restart-only and rebuilds
 // their rows with the badge.
 func restartFields(w *window, labels ...string) {
@@ -203,6 +237,9 @@ func restartFields(w *window, labels ...string) {
 func px(n int) string { return fmt.Sprintf("%d px", n) }
 
 // mb formats a memory size: "512 MB", "1,5 GB".
+// FormatMB shows a memory size as the settings window does: "512 MB", "1,5 GB".
+func FormatMB(n int) string { return mb(n) }
+
 func mb(n int) string {
 	if n < 1024 {
 		return fmt.Sprintf("%d MB", n)

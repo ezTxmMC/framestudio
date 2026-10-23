@@ -26,6 +26,10 @@ import (
 // settings window (settingsui.RequestRestart) starts the program again.
 func Run(files []string) {
 	s, loadErr := settings.Load()
+	// Read before applyEnv sets the variables: only what the user set counts as theirs
+	// (a restart passes the environment on without the derived ones, see RestartEnv).
+	settingsui.SetEnvOverrides(EnvOverrides(os.Getenv))
+	settingsui.SetStartupWarning(StartWarning(s, os.Getenv))
 	applyEnv(StartEnv(s, os.Getenv))
 	settingsui.SetStartup(s)
 	if loadErr != nil {
