@@ -57,7 +57,15 @@ type snapshot struct {
 	key     string
 	at      time.Time
 	project *model.Project
+	// A step across a frame rate change remembers the playhead and In/Out on both sides:
+	// when the time state still is cur, applying the step sets res exactly instead of
+	// converting (converting twice can be a frame off).
+	cur, res *timeState
 }
+
+type timeState struct{ playhead, in, out int }
+
+func (s *Session) timeState() *timeState { return &timeState{s.Playhead, s.In, s.Out} }
 
 func New(p *model.Project) *Session {
 	s := &Session{Project: p, Rate: 1, listeners: map[int]func(Change){}}
@@ -107,8 +115,13 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 		s.Project = before
 		return err
 	}
+	snap := snapshot{label: label, at: time.Now(), project: before}
+	rateChanged := !before.Rate().Equal(s.Project.Rate())
+	if rateChanged {
+		snap.res = s.timeState()
+	}
 	s.rescaleTime(before.Rate())
-	s.undo = append(s.undo, snapshot{label: label, at: time.Now(), project: before})
+	s.undo = append(s.undo, snap)
 	if len(s.undo) > maxUndo {
 		s.undo = s.undo[1:]
 	}
@@ -117,6 +130,9 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 	s.Dirty = true
 	c := ChangeProject | ChangeMeta | s.fixSelection(before)
 	s.clampPlayhead()
+	if rateChanged {
+		s.undo[len(s.undo)-1].cur = s.timeState()
+	}
 	s.Notify(c)
 	return nil
 }
@@ -171,11 +187,12 @@ func (s *Session) Undo() {
 	}
 	last := s.undo[len(s.undo)-1]
 	s.undo = s.undo[:len(s.undo)-1]
-	s.redo = append(s.redo, snapshot{label: last.label, project: s.Project})
+	redo := snapshot{label: last.label, project: s.Project, cur: last.res, res: last.cur}
+	s.redo = append(s.redo, redo)
 	old := s.Project.Rate()
 	prev := s.Project
 	s.Project = last.project
-	s.rescaleTime(old)
+	s.stepTime(old, last)
 	s.Dirty = true
 	s.fixSelection(prev)
 	s.clampPlayhead()
@@ -188,11 +205,11 @@ func (s *Session) Redo() {
 	}
 	next := s.redo[len(s.redo)-1]
 	s.redo = s.redo[:len(s.redo)-1]
-	s.undo = append(s.undo, snapshot{label: next.label, project: s.Project})
+	s.undo = append(s.undo, snapshot{label: next.label, project: s.Project, cur: next.res, res: next.cur})
 	old := s.Project.Rate()
 	prev := s.Project
 	s.Project = next.project
-	s.rescaleTime(old)
+	s.stepTime(old, next)
 	s.Dirty = true
 	s.fixSelection(prev)
 	s.clampPlayhead()
@@ -216,6 +233,16 @@ func (s *Session) Rename(name string) {
 
 // rescaleTime keeps playhead and In/Out at the same time in seconds when the project
 // frame rate changed from old (by an edit, undo or redo).
+// stepTime moves playhead and In/Out for an undo or redo step from the project rate old.
+func (s *Session) stepTime(old model.Rate, step snapshot) {
+	if step.cur != nil && step.res != nil && *step.cur == *s.timeState() {
+		s.Playhead, s.In, s.Out = step.res.playhead, step.res.in, step.res.out
+		s.Notify(ChangePlayhead)
+		return
+	}
+	s.rescaleTime(old)
+}
+
 func (s *Session) rescaleTime(old model.Rate) {
 	fps := s.Project.Rate()
 	old = old.Or(fps)
@@ -561,7 +588,12 @@ func (s *Session) Advance(dt time.Duration) {
 				s.Notify(ChangePlayback)
 				return
 			}
-			f = end - (start-f)%(end-start)
+			// a whole number of loop lengths back lands on the start, never on Out
+			if k := (start - f) % (end - start); k > 0 {
+				f = end - k
+			} else {
+				f = start
+			}
 		}
 		s.seek(f)
 		return

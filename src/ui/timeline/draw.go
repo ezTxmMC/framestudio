@@ -838,22 +838,12 @@ func (r *tlRenderer) buildRuler(p *model.Project, g geom) []fyne.CanvasObject {
 	// Ticks run in timecode-label space so that majors sit on whole timecode seconds (also
 	// in drop-frame, where labels skip frames); x comes from the real frame.
 	rate, drop := p.Rate(), p.DropFrame()
-	major, minor := rulerStep(g.ppf, rate.Nominal(), labelGap)
-	first := int(math.Floor(float64(model.LabelFrame(max(int(g.offset), 0), rate, drop))/float64(minor))) * minor
-	last := g.offset + g.visibleFrames()
 	mono := fyne.TextStyle{Monospace: true}
-	for v := first; ; v += minor {
-		f, ok := model.FrameFromLabel(v, rate, drop)
-		if float64(f) > last {
-			break
-		}
-		if v < 0 || !ok {
-			continue
-		}
-		x := float32(math.Round(float64(g.frameX(float64(f)) - headerW)))
-		if v%major == 0 {
+	for _, tk := range rulerTicks(rate, drop, g.ppf, g.offset, g.visibleFrames()) {
+		x := float32(math.Round(float64(g.frameX(float64(tk.frame)) - headerW)))
+		if tk.major {
 			objs = append(objs, rect(studiotheme.Muted, x, rulerH-9, 1, 8),
-				r.text(p.Timecode(f), studiotheme.Muted, 10, mono, x+4, 3))
+				r.text(p.Timecode(tk.frame), studiotheme.Muted, 10, mono, x+4, 3))
 		} else {
 			objs = append(objs, rect(studiotheme.Faint, x, rulerH-5, 1, 4))
 		}
@@ -872,4 +862,39 @@ func (r *tlRenderer) buildRuler(p *model.Project, g geom) []fyne.CanvasObject {
 		objs = append(objs, flag)
 	}
 	return append(objs, rect(studiotheme.Border, 0, rulerH-1, laneW, 1), r.phStem, r.phHead)
+}
+
+// rulerTick is one ruler tick on a real frame; major ticks carry a timecode label.
+type rulerTick struct {
+	frame int
+	major bool
+}
+
+// rulerTicks lists the ticks for the visible frames [offset, offset+visible]. Ticks are
+// placed in timecode-label space, so majors sit on whole timecode seconds and minutes. In
+// drop-frame a label that does not exist (00:01:00;00) moves to the first one that does
+// (00:01:00;02), so minute ticks never disappear.
+func rulerTicks(rate model.Rate, drop bool, ppf, offset, visible float64) []rulerTick {
+	major, minor := rulerStep(ppf, rate.Nominal(), labelGap)
+	first := int(math.Floor(float64(model.LabelFrame(max(int(offset), 0), rate, drop))/float64(minor))) * minor
+	last := offset + visible
+	skip := 0
+	if drop && rate.CanDropFrame() {
+		skip = rate.Nominal() / 15
+	}
+	var out []rulerTick
+	for v := first; ; v += minor {
+		f, ok := model.FrameFromLabel(v, rate, drop)
+		if !ok && skip > 0 {
+			f, ok = model.FrameFromLabel(v+skip, rate, drop)
+		}
+		if float64(f) > last {
+			break
+		}
+		if v < 0 || !ok {
+			continue
+		}
+		out = append(out, rulerTick{f, v%major == 0})
+	}
+	return out
 }
