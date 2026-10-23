@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,12 @@ type manager struct {
 
 	grid       *fyne.Container
 	empty      fyne.CanvasObject
+	noMatch    *canvas.Text
+	noMatchBox fyne.CanvasObject
+	search     *widget.Entry
+	sortSel    *widget.Select
+	sortBy     store.SortOrder
+	all        []store.Details // library as read from disk
 	recent     *fyne.Container
 	count      *canvas.Text
 	dirText    *canvas.Text
@@ -60,10 +67,23 @@ type manager struct {
 	dir        string
 	thumbsGen  int
 	stopThumbs context.CancelFunc // ends the running thumbnail pass
+	// thumbs caches rendered card thumbnails by project path. The key holds the file's
+	// modification time (and the edit revision of an open project), so a relinked or
+	// otherwise changed project renders again.
+	thumbs map[string]cardThumb
 }
 
+// cardThumb is a cached manager thumbnail and the state it was rendered from.
+type cardThumb struct {
+	key string
+	img image.Image
+}
+
+// sortLabels are the library sort choices, in store.SortOrder order.
+var sortLabels = []string{"Zuletzt geändert", "Name"}
+
 func newManager(sh *Shell) *manager {
-	m := &manager{sh: sh}
+	m := &manager{sh: sh, thumbs: map[string]cardThumb{}}
 
 	brand := text("Frame Studio", studiotheme.Text, 14, true)
 	title := text("Projektmanager", studiotheme.Muted, 13, false)
@@ -82,9 +102,28 @@ func newManager(sh *Shell) *manager {
 		container.NewCenter(text("Noch keine Projekte in der Bibliothek", studiotheme.Text, 14, true)),
 		container.NewCenter(text("Mit „Neues Projekt“ anlegen oder eine .fsproj-Datei öffnen.", studiotheme.Muted, 12, false)),
 	))
+	m.noMatch = text("", studiotheme.Muted, 12, false)
+	m.noMatchBox = container.NewCenter(m.noMatch)
+	m.noMatchBox.Hide()
 	m.count = text("", studiotheme.Faint, 11, false)
-	library := kit.Panel("Projektbibliothek", container.NewHBox(m.count, strut(6, 0)),
-		container.NewStack(container.NewVScroll(container.New(layout.NewCustomPaddedLayout(2, 2, 2, 2), m.grid)), m.empty))
+	m.search = widget.NewEntry()
+	m.search.SetPlaceHolder("Projekte suchen")
+	m.search.ActionItem = widget.NewIcon(theme.SearchIcon())
+	m.search.OnChanged = func(string) { m.rebuild() }
+	m.sortSel = widget.NewSelect(sortLabels, func(string) {
+		if by := store.SortOrder(max(m.sortSel.SelectedIndex(), 0)); by != m.sortBy {
+			m.sortBy = by
+			m.rebuild()
+		}
+	})
+	m.sortSel.SetSelectedIndex(0)
+	tools := container.NewHBox(
+		container.NewCenter(m.count), strut(12, 0),
+		container.NewCenter(text("Sortieren", studiotheme.Faint, 11, false)), strut(2, 0),
+		container.NewGridWrap(fyne.NewSize(176, 34), m.sortSel), strut(4, 0),
+		container.NewGridWrap(fyne.NewSize(240, 34), m.search), strut(2, 0))
+	library := kit.Panel("Projektbibliothek", tools,
+		container.NewStack(container.NewVScroll(container.New(layout.NewCustomPaddedLayout(2, 2, 2, 2), m.grid)), m.empty, m.noMatchBox))
 
 	m.recent = container.NewVBox()
 	recent := container.NewStack(strut(330, 0), kit.Panel("Zuletzt geöffnet", nil, container.NewVScroll(m.recent)))
@@ -140,6 +179,23 @@ func (m *manager) reload() {
 	}
 	m.dirText.Refresh()
 
+	m.all = list
+	for path := range m.thumbs { // forget deleted and renamed projects
+		if !slices.ContainsFunc(list, func(d store.Details) bool { return d.Path == path }) {
+			delete(m.thumbs, path)
+		}
+	}
+	m.rebuild()
+	m.reloadRecent()
+}
+
+// rebuild shows the library cards matching the search box in the chosen order, and
+// renders thumbnails that are missing or out of date.
+func (m *manager) rebuild() {
+	sh := m.sh
+	list := store.FilterDetails(slices.Clone(m.all), m.search.Text)
+	store.SortDetails(list, m.sortBy)
+
 	m.cards = m.cards[:0]
 	objs := make([]fyne.CanvasObject, 0, len(list))
 	for _, d := range list {
@@ -148,17 +204,31 @@ func (m *manager) reload() {
 		c.onSelect = func() { m.selectPath(path) }
 		c.onOpen = func() { m.open(path) }
 		c.onMenu = func(at fyne.Position) { m.showMenu(path, at) }
+		if t, ok := m.thumbs[path]; ok && t.key == m.thumbKey(d) {
+			c.thumb.Image = t.img
+		}
 		m.cards = append(m.cards, c)
 		objs = append(objs, c)
 	}
 	m.grid.Objects = objs
 	m.grid.Refresh()
 	m.count.Text = countLabel(len(list))
+	if len(list) != len(m.all) {
+		m.count.Text = fmt.Sprintf("%d von %d", len(list), len(m.all))
+	}
 	m.count.Refresh()
-	if len(list) == 0 {
+	switch {
+	case len(m.all) == 0:
 		m.empty.Show()
-	} else {
+		m.noMatchBox.Hide()
+	case len(list) == 0:
 		m.empty.Hide()
+		m.noMatch.Text = "Kein Projekt passt zu „" + strings.TrimSpace(m.search.Text) + "“. Suchbegriff ändern oder löschen."
+		m.noMatch.Refresh()
+		m.noMatchBox.Show()
+	default:
+		m.empty.Hide()
+		m.noMatchBox.Hide()
 	}
 	if m.card(m.selected) == nil {
 		m.selected = ""
@@ -167,10 +237,44 @@ func (m *manager) reload() {
 		}
 	}
 	m.selectPath(m.selected)
-	m.reloadRecent()
 	if sh.thumbnails {
 		m.loadThumbnails()
 	}
+}
+
+// thumbKey identifies what a card thumbnail shows: the file's modification time, plus
+// the edit revision while the project is open (so unsaved edits show too).
+func (m *manager) thumbKey(d store.Details) string {
+	key := strconv.FormatInt(d.Modified.UnixNano(), 10)
+	if p := m.sh.findOpen(d.Path); p != nil {
+		key += "/" + strconv.Itoa(p.rev)
+	}
+	return key
+}
+
+// thumbJob is one card thumbnail to render in the background.
+type thumbJob struct {
+	card *projectCard
+	path string
+	key  string
+	proj *model.Project // snapshot of an open project; nil loads the file
+}
+
+// thumbJobs lists the cards whose cached thumbnail is missing or stale. UI thread only.
+func (m *manager) thumbJobs() []thumbJob {
+	var jobs []thumbJob
+	for _, c := range m.cards {
+		key := m.thumbKey(c.d)
+		if t, ok := m.thumbs[c.d.Path]; ok && t.key == key {
+			continue
+		}
+		j := thumbJob{card: c, path: c.d.Path, key: key}
+		if p := m.sh.findOpen(c.d.Path); p != nil {
+			j.proj = p.sess.Project.Clone()
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs
 }
 
 func countLabel(n int) string {
@@ -233,28 +337,41 @@ func (m *manager) loadThumbnails() {
 	m.cancelThumbnails()
 	m.thumbsGen++
 	gen := m.thumbsGen
+	jobs := m.thumbJobs()
+	if len(jobs) == 0 {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.stopThumbs = cancel
-	cards := slices.Clone(m.cards)
 	r := m.sh.renderer
 	go func() {
-		for _, c := range cards {
+		for _, j := range jobs {
 			if ctx.Err() != nil {
 				return
 			}
-			p, err := store.Load(c.d.Path)
-			if err != nil || p.Duration() == 0 || ctx.Err() != nil {
-				continue
+			p := j.proj
+			if p == nil {
+				var err error
+				if p, err = store.Load(j.path); err != nil {
+					continue
+				}
 			}
-			w, h := 384, 384*p.Settings.Height/p.Settings.Width
-			if h > 216 {
-				h, w = 216, 216*p.Settings.Width/p.Settings.Height
+			var img image.Image // an empty project caches "no picture"
+			if p.Duration() > 0 && p.Settings.Width > 0 && p.Settings.Height > 0 {
+				w, h := 384, 384*p.Settings.Height/p.Settings.Width
+				if h > 216 {
+					h, w = 216, 216*p.Settings.Width/p.Settings.Height
+				}
+				img = r.Frame(p, p.Duration()/3, max(w, 1), max(h, 1))
 			}
-			img := r.Frame(p, p.Duration()/3, max(w, 1), max(h, 1))
+			if ctx.Err() != nil {
+				return
+			}
 			kit.Do(func() {
+				m.thumbs[j.path] = cardThumb{key: j.key, img: img}
 				if m.thumbsGen == gen {
-					c.thumb.Image = image.Image(img)
-					c.thumb.Refresh()
+					j.card.thumb.Image = img
+					j.card.thumb.Refresh()
 				}
 			})
 		}

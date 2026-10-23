@@ -188,3 +188,43 @@ func TestSuggestPathDedup(t *testing.T) {
 		t.Errorf("escaped dir: %s", p)
 	}
 }
+
+func TestSortAndFilterDetails(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	mk := func(name, file string, ago time.Duration) Details {
+		return Details{Entry: Entry{Name: name, Path: "/lib/" + file, Modified: now.Add(-ago)}}
+	}
+	ds := []Details{
+		mk("Zebra", "zebra.fsproj", 3*time.Hour),
+		mk("über Uns", "ueber.fsproj", time.Hour),
+		mk("alpha", "alpha.fsproj", 2*time.Hour),
+		mk("Umbau", "umbau.fsproj", 4*time.Hour),
+	}
+	names := func(ds []Details) string {
+		var n []string
+		for _, d := range ds {
+			n = append(n, d.Name)
+		}
+		return strings.Join(n, ",")
+	}
+	SortDetails(ds, SortName)
+	if got := names(ds); got != "alpha,über Uns,Umbau,Zebra" {
+		t.Errorf("by name: %s", got)
+	}
+	SortDetails(ds, SortModified)
+	if got := names(ds); got != "über Uns,alpha,Zebra,Umbau" {
+		t.Errorf("by date: %s", got)
+	}
+	if got := names(FilterDetails(ds, "  U ")); got != "über Uns,Umbau" {
+		t.Errorf("filter ub: %s", got)
+	}
+	if got := names(FilterDetails(ds, "ueber")); got != "über Uns" {
+		t.Errorf("filter by file name: %s", got)
+	}
+	if got := names(FilterDetails(ds, "uns zeb")); got != "" {
+		t.Errorf("all words must match: %s", got)
+	}
+	if got := FilterDetails(ds, ""); len(got) != 4 {
+		t.Errorf("empty query keeps all: %d", len(got))
+	}
+}

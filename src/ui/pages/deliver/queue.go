@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,11 @@ type queue struct {
 	tools   *fyne.Container
 	scroll  *container.Scroll
 	content fyne.CanvasObject
+
+	// status is the in-app line about the last finished job, above "Alle rendern".
+	status     *canvas.Text
+	statusMark *canvas.Rectangle
+	statusBox  fyne.CanvasObject
 }
 
 func newQueue(pg *Page) *queue {
@@ -86,13 +92,20 @@ func newQueue(pg *Page) *queue {
 	q.count = kit.MonoText("0", studiotheme.Faint, 11)
 	q.all = widget.NewButtonWithIcon("Alle rendern", theme.MediaPlayIcon(), q.renderAll)
 	q.all.Importance = widget.HighImportance
-	clear := widget.NewButton("Erledigte entfernen", q.clearFinished)
+	clear := widget.NewButton("Fertige entfernen", q.clearFinished)
 	clear.Importance = widget.LowImportance
 	q.clear = clear
 	// Fixed width so the header never needs a re-layout of the panel.
 	q.tools = container.NewHBox(layout.NewSpacer(), vcenter(q.count), clear)
 	q.scroll = container.NewVScroll(q.list)
-	body := container.NewBorder(nil, q.all, nil, nil, container.NewStack(q.empty, q.scroll))
+	q.status = smallText("", studiotheme.Text, 12)
+	q.statusMark = canvas.NewRectangle(studiotheme.Steel)
+	q.statusMark.SetMinSize(fyne.NewSize(3, 0))
+	q.statusBox = container.NewBorder(nil, nil, q.statusMark, nil,
+		container.New(layout.NewCustomPaddedLayout(4, 4, 8, 4), q.status))
+	q.statusBox.Hide()
+	bottom := container.New(layout.NewCustomPaddedVBoxLayout(6), q.statusBox, q.all)
+	body := container.NewBorder(nil, bottom, nil, nil, container.NewStack(q.empty, q.scroll))
 	q.content = kit.Panel("Render-Warteschlange", withWidth(210, q.tools), body)
 	q.refresh()
 	return q
@@ -227,8 +240,53 @@ func (q *queue) finished(j *job, err error, elapsed time.Duration, size int64) {
 	}
 	j.view.refresh()
 	q.refresh()
+	q.announce(j)
 	q.runNext()
 }
+
+// announce tells the user that j has ended: a desktop notification, a toast in the
+// window (visible on every page) and the status line of the queue. Cancelled jobs are
+// the user's own doing and stay quiet.
+func (q *queue) announce(j *job) {
+	var title, body string
+	switch j.status {
+	case jobDone:
+		title = "Export fertig"
+		body = fmt.Sprintf("„%s“ wurde in %s gerendert (%s).", j.name(), formatClock(j.elapsed), formatBytes(j.size))
+		q.statusMark.FillColor = studiotheme.Steel
+	case jobFailed:
+		title = "Export fehlgeschlagen"
+		body = fmt.Sprintf("„%s“: %v", j.name(), j.err)
+		q.statusMark.FillColor = color.NRGBA{0xE0, 0xA1, 0x3A, 0xFF}
+	default:
+		return
+	}
+	q.status.Text = title + ": " + ellipsize(j.name(), 32)
+	q.status.Refresh()
+	q.statusMark.Refresh()
+	setVisible(q.statusBox, true, q.content)
+	q.pg.notify(title, body, j.status == jobFailed)
+}
+
+// move shifts a queued job d places up (negative) or down in the render order.
+func (q *queue) move(j *job, d int) {
+	i := slices.Index(q.jobs, j)
+	k := i + d
+	if i < 0 || k < 0 || k >= len(q.jobs) {
+		return
+	}
+	q.jobs[i], q.jobs[k] = q.jobs[k], q.jobs[i]
+	objs := make([]fyne.CanvasObject, len(q.jobs))
+	for n, x := range q.jobs {
+		objs[n] = x.view.content
+	}
+	q.list.Objects = objs
+	q.list.Refresh()
+	q.refresh()
+}
+
+// queued reports whether j still waits for its turn and may be reordered.
+func (j *job) queued() bool { return j.status == jobReady || j.status == jobWaiting }
 
 // cancelJob stops a running job or withdraws a waiting one.
 func (q *queue) cancelJob(j *job) {
@@ -256,10 +314,11 @@ func (q *queue) remove(j *job) {
 	q.refresh()
 }
 
-// clearFinished removes all jobs that are done, failed or cancelled.
+// clearFinished removes the jobs that are done or cancelled. Failed jobs stay so they
+// can be retried with "Erneut" or removed one by one.
 func (q *queue) clearFinished() {
 	for _, j := range append([]*job(nil), q.jobs...) {
-		if j.status >= jobDone {
+		if j.status == jobDone || j.status == jobCanceled {
 			q.remove(j)
 		}
 	}
@@ -351,10 +410,11 @@ func (q *queue) close() {
 // refresh updates the header count, empty hint and "Alle rendern".
 func (q *queue) refresh() {
 	finished := 0
-	for _, j := range q.jobs {
-		if j.status >= jobDone {
+	for i, j := range q.jobs {
+		if j.status == jobDone || j.status == jobCanceled {
 			finished++
 		}
+		j.view.setOrder(i > 0, i < len(q.jobs)-1)
 	}
 	switch len(q.jobs) {
 	case 0:
@@ -420,6 +480,8 @@ type jobView struct {
 	remove    *widget.Button
 	open      *widget.Button
 	render    *widget.Button
+	up, down  *widget.Button
+	order     fyne.CanvasObject
 	progress  fyne.CanvasObject
 	resultBox fyne.CanvasObject
 	body      *fyne.Container
@@ -454,10 +516,13 @@ func newJobView(q *queue, j *job) *jobView {
 	for _, b := range []*widget.Button{v.cancel, v.remove, v.open, v.render} {
 		b.Importance = widget.LowImportance
 	}
+	v.up = kit.ToolButton(theme.MoveUpIcon(), func() { q.move(j, -1) })
+	v.down = kit.ToolButton(theme.MoveDownIcon(), func() { q.move(j, 1) })
+	v.order = container.NewHBox(v.up, v.down)
 
 	head := container.NewBorder(nil, nil, nil, v.status, v.title)
 	v.progress = container.NewBorder(nil, nil, nil, container.NewPadded(vcenter(v.eta)), v.bar)
-	buttons := container.NewHBox(layout.NewSpacer(), v.render, v.open, v.cancel, v.remove)
+	buttons := container.NewHBox(v.order, layout.NewSpacer(), v.render, v.open, v.cancel, v.remove)
 	// The label's own inner padding is cancelled so its text lines up with the meta line.
 	v.resultBox = container.New(layout.NewCustomPaddedLayout(-4, -4, -6, 0), v.result)
 	v.body = container.NewVBox(head, v.meta, v.progress, v.resultBox, buttons)
@@ -523,6 +588,21 @@ func (v *jobView) refresh() {
 	if j.status == jobFailed || j.status == jobCanceled {
 		v.render.SetText("Erneut")
 	}
+	show(v.order, j.queued())
 	v.body.Refresh()
 	v.q.scroll.Refresh()
+}
+
+// setOrder enables the move buttons that have a neighbour to swap with.
+func (v *jobView) setOrder(up, down bool) {
+	setEnabledBtn(v.up, up)
+	setEnabledBtn(v.down, down)
+}
+
+func setEnabledBtn(b *widget.Button, on bool) {
+	if on && b.Disabled() {
+		b.Enable()
+	} else if !on && !b.Disabled() {
+		b.Disable()
+	}
 }

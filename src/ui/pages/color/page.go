@@ -33,6 +33,7 @@ type Page struct {
 
 	content fyne.CanvasObject
 	active  bool
+	closed  bool
 	unsub   func()
 
 	viewer       *viewer.Viewer
@@ -54,8 +55,17 @@ type Page struct {
 	stripEmpty  fyne.CanvasObject
 	stripPanel  fyne.CanvasObject
 	stripCount  *canvas.Text
-	thumbs      map[string]image.Image
-	thumbState  map[string]thumbState
+	// thumbs holds strip posters by thumbKey (media ID, path and source time), so a
+	// relinked or trimmed clip gets a fresh frame.
+	thumbs     map[string]image.Image
+	thumbState map[string]thumbState
+
+	// autoID is the clip the page selected by itself (nothing was selected and the
+	// playhead was on it). While it stays the only selection, playback moves the
+	// selection along with the playhead. Any other selection change - a click in the
+	// strip, Up/Down, a selection made on another page - clears it, and the selection
+	// then stays put until the user changes it.
+	autoID string
 
 	primary *primaryPanel
 }
@@ -188,6 +198,7 @@ func (p *Page) Deactivate() {
 }
 
 func (p *Page) Close() {
+	p.closed = true
 	if p.unsub != nil {
 		p.unsub()
 		p.unsub = nil
@@ -255,14 +266,59 @@ func (p *Page) stepClip(d int) {
 
 // pick selects clip c and seeks to its first frame.
 func (p *Page) pick(c model.Clip) {
+	p.autoID = ""
 	p.s.SelectClip(c.ID)
 	p.s.Seek(c.Start)
 	p.scrollToSelected()
 }
 
+// clickCard handles a click on strip card i: plain click picks the clip and seeks to
+// it, Ctrl+click adds or removes it from the selection, Shift+click selects the range
+// from the graded clip to it. Modified clicks leave the playhead alone.
+func (p *Page) clickCard(i int, mods fyne.KeyModifier) {
+	if i < 0 || i >= len(p.entries) {
+		return
+	}
+	id := p.entries[i].Clip.ID
+	switch {
+	case mods&(fyne.KeyModifierControl|fyne.KeyModifierSuper) != 0:
+		p.autoID = ""
+		p.s.ToggleClip(id)
+	case mods&fyne.KeyModifierShift != 0:
+		anchor := -1
+		for j, e := range p.entries {
+			if e.Clip.ID == p.s.SelectedClip {
+				anchor = j
+			}
+		}
+		if anchor < 0 {
+			p.pick(p.entries[i].Clip)
+			return
+		}
+		step := 1
+		if i < anchor {
+			step = -1
+		}
+		var ids []string
+		for j := anchor; ; j += step {
+			ids = append(ids, p.entries[j].Clip.ID)
+			if j == i {
+				break
+			}
+		}
+		p.autoID = ""
+		p.s.SelectClips(ids) // the clicked clip is last, so it becomes the graded one
+	default:
+		p.pick(p.entries[i].Clip)
+	}
+}
+
 func (p *Page) changed(c session.Change) {
 	if c&(session.ChangeProject|session.ChangeSelection|session.ChangePlayhead) == 0 {
 		return
+	}
+	if p.autoID != "" && (p.s.SelectedClip != p.autoID || len(p.s.Selected) != 1) {
+		p.autoID = "" // the user (or another page) changed the selection
 	}
 	if p.autoSelect(c&session.ChangePlayhead != 0) {
 		return // SelectClip notified and refreshed already
@@ -273,21 +329,28 @@ func (p *Page) changed(c session.Change) {
 	}
 }
 
-// autoSelect selects the clip under the playhead when the page is visible and nothing
-// is selected. With replace it also replaces a selection that cannot be graded (e.g. an
-// audio clip picked on the edit page); that happens when the page opens or the playhead
-// moves. It reports whether the selection changed.
+// autoSelect keeps a picture clip selected while the page is visible:
+//   - nothing selected: select the top-most visible clip under the playhead;
+//   - with replace (page opens, playhead moved), a selection that cannot be graded
+//     (e.g. an audio clip picked on the edit page) is replaced the same way;
+//   - during playback, a clip the page selected by itself follows the playhead.
+//
+// A selection the user made is never changed. It reports whether the selection changed.
 func (p *Page) autoSelect(replace bool) bool {
 	if !p.active {
 		return false
 	}
-	if sel, ok := p.s.Clip(); ok && (sel.Kind.IsVisual() || !replace) {
-		return false
+	following := p.autoID != "" && p.s.Playing && replace
+	if !following {
+		if sel, ok := p.s.Clip(); ok && (sel.Kind.IsVisual() || !replace) {
+			return false
+		}
 	}
 	c := clipUnder(p.s.Project, p.s.Playhead)
 	if c == nil || c.ID == p.s.SelectedClip {
 		return false
 	}
+	p.autoID = c.ID
 	p.s.SelectClip(c.ID)
 	p.scrollToSelected()
 	return true
@@ -300,25 +363,30 @@ func (p *Page) refreshStrip() {
 	pr := p.s.Project
 	p.entries = visualClips(pr)
 	for len(p.cards) < len(p.entries) {
-		card := newClipCard(nil)
 		i := len(p.cards)
-		card.OnTapped = func() {
-			if i < len(p.entries) {
-				p.pick(p.entries[i].Clip)
-			}
-		}
-		p.cards = append(p.cards, card)
+		p.cards = append(p.cards, newClipCard(func(mods fyne.KeyModifier) { p.clickCard(i, mods) }))
 	}
 	objs := make([]fyne.CanvasObject, len(p.entries))
 	var loads []func()
+	used := map[string]bool{}
 	for i, e := range p.entries {
-		thumb, missing, load := p.thumbFor(e.Clip)
+		thumb, missing, load := p.thumbFor(e.Clip, used)
 		if load != nil {
 			loads = append(loads, load)
 		}
 		p.cards[i].set(i+1, e, pr.Settings.FPS, thumb, missing)
-		p.cards[i].setSelected(e.Clip.ID == p.s.SelectedClip)
+		p.cards[i].setSelected(p.s.IsSelected(e.Clip.ID), e.Clip.ID == p.s.SelectedClip)
 		objs[i] = p.cards[i]
+	}
+	for k := range p.thumbs { // drop posters of relinked, trimmed or deleted clips
+		if !used[k] {
+			delete(p.thumbs, k)
+		}
+	}
+	for k, st := range p.thumbState {
+		if !used[k] && st != thumbLoading {
+			delete(p.thumbState, k)
+		}
 	}
 	if len(objs) != len(p.stripBox.Objects) {
 		p.stripBox.Objects = objs
@@ -348,9 +416,25 @@ func clipCount(n int) string {
 	return strconv.Itoa(n) + " Clips"
 }
 
-// thumbFor returns the cached poster of a media clip. If it still has to be loaded,
-// load is the background job that fetches it and refreshes the strip.
-func (p *Page) thumbFor(c model.Clip) (img image.Image, missing bool, load func()) {
+// posterSec is the source time of the clip's first frame, the strip's representative
+// picture (0 for stills).
+func posterSec(c model.Clip, fps int) float64 {
+	if c.Kind != model.KindVideo || fps <= 0 {
+		return 0
+	}
+	return float64(c.SourceIn) / float64(fps)
+}
+
+// thumbKey identifies a strip poster: media ID, file path (changes on relink) and the
+// source time (changes when the clip is trimmed or slipped).
+func thumbKey(m model.MediaItem, sec float64) string {
+	return m.ID + "\x00" + m.Path + "\x00" + strconv.FormatFloat(sec, 'f', 3, 64)
+}
+
+// thumbFor returns the cached poster of a media clip and marks its key in used. If it
+// still has to be loaded, load is the background job that fetches it and refreshes the
+// strip.
+func (p *Page) thumbFor(c model.Clip, used map[string]bool) (img image.Image, missing bool, load func()) {
 	if c.MediaID == "" || c.Kind == model.KindColor || c.Kind == model.KindTitle {
 		return nil, false, nil
 	}
@@ -358,25 +442,31 @@ func (p *Page) thumbFor(c model.Clip) (img image.Image, missing bool, load func(
 	if !ok || p.ctx.Media == nil {
 		return nil, true, nil
 	}
-	if img, ok := p.thumbs[m.ID]; ok {
+	sec := posterSec(c, p.s.FPS())
+	key := thumbKey(*m, sec)
+	used[key] = true
+	if img, ok := p.thumbs[key]; ok {
 		return img, false, nil
 	}
-	switch p.thumbState[m.ID] {
+	switch p.thumbState[key] {
 	case thumbFailed:
 		return nil, true, nil
 	case thumbLoading:
 		return nil, false, nil
 	}
-	p.thumbState[m.ID] = thumbLoading
+	p.thumbState[key] = thumbLoading
 	item, cache := *m, p.ctx.Media
 	return nil, false, func() {
-		img, err := cache.Thumbnail(item, thumbW*2, thumbH*2)
+		img, err := cache.Poster(item, sec, thumbW*2, thumbH*2)
 		kit.Do(func() {
+			if p.closed {
+				return
+			}
 			if err != nil || img == nil {
-				p.thumbState[item.ID] = thumbFailed
+				p.thumbState[key] = thumbFailed
 			} else {
-				p.thumbs[item.ID] = img
-				delete(p.thumbState, item.ID)
+				p.thumbs[key] = img
+				delete(p.thumbState, key)
 			}
 			p.refreshStrip()
 		})

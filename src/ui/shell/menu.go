@@ -14,7 +14,6 @@ import (
 
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/store"
-	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -138,7 +137,11 @@ func (m *menus) refresh() {
 // installKeys registers window shortcuts and routes plain keys to the active page.
 func (sh *Shell) installKeys() {
 	c := sh.win.Canvas()
-	add := func(sc fyne.Shortcut, fn func()) { c.AddShortcut(sc, func(fyne.Shortcut) { fn() }) }
+	sh.shortcuts = map[string]func(){}
+	add := func(sc fyne.Shortcut, fn func()) {
+		sh.shortcuts[sc.ShortcutName()] = fn
+		c.AddShortcut(sc, func(fyne.Shortcut) { fn() })
+	}
 	add(key(fyne.KeyN, ctrl), sh.newProjectDialog)
 	add(key(fyne.KeyO, ctrl), sh.openDialog)
 	add(key(fyne.KeyS, ctrl), sh.saveActive)
@@ -149,26 +152,51 @@ func (sh *Shell) installKeys() {
 	add(key(fyne.KeyZ, ctrl), sh.undo)
 	add(key(fyne.KeyY, ctrl), sh.redo)
 	add(key(fyne.KeyZ, ctrl|fyne.KeyModifierShift), sh.redo)
+	// Page switching: Shift+1..5 is the documented key, Alt+1..5 and Ctrl+1..5 are
+	// layout-independent alternatives. The desktop driver never reports Shift-only
+	// combinations as shortcuts, so Shift+digit also arrives in typedKey (see there).
 	for i, d := range sh.pageDefs {
+		if i >= len(pageKeys) {
+			break
+		}
 		id := d.ID
-		add(key(pageKeys[i], fyne.KeyModifierShift), func() { sh.showPageID(id) })
+		for _, mod := range []fyne.KeyModifier{fyne.KeyModifierShift, fyne.KeyModifierAlt, ctrl} {
+			add(key(pageKeys[i], mod), func() { sh.showPageID(id) })
+		}
 	}
+	add(&fyne.ShortcutSelectAll{}, sh.selectAll)
+	add(key(fyne.KeyA, ctrl), sh.selectAll)
 	c.SetOnTypedKey(sh.typedKey)
-	if dc, ok := c.(desktop.Canvas); ok {
-		dc.SetOnKeyDown(func(e *fyne.KeyEvent) { sh.trackShift(e.Name, true) })
-		dc.SetOnKeyUp(func(e *fyne.KeyEvent) { sh.trackShift(e.Name, false) })
-	}
 }
 
-// trackShift remembers the Shift state: Shift+digit is no shortcut for the driver, so
-// page switching (Shift+1..5) is detected in typedKey.
-func (sh *Shell) trackShift(k fyne.KeyName, down bool) {
-	if k == desktop.KeyShiftLeft || k == desktop.KeyShiftRight {
-		sh.shift = down
+// heldModifiers returns the modifier keys the driver reported with the current key
+// event. The desktop driver takes them from the key event itself, so they cannot get
+// stuck when the window loses focus while a modifier is held.
+func heldModifiers() fyne.KeyModifier {
+	if a := fyne.CurrentApp(); a != nil {
+		if d, ok := a.Driver().(desktop.Driver); ok {
+			return d.CurrentKeyModifiers()
+		}
 	}
+	return 0
 }
 
-// typedKey handles keys while no widget has focus.
+// pageForKey returns the page index for Shift+digit, or -1.
+func (sh *Shell) pageForKey(k *fyne.KeyEvent) int {
+	if sh.modifiers()&fyne.KeyModifierShift == 0 {
+		return -1
+	}
+	for i, pk := range pageKeys {
+		if k.Name == pk && i < len(sh.pageDefs) {
+			return i
+		}
+	}
+	return -1
+}
+
+// typedKey handles keys while no widget has focus. Esc and every other key go to the
+// active page first; unhandled Space toggles playback and unhandled Esc clears the clip
+// selection.
 func (sh *Shell) typedKey(k *fyne.KeyEvent) {
 	if sh.showManager {
 		sh.mgr.typedKey(k)
@@ -178,19 +206,26 @@ func (sh *Shell) typedKey(k *fyne.KeyEvent) {
 	if p == nil {
 		return
 	}
-	if sh.shift {
-		for i, pk := range pageKeys {
-			if k.Name == pk && i < len(sh.pageDefs) {
-				sh.showPage(p, sh.pageDefs[i].ID)
-				return
-			}
-		}
+	if i := sh.pageForKey(k); i >= 0 {
+		sh.showPage(p, sh.pageDefs[i].ID)
+		return
 	}
 	if pg := p.pages[p.current]; pg != nil && pg.TypedKey(k) {
 		return
 	}
-	if k.Name == fyne.KeySpace {
+	switch k.Name {
+	case fyne.KeySpace:
 		p.sess.TogglePlaying()
+	case fyne.KeyEscape:
+		p.sess.SelectClip("")
+	}
+}
+
+// selectAll is Ctrl+A: select every clip of the active project. In the manager or while
+// a text field has focus (the field gets the shortcut itself) it does nothing.
+func (sh *Shell) selectAll() {
+	if p := sh.workspaceProject(); p != nil {
+		p.sess.SelectAll()
 	}
 }
 
@@ -278,61 +313,6 @@ func (sh *Shell) openDialog() {
 	d.SetFilter(storage.NewExtensionFileFilter([]string{store.Extension}))
 	sh.setDialogDir(d, "")
 	d.Resize(fyne.NewSize(900, 600))
-	d.Show()
-}
-
-// shortcutGroups documents the shell and edit page shortcuts for the help dialog.
-var shortcutGroups = []struct {
-	Title string
-	Keys  [][2]string
-}{
-	{"Projekt", [][2]string{
-		{"Strg+N", "Neues Projekt"},
-		{"Strg+O", "Projekt öffnen"},
-		{"Strg+S", "Speichern"},
-		{"Strg+Umschalt+S", "Speichern unter"},
-		{"Strg+W", "Projekt schließen"},
-		{"Strg+Z", "Rückgängig"},
-		{"Strg+Umschalt+Z, Strg+Y", "Wiederholen"},
-	}},
-	{"Seiten", [][2]string{
-		{"Umschalt+1", "Medien"},
-		{"Umschalt+2", "Schnitt"},
-		{"Umschalt+3", "Farbe"},
-		{"Umschalt+4", "Ton"},
-		{"Umschalt+5", "Export"},
-	}},
-	{"Wiedergabe", [][2]string{
-		{"Leertaste", "Abspielen / Pause"},
-		{"J", "Vorheriger Schnittpunkt"},
-		{"K / L", "Stopp / Abspielen"},
-		{"← / →", "Ein Frame zurück / vor"},
-		{"↑ / ↓", "Vorheriger / nächster Schnittpunkt"},
-		{"I / O", "In- / Out-Punkt setzen"},
-	}},
-	{"Schnitt", [][2]string{
-		{"A", "Auswahlwerkzeug"},
-		{"B", "Klingenwerkzeug"},
-		{"S", "Clip am Playhead teilen"},
-		{"M", "Marker setzen"},
-		{"Entf", "Ausgewählten Clip löschen"},
-		{"+ / −", "Timeline vergrößern / verkleinern"},
-	}},
-}
-
-func (sh *Shell) showShortcuts() {
-	cols := container.NewGridWithColumns(2)
-	for _, g := range shortcutGroups {
-		rows := container.NewVBox(text(g.Title, studiotheme.Muted, 12, true), strut(0, 2))
-		for _, k := range g.Keys {
-			keyText := kit.MonoText(k[0], studiotheme.Text, 11)
-			rows.Add(container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(170, 22), container.NewHBox(container.NewCenter(keyText))), nil,
-				container.NewHBox(container.NewCenter(text(k[1], studiotheme.Text, 12, false)))))
-		}
-		cols.Add(container.NewPadded(rows))
-	}
-	d := dialog.NewCustom("Tastenkürzel", "Schließen", container.NewVScroll(cols), sh.win)
-	d.Resize(fyne.NewSize(760, 520))
 	d.Show()
 }
 

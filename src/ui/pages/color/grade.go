@@ -58,7 +58,7 @@ type primaryPanel struct {
 
 	rows                        []*gradeRow
 	resetAll, copyBtn, pasteBtn *widget.Button
-	applyAll                    *widget.Button
+	applySel, applyAll          *widget.Button
 	clipName, clipTC            *canvas.Text
 	hint, lockHint              *canvas.Text
 	grading, empty              fyne.CanvasObject
@@ -88,15 +88,17 @@ func newPrimaryPanel(p *Page) *primaryPanel {
 		container.NewVBox(left...), container.NewVBox(right...))
 
 	pp.resetAll = widget.NewButtonWithIcon("Grade zurücksetzen", theme.ContentUndoIcon(), pp.resetGrade)
-	pp.copyBtn = widget.NewButtonWithIcon("Grade kopieren", theme.ContentCopyIcon(), pp.copyGrade)
-	pp.pasteBtn = widget.NewButtonWithIcon("Grade einfügen", theme.ContentPasteIcon(), pp.pasteGrade)
+	pp.copyBtn = widget.NewButtonWithIcon("Kopieren", theme.ContentCopyIcon(), pp.copyGrade)
+	pp.pasteBtn = widget.NewButtonWithIcon("Einfügen", theme.ContentPasteIcon(), pp.pasteGrade)
+	pp.applySel = widget.NewButtonWithIcon("Auf Auswahl anwenden", theme.ContentRedoIcon(), pp.applyToSelection)
 	pp.applyAll = widget.NewButtonWithIcon("Auf alle Clips anwenden", theme.DocumentIcon(), pp.applyToAll)
-	for _, b := range []*widget.Button{pp.resetAll, pp.copyBtn, pp.pasteBtn, pp.applyAll} {
+	for _, b := range []*widget.Button{pp.resetAll, pp.copyBtn, pp.pasteBtn, pp.applySel, pp.applyAll} {
 		b.Alignment = widget.ButtonAlignLeading
 	}
 	sep := canvas.NewRectangle(studiotheme.Border)
 	sep.SetMinSize(fyne.NewSize(1, 1))
-	actions := fixedWidth(206, container.NewVBox(pp.resetAll, sep, pp.copyBtn, pp.pasteBtn, pp.applyAll))
+	clipboard := container.NewGridWithColumns(2, pp.copyBtn, pp.pasteBtn)
+	actions := fixedWidth(222, container.NewVBox(pp.resetAll, clipboard, sep, pp.applySel, pp.applyAll))
 	divider := canvas.NewRectangle(studiotheme.Border)
 	divider.SetMinSize(fyne.NewSize(1, 1))
 
@@ -219,19 +221,32 @@ func (pp *primaryPanel) pasteGrade() {
 
 // applyToAll copies the selected clip's grade to every visual clip on unlocked tracks.
 func (pp *primaryPanel) applyToAll() {
+	pp.applyTo("Grade auf alle Clips anwenden", func(model.Clip) bool { return true })
+}
+
+// applyToSelection copies the graded clip's grade to all selected picture clips on
+// unlocked tracks, as one undo step.
+func (pp *primaryPanel) applyToSelection() {
+	s := pp.p.s
+	pp.applyTo("Grade auf Auswahl anwenden", func(c model.Clip) bool { return s.IsSelected(c.ID) })
+}
+
+// applyTo sets the grade of the graded clip on every visual clip of an unlocked video
+// track that matches.
+func (pp *primaryPanel) applyTo(label string, match func(model.Clip) bool) {
 	c, ok := pp.target()
 	if !ok {
 		return
 	}
 	g := c.Grade
-	err := pp.p.s.Edit("Grade auf alle Clips anwenden", func(p *model.Project) error {
+	err := pp.p.s.Edit(label, func(p *model.Project) error {
 		for _, ti := range p.TrackIndices(model.TrackVideo) {
 			t := &p.Tracks[ti]
 			if t.Locked {
 				continue
 			}
 			for ci := range t.Clips {
-				if t.Clips[ci].Kind.IsVisual() {
+				if t.Clips[ci].Kind.IsVisual() && match(t.Clips[ci]) {
 					t.Clips[ci].Grade = g
 				}
 			}
@@ -241,6 +256,17 @@ func (pp *primaryPanel) applyToAll() {
 	if err != nil {
 		pp.p.showErr(gradeError(err))
 	}
+}
+
+// selectedVisual counts the selected picture clips.
+func (pp *primaryPanel) selectedVisual() int {
+	n := 0
+	for _, id := range pp.p.s.Selected {
+		if c, _, _ := pp.p.s.Project.Clip(id); c != nil && c.Kind.IsVisual() {
+			n++
+		}
+	}
+	return n
 }
 
 // refresh syncs the panel with the selected clip.
@@ -258,7 +284,12 @@ func (pp *primaryPanel) refresh() {
 
 	_, ti, _ := pp.p.s.Project.Clip(c.ID)
 	track := pp.p.s.Project.Tracks[ti]
-	pp.setHeader(c.Name, track.Name+"  "+pp.p.s.Project.Timecode(c.Start))
+	pos := track.Name + "  " + pp.p.s.Project.Timecode(c.Start)
+	nSel := pp.selectedVisual()
+	if nSel > 1 {
+		pos += fmt.Sprintf("  ·  %d Clips ausgewählt", nSel)
+	}
+	pp.setHeader(c.Name, pos)
 
 	pp.updating = true
 	for _, row := range pp.rows {
@@ -273,6 +304,7 @@ func (pp *primaryPanel) refresh() {
 
 	setEnabled(pp.resetAll, !track.Locked && !c.Grade.IsNeutral())
 	setEnabled(pp.pasteBtn, !track.Locked && pp.copied != nil)
+	setEnabled(pp.applySel, nSel > 1)
 	setEnabled(pp.applyAll, true)
 
 	switch {

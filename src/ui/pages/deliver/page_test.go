@@ -323,18 +323,23 @@ func TestScreenshot(t *testing.T) {
 	}
 	q.refresh()
 	h.pg.form.name.SetText("Showreel 2026")
-	h.pg.form.setError(errors.New("Die Datei existiert bereits. Wähle einen anderen Namen."))
-	h.w.Resize(fyne.NewSize(1440, 860))
+	q.announce(done)
 
 	out := os.Getenv("FS_SCREENSHOT")
 	if out == "1" || out == "true" {
-		out = "/tmp/fs-deliver.png"
+		out = "/tmp/fs-r2-deliver.png"
 	}
-	img := h.w.Canvas().Capture()
-	file, err := os.Create(out)
-	must(t, err)
-	defer file.Close()
-	must(t, png.Encode(file, img))
+	// The page area of a 1440x900 and a 1280x800 window (minus the app's bars).
+	shots := map[string]fyne.Size{out: {Width: 1440, Height: 900 - shellChrome},
+		strings.TrimSuffix(out, ".png") + "-1280.png": {Width: 1280, Height: 800 - shellChrome}}
+	for path, size := range shots {
+		h.w.Resize(size)
+		img := h.w.Canvas().Capture()
+		file, err := os.Create(path)
+		must(t, err)
+		must(t, png.Encode(file, img))
+		file.Close()
+	}
 }
 
 func TestQueuedJobRendersCurrentTimeline(t *testing.T) {
