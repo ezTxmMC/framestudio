@@ -173,17 +173,17 @@ func TestRenderNow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "clip.mp4")); err != nil {
 		t.Fatal(err)
 	}
-	if !j.view.open.Visible() || j.view.cancel.Visible() || !strings.Contains(j.view.result.Text, "gerendert") {
-		t.Errorf("done card: open=%v cancel=%v %q", j.view.open.Visible(), j.view.cancel.Visible(), j.view.result.Text)
+	if !q.cards[j].open.Visible() || q.cards[j].cancel.Visible() || !strings.Contains(q.cards[j].result.Text, "gerendert") {
+		t.Errorf("done card: open=%v cancel=%v %q", q.cards[j].open.Visible(), q.cards[j].cancel.Visible(), q.cards[j].result.Text)
 	}
 	var opened string
 	h.pg.openFolder = func(d string) error { opened = d; return nil }
-	test.Tap(j.view.open)
+	test.Tap(q.cards[j].open)
 	if opened != dir {
 		t.Errorf("opened %q", opened)
 	}
 	h.pg.openFolder = func(string) error { return errors.New("xdg-open fehlt") }
-	test.Tap(j.view.open)
+	test.Tap(q.cards[j].open)
 	if len(h.errs) != 1 {
 		t.Error("open failure should be reported")
 	}
@@ -212,7 +212,7 @@ func TestQueueRenderAllAndCancel(t *testing.T) {
 	if a.status != jobRunning || b.status != jobWaiting || !q.all.Disabled() {
 		t.Fatalf("statuses %v %v", a.status, b.status)
 	}
-	test.Tap(a.view.cancel)
+	test.Tap(q.cards[a].cancel)
 	h.pump(t, func() bool { return b.status >= jobDone })
 	if a.status != jobCanceled || b.status != jobDone {
 		t.Fatalf("after cancel: %v %v (%v)", a.status, b.status, b.err)
@@ -233,11 +233,11 @@ func TestQueueRenderAllAndCancel(t *testing.T) {
 	img.Close()
 	must(t, err)
 
-	test.Tap(a.view.remove)
+	test.Tap(q.cards[a].remove)
 	if len(q.jobs) != 1 {
 		t.Error("remove failed")
 	}
-	test.Tap(b.view.remove)
+	test.Tap(q.cards[b].remove)
 	if len(q.jobs) != 0 || !q.empty.Visible() {
 		t.Error("queue should be empty")
 	}
@@ -319,7 +319,7 @@ func TestScreenshot(t *testing.T) {
 	failed.err = errors.New("ffmpeg ist fehlgeschlagen: Kein Speicherplatz auf dem Gerät. Gib Speicher frei und rendere erneut.")
 	add("Showreel 2026 Audio", 6)
 	for _, j := range q.jobs {
-		j.view.refresh()
+		q.cards[j].refresh()
 	}
 	q.refresh()
 	h.pg.form.name.SetText("Showreel 2026")
@@ -358,8 +358,8 @@ func TestQueuedJobRendersCurrentTimeline(t *testing.T) {
 	must(t, h.s.Edit("verlängern", func(p *model.Project) error {
 		return p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "Mehr", 75, 25))
 	}))
-	if j := q.jobs[0]; j.frames != 100 || !strings.Contains(j.view.meta.Text, "00:00:04:00") {
-		t.Fatalf("queued job shows %d frames (%q)", j.frames, j.view.meta.Text)
+	if j := q.jobs[0]; j.frames != 100 || !strings.Contains(q.cards[j].meta.Text, "00:00:04:00") {
+		t.Fatalf("queued job shows %d frames (%q)", j.frames, q.cards[j].meta.Text)
 	}
 	q.renderAll()
 	j := q.jobs[0]
