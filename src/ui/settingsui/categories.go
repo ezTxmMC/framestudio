@@ -17,6 +17,7 @@ import (
 	"framestudio-proto/src/ui/chrome"
 	"framestudio-proto/src/ui/keymapui"
 	"framestudio-proto/src/ui/layout"
+	"framestudio-proto/src/ui/osscale"
 )
 
 // buildCategories creates every category and its fields.
@@ -172,12 +173,17 @@ func (w *window) buildCategories() []*category {
 			w.infoRefresh()
 		}
 	}
-	// Fyne multiplies FYNE_SCALE with the scale it detects and rounds to tenths: offer
-	// only factors that survive the rounding, labelled as what they are.
-	choice(w, display, "Skalierung", "Größe der Bedienoberfläche als Faktor auf die Größe, die das System vorgibt. „System“ übernimmt sie unverändert.", []option[float64]{
-		{0, "System"}, {0.8, "System × 0,8"}, {0.9, "System × 0,9"}, {1.1, "System × 1,1"}, {1.2, "System × 1,2"},
-		{1.3, "System × 1,3"}, {1.5, "System × 1,5"}, {1.8, "System × 1,8"}, {2, "System × 2"},
+	// Display.Scale: 0 follows the system, > 0 is the scale asked for (X11 / XWayland) or an
+	// extra factor on the system scale (Wayland, Windows, macOS). Fyne rounds to tenths.
+	scaleHelp := osscale.SettingHelp(osscale.Current().X11Path)
+	choice(w, display, "Skalierung", scaleHelp, []option[float64]{
+		{0, "Automatisch (wie das System)"}, {1, "100 %"}, {1.25, "125 %"}, {1.5, "150 %"}, {1.75, "175 %"}, {2, "200 %"},
 	}, func(s *settings.Settings) *float64 { return &s.Display.Scale })
+	w.number(display, "Eigene Skalierung", "Freier Wert von 50 bis 400 Prozent. 0 bedeutet automatisch.", "%", 0, 400, 0,
+		func(s settings.Settings) float64 { return math.Round(s.Display.Scale * 100) },
+		func(s *settings.Settings, v float64) { s.Display.Scale = v / 100 },
+		func(s *settings.Settings, d settings.Settings) { s.Display.Scale = d.Display.Scale },
+		numberOpts{allowed: func(v float64) bool { return v == 0 || v >= 50 }, rangeMsg: "Bitte 0 (automatisch) oder 50 bis 400 eingeben.", lazy: true})
 
 	// Monitore & Fenster
 	choice(w, monitors, "Fenstersystem", "Unter Wayland lassen sich Fenster nur im Vollbild einem Monitor zuordnen. Mit X11 (XWayland) lassen sie sich frei platzieren.", []option[string]{
@@ -186,7 +192,7 @@ func (w *window) buildCategories() []*category {
 	w.check(monitors, "Layout beim Beenden speichern", "Fenster, Monitore und Bereiche beim nächsten Start so wiederherstellen.",
 		func(s *settings.Settings) *bool { return &s.Display.SaveLayoutOnQuit })
 	startLayout := w.layoutChoice(monitors)
-	restartFields(w, "Fenstersystem", "Skalierung")
+	restartFields(w, "Fenstersystem", "Skalierung", "Eigene Skalierung")
 	ov := newMonitorOverview(w)
 	monitors.extra = ov.view
 	monitors.onShow = func() {

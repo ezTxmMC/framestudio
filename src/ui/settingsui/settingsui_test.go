@@ -362,7 +362,7 @@ func TestRestartBadgeAndBanner(t *testing.T) {
 	}
 	restarted := false
 	Restart = func() { restarted = true }
-	f.field("Skalierung").input.(*widget.Select).SetSelected("System × 1,5")
+	f.field("Skalierung").input.(*widget.Select).SetSelected("150 %")
 	if !f.w.restartBtn.Visible() || !strings.Contains(f.w.bannerText.Text, "Fenstersystem und Skalierung") {
 		t.Fatalf("banner %q", f.w.bannerText.Text)
 	}
@@ -582,5 +582,32 @@ func TestEnvOverrideInsteadOfRestartBanner(t *testing.T) {
 	}
 	if !strings.Contains(test.RenderObjectToMarkup(f.field("Skalierung").row), "Wird durch FYNE_SCALE=1.5 überschrieben") {
 		t.Fatal("row does not name the variable")
+	}
+}
+
+func TestScaleControls(t *testing.T) {
+	f := newFixture(t, "display")
+	sel := f.field("Skalierung").input.(*widget.Select)
+	if sel.Selected != "Automatisch (wie das System)" {
+		t.Fatalf("default %q", sel.Selected)
+	}
+	sel.SetSelected("125 %")
+	if settings.Get().Display.Scale != 1.25 {
+		t.Fatal("preset")
+	}
+	entry := f.field("Eigene Skalierung").input.(*commitEntry)
+	entry.SetText("175")
+	entry.onLeave()
+	if settings.Get().Display.Scale != 1.75 {
+		t.Fatalf("custom %v", settings.Get().Display.Scale)
+	}
+	entry.SetText("20")
+	entry.onLeave()
+	if settings.Get().Display.Scale != 1.75 {
+		t.Fatal("out of range must be refused")
+	}
+	sel.SetSelected("Automatisch (wie das System)")
+	if settings.Get().Display.Scale != 0 {
+		t.Fatal("automatic is 0")
 	}
 }

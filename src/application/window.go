@@ -2,6 +2,7 @@ package application
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"syscall"
 
@@ -12,6 +13,7 @@ import (
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/liveaudio"
+	"framestudio-proto/src/ui/osscale"
 	"framestudio-proto/src/ui/settingsui"
 	"framestudio-proto/src/ui/shell"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -30,7 +32,11 @@ func Run(files []string) {
 	// (a restart passes the environment on without the derived ones, see RestartEnv).
 	settingsui.SetEnvOverrides(EnvOverrides(os.Getenv))
 	settingsui.SetStartupWarning(StartWarning(s, os.Getenv))
-	applyEnv(StartEnv(s, os.Getenv))
+	env, rep := planStart(s, os.Getenv)
+	applyEnv(env)
+	osscale.SetReport(rep)
+	log.Printf("Skalierung: %s, System %s (%s), Einstellung %v, FYNE_SCALE=%q", rep.GOOS,
+		osscale.Percent(rep.OS.Scale), rep.OS.Source.Label(), rep.Setting, os.Getenv(envScale))
 	settingsui.SetStartup(s)
 	if loadErr != nil {
 		settingsui.SetStartupError(loadErr)

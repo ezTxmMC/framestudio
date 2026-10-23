@@ -20,10 +20,10 @@ import (
 	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/display"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/osscale"
 	"framestudio-proto/src/ui/settingsui"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/winchrome"
-	"framestudio-proto/src/ui/workspace"
 )
 
 // shortcut is one line of the help dialog. Keys lists alternatives separated by " | ";
@@ -189,7 +189,13 @@ func (sh *Shell) diagnostics() [][2]string {
 	if platform == "" {
 		platform = sessionType()
 	}
-	add("Fenstersystem", workspace.PlatformName(platform))
+	live := display.LiveScale(sh.win.Canvas())
+	if live.Platform == "" {
+		live.Platform = platform
+	}
+	rep := osscale.Current()
+	rep.WaylandSession = rep.WaylandSession || sessionType() == "wayland"
+	rows = append(rows, osscale.Rows(rep, live)...)
 	_, chromeText := winchrome.Describe(settings.Get().Display)
 	add("Eigene Titelleiste", chromeText)
 	add("Fensterknöpfe", settings.Get().Display.WindowButtons+" → "+winchrome.Style(settings.Get().Display))
@@ -220,6 +226,9 @@ func (sh *Shell) diagnostics() [][2]string {
 		v := fmt.Sprintf("%d×%d bei %d,%d", m.W, m.H, m.X, m.Y)
 		if m.Refresh > 0 {
 			v += fmt.Sprintf(" · %d Hz", m.Refresh)
+		}
+		if m.Scale > 0 && m.Scale != 1 {
+			v += fmt.Sprintf(" · Skalierung %s", osscale.Percent(float64(m.Scale)))
 		}
 		if m.Primary {
 			v += " · Hauptmonitor"
