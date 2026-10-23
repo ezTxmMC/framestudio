@@ -18,11 +18,44 @@ import (
 	"framestudio-proto/src/ui/viewer"
 )
 
-// Panel widths of the settings (left) and queue (right) columns.
+// Panel widths of the settings (left) and queue (right) columns. The queue narrows
+// down to minQueueWidth on small windows so the monitor and its transport keep room.
 const (
 	settingsWidth = 340
 	queueWidth    = 360
+	minQueueWidth = 300
+	columnGap     = 4
 )
+
+// columnsLayout places settings, monitor and queue side by side.
+type columnsLayout struct{}
+
+func (columnsLayout) widths(total float32) (left, right float32) {
+	right = min(queueWidth, max(minQueueWidth, total/4))
+	return settingsWidth, right
+}
+
+func (l columnsLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	if len(objs) != 3 {
+		return
+	}
+	lw, rw := l.widths(size.Width)
+	cw := max(size.Width-lw-rw-2*columnGap, 0)
+	objs[0].Move(fyne.NewPos(0, 0))
+	objs[0].Resize(fyne.NewSize(lw, size.Height))
+	objs[1].Move(fyne.NewPos(lw+columnGap, 0))
+	objs[1].Resize(fyne.NewSize(cw, size.Height))
+	objs[2].Move(fyne.NewPos(lw+cw+2*columnGap, 0))
+	objs[2].Resize(fyne.NewSize(rw, size.Height))
+}
+
+func (l columnsLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	h := float32(0)
+	for _, o := range objs {
+		h = max(h, o.MinSize().Height)
+	}
+	return fyne.NewSize(settingsWidth+minQueueWidth+objs[1].MinSize().Width+2*columnGap, h)
+}
 
 // Page is the Resolve-style render page: settings, program monitor and render queue.
 type Page struct {
@@ -32,6 +65,11 @@ type Page struct {
 	do func(f func())
 	// openFolder shows a folder in the file manager.
 	openFolder func(dir string) error
+	// sendNotification posts a desktop notification.
+	sendNotification func(*fyne.Notification)
+	// toast shows a short message in the window on every page; set by the app shell
+	// through SetToast. Nil leaves only the desktop notification and the queue status.
+	toast func(title, message string, failed bool)
 
 	root     fyne.CanvasObject
 	form     *settingsForm
@@ -55,6 +93,24 @@ func newPage(ctx *page.Context) *Page {
 			go cmd.Wait() // reap the child so it does not linger as a zombie
 			return nil
 		},
+		sendNotification: func(n *fyne.Notification) {
+			if a := fyne.CurrentApp(); a != nil {
+				a.SendNotification(n)
+			}
+		},
+	}
+}
+
+// SetToast connects the in-window toast of the app shell, used when a job finishes.
+func (p *Page) SetToast(show func(title, message string, failed bool)) { p.toast = show }
+
+// notify reports a finished or failed job on the desktop and in the window.
+func (p *Page) notify(title, message string, failed bool) {
+	if p.sendNotification != nil {
+		p.sendNotification(fyne.NewNotification(title, message))
+	}
+	if p.toast != nil {
+		p.toast(title, message, failed)
 	}
 }
 
@@ -74,9 +130,7 @@ func (p *Page) Content() fyne.CanvasObject {
 	center := kit.Panel("Programm", container.NewPadded(p.duration),
 		container.NewBorder(nil, bottom, nil, nil, monitor))
 
-	left := withWidth(settingsWidth, p.form.content)
-	right := withWidth(queueWidth, p.queue.content)
-	p.root = container.NewPadded(container.NewBorder(nil, nil, left, right, center))
+	p.root = container.NewPadded(container.New(columnsLayout{}, p.form.content, center, p.queue.content))
 
 	p.unsub = p.ctx.Session.Subscribe(p.sessionChanged)
 	p.form.refreshProject()

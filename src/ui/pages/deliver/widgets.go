@@ -200,13 +200,13 @@ func (r *presetRow) CreateRenderer() fyne.WidgetRenderer {
 	iconBox := container.New(fixedWidth{18}, r.icon)
 	left := container.NewHBox(r.bar, iconBox)
 	body := container.NewBorder(nil, nil, left, vcenter(r.spec), vcenter(r.name))
-	padded := container.New(layout.NewCustomPaddedLayout(5, 5, 0, 8), body)
+	padded := container.New(layout.NewCustomPaddedLayout(4, 4, 0, 8), body)
 	return widget.NewSimpleRenderer(container.NewStack(r.bg, padded))
 }
 
-// segmented is a row of mutually exclusive buttons; the active one is steel.
+// segmented is a compact row of mutually exclusive choices; the active one is steel.
 type segmented struct {
-	buttons []*widget.Button
+	cells   []*segment
 	values  []string
 	value   string
 	content fyne.CanvasObject
@@ -218,24 +218,185 @@ func newSegmented(labels, values []string, changed func(string)) *segmented {
 	var objs []fyne.CanvasObject
 	for i, l := range labels {
 		v := values[i]
-		b := widget.NewButton(l, func() { s.Set(v); s.changed(v) })
-		s.buttons = append(s.buttons, b)
-		objs = append(objs, b)
+		c := newSegment(l, func() {
+			s.Set(v)
+			s.changed(v)
+		})
+		s.cells = append(s.cells, c)
+		objs = append(objs, c)
 	}
-	s.content = container.NewGridWithColumns(len(objs), objs...)
+	frame := canvas.NewRectangle(studiotheme.Lane)
+	frame.CornerRadius = 4
+	frame.StrokeColor = studiotheme.Border
+	frame.StrokeWidth = 1
+	s.content = container.NewStack(frame, container.New(layout.NewCustomPaddedLayout(2, 2, 2, 2),
+		container.New(layout.NewGridLayoutWithColumns(len(objs)), objs...)))
 	return s
 }
 
 func (s *segmented) Set(v string) {
 	s.value = v
-	for i, b := range s.buttons {
-		if s.values[i] == v {
-			b.Importance = widget.HighImportance
-		} else {
-			b.Importance = widget.MediumImportance
-		}
-		b.Refresh()
+	for i, c := range s.cells {
+		c.setActive(s.values[i] == v)
 	}
+}
+
+// segment is one cell of a segmented control.
+type segment struct {
+	widget.BaseWidget
+	bg      *canvas.Rectangle
+	label   *canvas.Text
+	active  bool
+	hovered bool
+	onTap   func()
+}
+
+func newSegment(label string, tap func()) *segment {
+	c := &segment{bg: canvas.NewRectangle(color.Transparent), label: smallText(label, studiotheme.Muted, 12), onTap: tap}
+	c.bg.CornerRadius = 3
+	c.label.Alignment = fyne.TextAlignCenter
+	c.ExtendBaseWidget(c)
+	return c
+}
+
+func (c *segment) setActive(on bool) {
+	c.active = on
+	c.restyle()
+}
+
+func (c *segment) restyle() {
+	switch {
+	case c.active:
+		c.bg.FillColor = studiotheme.Steel
+		c.label.Color = color.White
+		c.label.TextStyle.Bold = true
+	case c.hovered:
+		c.bg.FillColor = color.NRGBA{0xFF, 0xFF, 0xFF, 0x0C}
+		c.label.Color = studiotheme.Text
+		c.label.TextStyle.Bold = false
+	default:
+		c.bg.FillColor = color.Transparent
+		c.label.Color = studiotheme.Muted
+		c.label.TextStyle.Bold = false
+	}
+	c.bg.Refresh()
+	c.label.Refresh()
+}
+
+func (c *segment) CreateRenderer() fyne.WidgetRenderer {
+	c.restyle()
+	return widget.NewSimpleRenderer(container.NewStack(c.bg,
+		container.New(layout.NewCustomPaddedLayout(5, 5, 6, 6), c.label)))
+}
+
+func (c *segment) Tapped(*fyne.PointEvent) {
+	if c.onTap != nil {
+		c.onTap()
+	}
+}
+
+func (c *segment) Cursor() desktop.Cursor         { return desktop.PointerCursor }
+func (c *segment) MouseIn(*desktop.MouseEvent)    { c.hovered = true; c.restyle() }
+func (c *segment) MouseMoved(*desktop.MouseEvent) {}
+func (c *segment) MouseOut()                      { c.hovered = false; c.restyle() }
+
+// collapsible is a section heading that shows and hides its body (the "Erweitert"
+// accordion). The heading shows a one-line summary of the hidden settings.
+type collapsible struct {
+	widget.BaseWidget
+	icon    *widget.Icon
+	title   *canvas.Text
+	summary *canvas.Text
+	body    fyne.CanvasObject
+	open    bool
+	onTog   func()
+}
+
+func newCollapsible(title string, body fyne.CanvasObject, toggled func()) *collapsible {
+	c := &collapsible{icon: widget.NewIcon(theme.MenuExpandIcon()), title: smallText(title, studiotheme.Faint, 11),
+		summary: smallText("", studiotheme.Faint, 11), body: body, onTog: toggled}
+	c.title.TextStyle = fyne.TextStyle{Bold: true}
+	c.summary.Alignment = fyne.TextAlignTrailing
+	body.Hide()
+	c.ExtendBaseWidget(c)
+	return c
+}
+
+// setOpen shows or hides the body.
+func (c *collapsible) setOpen(on bool) {
+	if c.open == on {
+		return
+	}
+	c.open = on
+	if on {
+		c.icon.SetResource(theme.MenuDropDownIcon())
+		c.body.Show()
+		c.summary.Hide()
+	} else {
+		c.icon.SetResource(theme.MenuExpandIcon())
+		c.body.Hide()
+		c.summary.Show()
+	}
+	if c.onTog != nil {
+		c.onTog()
+	}
+}
+
+func (c *collapsible) setSummary(s string) {
+	if c.summary.Text != s {
+		c.summary.Text = s
+		c.summary.Refresh()
+	}
+}
+
+func (c *collapsible) CreateRenderer() fyne.WidgetRenderer {
+	icon := container.New(fixedSize{fyne.NewSquareSize(14)}, c.icon)
+	row := container.NewBorder(nil, nil, container.NewHBox(vcenter(icon), vcenter(c.title)), nil, vcenter(c.summary))
+	return widget.NewSimpleRenderer(container.New(layout.NewCustomPaddedLayout(8, 2, 0, 0), row))
+}
+
+func (c *collapsible) Tapped(*fyne.PointEvent) { c.setOpen(!c.open) }
+func (c *collapsible) Cursor() desktop.Cursor  { return desktop.PointerCursor }
+
+// fixedSize gives its objects one fixed size.
+type fixedSize struct{ size fyne.Size }
+
+func (f fixedSize) Layout(objs []fyne.CanvasObject, _ fyne.Size) {
+	for _, o := range objs {
+		o.Move(fyne.NewPos(0, 0))
+		o.Resize(f.size)
+	}
+}
+
+func (f fixedSize) MinSize([]fyne.CanvasObject) fyne.Size { return f.size }
+
+// labelledColumns lays out pairs of small top labels and controls side by side; the
+// first column gets ratio of the width.
+type labelledColumns struct{ ratio float32 }
+
+func (l labelledColumns) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	if len(objs) != 2 {
+		return
+	}
+	const gap = 8
+	w0 := (size.Width - gap) * l.ratio
+	objs[0].Move(fyne.NewPos(0, 0))
+	objs[0].Resize(fyne.NewSize(w0, size.Height))
+	objs[1].Move(fyne.NewPos(w0+gap, 0))
+	objs[1].Resize(fyne.NewSize(size.Width-w0-gap, size.Height))
+}
+
+func (l labelledColumns) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	h := float32(0)
+	for _, o := range objs {
+		h = max(h, o.MinSize().Height)
+	}
+	return fyne.NewSize(0, h)
+}
+
+// stacked is a small muted label above a control.
+func stacked(label string, control fyne.CanvasObject) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedVBoxLayout(2), smallText(label, studiotheme.Muted, 11), control)
 }
 
 // frameCount is the number of timeline frames an export covers.

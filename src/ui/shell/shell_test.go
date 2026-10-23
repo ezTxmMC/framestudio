@@ -16,6 +16,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/store"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -309,9 +310,9 @@ func TestKeyRoutingToActivePage(t *testing.T) {
 	}
 	sh.togglePlay()
 
-	sh.trackShift("LeftShift", true)
+	sh.modifiers = func() fyne.KeyModifier { return fyne.KeyModifierShift }
 	sh.typedKey(&fyne.KeyEvent{Name: fyne.Key4})
-	sh.trackShift("LeftShift", false)
+	sh.modifiers = func() fyne.KeyModifier { return 0 }
 	if sh.active.current != page.Audio || len(edit0.keys) != 2 {
 		// Space reached the edit page before falling back.
 		t.Fatalf("Shift+4 should open Ton, got %s", sh.active.current)
@@ -476,8 +477,14 @@ func TestScreenshot(t *testing.T) {
 	}
 	store.AddRecent(paths[2])
 	store.AddRecent(paths[0])
+	q := kit.UseUIQueue(t)
+	sh.thumbnails = true
 	sh.Start(nil)
-	capture(t, w, "/tmp/fs-manager.png")
+	q.Until(func() bool { return len(sh.mgr.thumbJobs()) == 0 }, 20*time.Second)
+	sh.thumbnails = false
+	w.Resize(fyne.NewSize(1440, 900))
+	capture(t, w, "/tmp/fs-r2-manager.png")
+	w.Resize(fyne.NewSize(1440, 860))
 	if os.Getenv("FS_SCREENSHOT") == "all" {
 		sh.newProjectDialog()
 		capture(t, w, "/tmp/fs-newproject.png")
@@ -488,11 +495,12 @@ func TestScreenshot(t *testing.T) {
 	_ = sh.OpenFile(paths[1])
 	edit(t, sh)
 	sh.activateIndex(0)
+	sh.toast.show("Export fertig", "„Imagefilm Stadtwerke.mp4“ wurde in 1:34 gerendert (48,3 MB).", false)
 	capture(t, w, "/tmp/fs-shell.png")
-	if os.Getenv("FS_SCREENSHOT") == "all" {
-		sh.showShortcuts()
-		capture(t, w, "/tmp/fs-shortcuts.png")
-	}
+	sh.toast.hide()
+	w.Resize(fyne.NewSize(1440, 900))
+	sh.showShortcuts()
+	capture(t, w, "/tmp/fs-r2-help.png")
 }
 
 // busyPage is a deliver page stand-in with an export running.

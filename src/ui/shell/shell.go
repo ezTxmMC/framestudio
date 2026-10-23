@@ -47,7 +47,10 @@ func Run(a fyne.App, files []string) {
 	stop := sh.StartAutosave(autosaveInterval)
 	w.ShowAndRun()
 	stop()
-	sh.cache.Close() // stops background ffmpeg decoders
+	// Quit normally released everything already (exports and previews, then audio); if
+	// the run loop ended another way, do it now, then stop the decoders shared by all.
+	sh.releaseAll()
+	sh.cache.Close()
 }
 
 // pageDef describes a workspace page in page bar order.
@@ -103,10 +106,12 @@ type Shell struct {
 	content     *fyne.Container
 	bars        *bars
 	mgr         *manager
+	toast       *toaster
 	showManager bool
 
 	menu          *menus
-	shift         bool
+	modifiers     func() fyne.KeyModifier         // modifiers held with the current key event
+	shortcuts     map[string]func()               // window shortcuts by ShortcutName, for tests
 	pendingAnswer func(choice)                    // open save prompt, for tests
 	confirmHook   func(message string, ok func()) // tests answer busy prompts
 
@@ -122,7 +127,7 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	cache := media.NewCache()
 	sh := &Shell{
 		app: a, win: w, cache: cache, renderer: render.New(cache),
-		pageDefs: defaultPages(), now: time.Now, closeWindow: w.Close,
+		pageDefs: defaultPages(), now: time.Now, closeWindow: w.Close, modifiers: heldModifiers,
 		saves: newSaveLog(),
 	}
 	sh.drivePlayback = func(s *session.Session) func() {
@@ -138,6 +143,7 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh.workspace = container.NewBorder(sh.bars.top, sh.bars.bottom, nil, nil, sh.content)
 	sh.mgr = newManager(sh)
 	sh.root = container.NewStack()
+	sh.toast = newToaster()
 	w.SetPadded(false)
 	w.SetContent(sh.root)
 	sh.menu = newMenus(sh)
@@ -343,6 +349,9 @@ func (sh *Shell) ensurePage(p *project, id string) page.Page {
 	pg := d.New(p.ctx)
 	p.pages[id] = pg
 	p.contents[id] = pg.Content()
+	if t, ok := pg.(toastUser); ok {
+		t.SetToast(sh.toast.show)
+	}
 	return pg
 }
 
@@ -365,7 +374,7 @@ func (sh *Shell) deactivatePage(p *project) {
 func (sh *Shell) showWorkspace() {
 	sh.mgr.cancelThumbnails()
 	sh.showManager = false
-	sh.root.Objects = []fyne.CanvasObject{sh.workspace}
+	sh.root.Objects = []fyne.CanvasObject{sh.workspace, sh.toast.layer}
 	sh.root.Refresh()
 }
 
@@ -377,7 +386,7 @@ func (sh *Shell) ShowManager() {
 	}
 	sh.showManager = true
 	sh.mgr.reload()
-	sh.root.Objects = []fyne.CanvasObject{sh.mgr.view}
+	sh.root.Objects = []fyne.CanvasObject{sh.mgr.view, sh.toast.layer}
 	sh.root.Refresh()
 	sh.refreshChrome()
 }

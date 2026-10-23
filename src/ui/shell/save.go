@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -244,23 +245,32 @@ func (sh *Shell) quitSaved() {
 	})
 }
 
-// shutdown releases all projects, gives cancelled exports and previews a moment to
-// remove their partial files and players, and closes the window.
+// shutdown releases all projects and closes the window.
 func (sh *Shell) shutdown() {
+	sh.releaseAll()
+	sh.closeWindow()
+}
+
+// releaseAll stops the background work of every open project in dependency order:
+// first the pages (exports, previews, viewers), giving cancelled exports a moment to
+// remove partial files; then each project's live audio engine. The shared media cache
+// is closed last, by Run, after the window is gone. Safe to call twice.
+func (sh *Shell) releaseAll() {
+	sh.mgr.cancelThumbnails()
+	sh.toast.stopTimer()
+	ps := slices.Clone(sh.projects)
 	var waiters []page.Waiter
-	for _, p := range slices.Clone(sh.projects) {
-		for _, pg := range p.pages {
-			if w, ok := pg.(page.Waiter); ok {
-				waiters = append(waiters, w)
-			}
-		}
-		sh.closeNowQuiet(p)
+	for _, p := range ps {
+		waiters = append(waiters, sh.closePages(p)...)
 	}
 	deadline := time.Now().Add(shutdownWait)
 	for _, w := range waiters {
 		w.Wait(max(time.Until(deadline), 0))
 	}
-	sh.closeWindow()
+	for _, p := range ps {
+		sh.release(p)
+	}
+	sh.active = nil
 }
 
 // shutdownWait bounds how long quitting waits for background cleanup.
@@ -268,14 +278,31 @@ const shutdownWait = 3 * time.Second
 
 // closeNowQuiet releases p without switching tabs or showing the manager.
 func (sh *Shell) closeNowQuiet(p *project) {
-	for _, pg := range p.pages {
+	sh.closePages(p)
+	sh.release(p)
+}
+
+// closePages closes p's pages (cancelling exports and previews) and its media decodes,
+// and returns the pages that finish cleanup in the background.
+func (sh *Shell) closePages(p *project) []page.Waiter {
+	var waiters []page.Waiter
+	for _, id := range slices.Sorted(maps.Keys(p.pages)) {
+		pg := p.pages[id]
 		pg.Close()
+		if w, ok := pg.(page.Waiter); ok {
+			waiters = append(waiters, w)
+		}
 	}
 	if sh.findOtherUser(p) == nil {
 		for _, m := range p.sess.Project.Media {
 			sh.cache.Cancel(m.ID) // stop its thumbnail and waveform decodes
 		}
 	}
+	return waiters
+}
+
+// release stops p's playback clock and audio engine and drops the tab.
+func (sh *Shell) release(p *project) {
 	p.stopPlay()
 	p.unsub()
 	sh.projects = slices.DeleteFunc(sh.projects, func(q *project) bool { return q == p })

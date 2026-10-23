@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -56,6 +57,7 @@ type settingsForm struct {
 	sumAudio, sumTime *canvas.Text
 	lastIn, lastOut   int
 	formBox, body     *fyne.Container
+	advanced          *collapsible
 	scroll            *container.Scroll
 	errText           *widget.Label
 	errBox            fyne.CanvasObject
@@ -134,25 +136,36 @@ func newSettingsForm(pg *Page) *settingsForm {
 	sum := func() *canvas.Text { return kit.MonoText("", studiotheme.Text, 11) }
 	f.sumPath, f.sumVideo, f.sumAudio, f.sumTime = sum(), sum(), sum(), sum()
 
-	f.formBox = container.NewVBox(
-		section("Voreinstellung"), presetList,
-		section("Datei"),
-		formRow("Dateiname", nameRow),
-		formRow("Ordner", folderRow),
-		section("Video"),
-		formRow("Format", f.format),
-		formRow("Auflösung", f.res),
-		f.customRow,
-		formRow("Qualität", f.quality.content),
-		section("Bereich und Audio"),
+	// Auflösung and Qualität share one row; range and audio, rarely changed, sit in the
+	// collapsed "Erweitert" section whose heading summarises them.
+	sizeRow := container.New(labelledColumns{ratio: 0.54},
+		stacked("Auflösung", f.res), stacked("Qualität", f.quality.content))
+	advanced := container.NewVBox(
 		formRow("Bereich", f.rng),
 		formRow("", f.rangeInfo),
 		formRow("", f.audio),
-		section("Ausgabe"),
-		summaryRow("Ziel", f.sumPath),
-		summaryRow("Video", f.sumVideo),
-		summaryRow("Audio", f.sumAudio),
-		summaryRow("Dauer", f.sumTime),
+	)
+	f.advanced = newCollapsible("ERWEITERT", advanced, func() {
+		if f.formBox != nil {
+			f.formBox.Refresh()
+		}
+	})
+	f.formBox = container.New(layout.NewCustomPaddedVBoxLayout(4),
+		section("VOREINSTELLUNG"), presetList,
+		section("DATEI"),
+		formRow("Dateiname", nameRow),
+		formRow("Ordner", folderRow),
+		section("VIDEO"),
+		formRow("Format", f.format),
+		sizeRow,
+		f.customRow,
+		f.advanced, advanced,
+		section("AUSGABE"),
+		container.New(layout.NewCustomPaddedVBoxLayout(1),
+			summaryRow("Ziel", f.sumPath),
+			summaryRow("Video", f.sumVideo),
+			summaryRow("Audio", f.sumAudio),
+			summaryRow("Dauer", f.sumTime)),
 	)
 	f.scroll = container.NewVScroll(f.formBox)
 	f.body = container.NewBorder(nil, container.NewVBox(f.errBox, f.addBtn, f.renderBtn), nil, nil, f.scroll)
@@ -267,6 +280,9 @@ func (f *settingsForm) updateSummary() {
 			t.Refresh()
 		}
 	}
+	if f.advanced != nil {
+		f.advanced.setSummary(f.advancedSummary())
+	}
 	o, err := f.options()
 	if err != nil {
 		set(f.sumPath, "Angaben unvollständig")
@@ -281,6 +297,20 @@ func (f *settingsForm) updateSummary() {
 	set(f.sumVideo, videoSummary(o, s.FPS()))
 	set(f.sumAudio, audioSummary(o))
 	set(f.sumTime, fmt.Sprintf("%s · %d Frames", s.Project.Timecode(n), n))
+}
+
+// advancedSummary describes the collapsed "Erweitert" settings, e.g.
+// "Gesamte Timeline · mit Audio".
+func (f *settingsForm) advancedSummary() string {
+	rng := f.rng.Selected
+	if rng == "" {
+		rng = rangeAll
+	}
+	audio := "ohne Audio"
+	if f.audio.Checked {
+		audio = "mit Audio"
+	}
+	return rng + " · " + audio
 }
 
 func (f *settingsForm) currentFormat() export.Format {

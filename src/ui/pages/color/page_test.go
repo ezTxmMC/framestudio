@@ -344,18 +344,19 @@ func TestScopesFromViewerFrames(t *testing.T) {
 
 func TestScreenshot(t *testing.T) {
 	if os.Getenv("FS_SCREENSHOT") == "" {
-		t.Skip("set FS_SCREENSHOT to write /tmp/fs-color.png")
+		t.Skip("set FS_SCREENSHOT to write /tmp/fs-r2-color.png")
 	}
 	f := newFixture(t)
+	f.w.Resize(fyne.NewSize(1440, 900))
 	f.p.Activate()
-	f.s.SelectClip(f.colr)
+	f.s.SelectClips([]string{f.title, f.img, f.colr})
 	f.p.primary.rows[0].slider.SetValue(0.18)
 	f.p.primary.rows[3].slider.SetValue(-0.32)
 	f.p.primary.rows[5].slider.SetValue(0.4)
 	test.Tap(f.p.primary.copyBtn)
 	f.p.setScope(scopeWaveform)
 	f.p.onFrame(testFrame(640, 360))
-	out, err := os.Create("/tmp/fs-color.png")
+	out, err := os.Create("/tmp/fs-r2-color.png")
 	if err != nil {
 		t.Fatal(err)
 	}

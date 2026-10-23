@@ -71,11 +71,15 @@ const (
 // clipCard is one tappable thumbnail card of the clip strip.
 type clipCard struct {
 	widget.BaseWidget
-	OnTapped func()
+	// OnTapped receives the modifier keys held when the click started (Ctrl toggles,
+	// Shift extends the selection).
+	OnTapped func(mods fyne.KeyModifier)
 
 	entry    stripClip
 	selected bool
+	primary  bool // the selected clip the grade panel shows
 	hovered  bool
+	mods     fyne.KeyModifier
 
 	bg, frame  *canvas.Rectangle
 	thumbBG    *canvas.Rectangle
@@ -91,7 +95,7 @@ type clipCard struct {
 	content    fyne.CanvasObject
 }
 
-func newClipCard(tap func()) *clipCard {
+func newClipCard(tap func(fyne.KeyModifier)) *clipCard {
 	c := &clipCard{OnTapped: tap}
 	c.bg = canvas.NewRectangle(studiotheme.Raised)
 	c.bg.CornerRadius = 4
@@ -140,10 +144,16 @@ func (c *clipCard) MinSize() fyne.Size {
 }
 
 func (c *clipCard) Tapped(*fyne.PointEvent) {
+	mods := c.mods
+	c.mods = 0
 	if c.OnTapped != nil {
-		c.OnTapped()
+		c.OnTapped(mods)
 	}
 }
+
+// MouseDown remembers the modifiers of the click; Tapped follows on release.
+func (c *clipCard) MouseDown(e *desktop.MouseEvent) { c.mods = e.Modifier }
+func (c *clipCard) MouseUp(*desktop.MouseEvent)     {}
 
 func (c *clipCard) MouseIn(*desktop.MouseEvent)    { c.hovered = true; c.applyState() }
 func (c *clipCard) MouseMoved(*desktop.MouseEvent) {}
@@ -194,18 +204,26 @@ func (c *clipCard) set(n int, e stripClip, fps int, thumb image.Image, mediaMiss
 	c.Refresh()
 }
 
-func (c *clipCard) setSelected(on bool) {
-	if c.selected != on {
-		c.selected = on
+// setSelected marks the card as part of the selection; primary is the clip being graded.
+func (c *clipCard) setSelected(on, primary bool) {
+	primary = on && primary
+	if c.selected != on || c.primary != primary {
+		c.selected, c.primary = on, primary
 		c.applyState()
 	}
 }
 
 func (c *clipCard) applyState() {
+	c.frame.StrokeWidth = 2
 	switch {
-	case c.selected:
+	case c.primary:
 		c.frame.StrokeColor = studiotheme.Steel
 		c.bg.FillColor = color.NRGBA{0x2F, 0x37, 0x46, 0xFF}
+		c.number.Color = studiotheme.Text
+	case c.selected: // also selected, not the one in the grade panel
+		c.frame.StrokeColor = color.NRGBA{studiotheme.Steel.R, studiotheme.Steel.G, studiotheme.Steel.B, 0x90}
+		c.frame.StrokeWidth = 1
+		c.bg.FillColor = color.NRGBA{0x2A, 0x30, 0x3B, 0xFF}
 		c.number.Color = studiotheme.Text
 	case c.hovered:
 		c.frame.StrokeColor = studiotheme.Faint
