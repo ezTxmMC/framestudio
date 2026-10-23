@@ -1,6 +1,7 @@
 package application
 
 import (
+	"math"
 	"os"
 	"runtime"
 	"slices"
@@ -86,11 +87,19 @@ func effectiveWindowSystem(getenv func(string) string, env map[string]string) st
 // FYNE_SCALE and Fyne's own guess is switched off, always together. On native Wayland,
 // Windows and macOS Fyne already follows the system; Display.Scale is an extra factor.
 func planScale(s settings.Settings, getenv func(string) string, env map[string]string) osscale.Report {
-	rep := osscale.Report{GOOS: goos, Setting: s.Display.Scale, UserEnv: getenv(envScale),
+	s.Display.Scale = clampSetting(s.Display.Scale)
+	userEnv := getenv(envScale)
+	rep := osscale.Report{GOOS: goos, Setting: s.Display.Scale, UserEnv: userEnv,
 		WaylandSession: osscale.WaylandSession(getenv), OS: osscale.Result{Scale: 1}}
 	x11 := goos == "linux" && effectiveWindowSystem(getenv, env) == "x11"
 	rep.X11Path = x11
-	if rep.UserEnv != "" {
+	if x11 && strings.EqualFold(strings.TrimSpace(userEnv), "auto") {
+		// "auto" is Fyne's own monitor-size guess, which is wrong on X11/XWayland:
+		// treat it like unset so the desktop scale is used
+		rep.UserEnv = ""
+		userEnv = ""
+	}
+	if userEnv != "" {
 		return rep
 	}
 	if x11 {
@@ -110,6 +119,15 @@ func planScale(s settings.Settings, getenv func(string) string, env map[string]s
 		env[envScale] = osscale.Format(rep.Wanted)
 	}
 	return rep
+}
+
+// clampSetting makes a hand-edited Display.Scale usable: not a number or <= 0 is
+// automatic (0), below 0.5 is raised to 0.5, above 4 lowered to 4.
+func clampSetting(v float64) float64 {
+	if math.IsNaN(v) || v <= 0 {
+		return 0
+	}
+	return min(max(v, 0.5), 4)
 }
 
 // wantedPlatform is the window system the settings force ("" = automatic).

@@ -142,3 +142,33 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestPlanScaleClampAndAuto(t *testing.T) {
+	old := goos
+	goos = "linux"
+	defer func() { goos = old }()
+	x := func(k string) string {
+		if k == "DISPLAY" {
+			return ":0"
+		}
+		return ""
+	}
+	var s settings.Settings
+	s.Display.Scale = 0.01
+	env := map[string]string{}
+	planScale(s, x, env)
+	if env[envScale] != "0.5" {
+		t.Fatalf("tiny setting: %q", env[envScale])
+	}
+	auto := func(k string) string {
+		if k == envScale {
+			return "auto"
+		}
+		return x(k)
+	}
+	env = map[string]string{}
+	planScale(settings.Settings{}, auto, env)
+	if env[envScale] == "" || env[envNoDPI] != "1" {
+		t.Fatalf("auto not replaced: %v", env)
+	}
+}

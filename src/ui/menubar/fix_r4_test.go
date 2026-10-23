@@ -28,16 +28,16 @@ func TestPaletteShowsToggleState(t *testing.T) {
 	h := newHarness(t)
 	p := showPalette(h.w, h.reg)
 	r := paletteRowOf(t, p, "timeline.snapping")
-	if r.check != nil || r.box == nil {
-		t.Fatal("snapping is off: expected an empty box")
+	if r.check != nil {
+		t.Fatal("snapping is off: expected no mark")
 	}
 	p.close()
 	h.snap = true
 	p = showPalette(h.w, h.reg)
-	if r := paletteRowOf(t, p, "timeline.snapping"); r.check == nil || r.box != nil {
+	if r := paletteRowOf(t, p, "timeline.snapping"); r.check == nil {
 		t.Fatal("snapping is on: expected a check mark")
 	}
-	if r := paletteRowOf(t, p, "file.save"); r.check != nil || r.box != nil {
+	if r := paletteRowOf(t, p, "file.save"); r.check != nil {
 		t.Fatal("plain actions show no state")
 	}
 	p.close()

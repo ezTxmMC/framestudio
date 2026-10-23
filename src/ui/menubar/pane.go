@@ -118,7 +118,9 @@ type pane struct {
 	widget.BaseWidget
 	src   func() []row
 	scale float32
-	maxH  float32 // available height (0: unlimited); a taller pane scrolls
+	maxW  float32  // available width (0: unlimited); long labels are shortened
+	disp  []string // labels as shown (shortened to fit maxW)
+	maxH  float32  // available height (0: unlimited); a taller pane scrolls
 	rows  []row
 	tops  []float32 // row tops in pane coordinates
 	hover int       // current row (mouse or keyboard), -1 none
@@ -133,11 +135,11 @@ type pane struct {
 	vis    []vis
 }
 
-func newPane(src func() []row, scale, maxH float32) *pane {
+func newPane(src func() []row, scale, maxH, maxW float32) *pane {
 	if scale <= 0 {
 		scale = 1
 	}
-	p := &pane{src: src, scale: scale, maxH: maxH, hover: -1, sub: -1}
+	p := &pane{src: src, scale: scale, maxH: maxH, maxW: maxW, hover: -1, sub: -1}
 	p.ExtendBaseWidget(p)
 	p.reload()
 	return p
@@ -189,10 +191,24 @@ func (p *pane) measure() {
 			}
 		}
 	}
-	w := st.PanePad + st.PadSide + st.IconCol + st.IconGap + lw + st.LabelGap + sw +
+	fixed := st.PanePad + st.PadSide + st.IconCol + st.IconGap + st.LabelGap + sw +
 		st.ShortcutGap + st.ArrowCol + st.PadSide + st.PanePad
+	w := fixed + lw
 	if w < st.MinPaneW {
 		w = st.MinPaneW
+	}
+	p.disp = make([]string, len(p.rows))
+	for i, r := range p.rows {
+		p.disp[i] = r.label
+	}
+	if p.maxW > 0 && w > p.maxW {
+		w = p.maxW
+		avail := w - fixed
+		for i, r := range p.rows {
+			if !r.sep {
+				p.disp[i] = ellipsize(r.label, st.LabelSize, avail)
+			}
+		}
 	}
 	w = float32(math.Ceil(float64(w*p.scale)-1e-3)) / p.scale
 	p.cont = y + st.PanePad
@@ -329,7 +345,7 @@ func (p *pane) build() {
 			v.icon.Move(fyne.NewPos(p.snap(iconCx-st.IconSize/2), p.snap(cy-st.IconSize/2)))
 			objs = append(objs, v.icon)
 		}
-		v.lbl = canvas.NewText(r.label, studiotheme.MenuText)
+		v.lbl = canvas.NewText(p.disp[i], studiotheme.MenuText)
 		v.lbl.TextSize = st.LabelSize
 		ls := v.lbl.MinSize()
 		v.lbl.Resize(ls)
@@ -595,4 +611,19 @@ func segDist(px, py, ax, ay, bx, by float64) float64 {
 func textBaseline(text string, size float32) float32 {
 	_, b := fyne.CurrentApp().Driver().RenderedTextSize(text, size, fyne.TextStyle{}, nil)
 	return b
+}
+
+// ellipsize shortens s with a trailing ellipsis until it is at most w wide.
+func ellipsize(s string, size, w float32) string {
+	if fyne.MeasureText(s, size, fyne.TextStyle{}).Width <= w {
+		return s
+	}
+	rs := []rune(s)
+	for n := len(rs) - 1; n > 0; n-- {
+		t := string(rs[:n]) + "…"
+		if fyne.MeasureText(t, size, fyne.TextStyle{}).Width <= w {
+			return t
+		}
+	}
+	return "…"
 }

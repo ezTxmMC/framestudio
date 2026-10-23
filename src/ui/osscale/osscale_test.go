@@ -160,3 +160,11 @@ func TestFyneRound(t *testing.T) {
 		t.Error("format")
 	}
 }
+
+func TestUnscaledHintWithXft(t *testing.T) {
+	wl := map[string]string{"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "wayland", "HOME": "/h"}
+	e, _ := fakeEnv(wl, map[string]string{"xrdb": "Xft.dpi:\t96\n"}, map[string]string{"/h/.config/kdeglobals": "[KScreen]\nXwaylandClientsScale=false\n"})
+	if r := Detect(e); r.Scale != 1 || r.Source != SourceXft || !r.XwaylandUnscaled {
+		t.Errorf("%+v", r)
+	}
+}

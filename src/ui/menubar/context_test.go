@@ -1,6 +1,7 @@
 package menubar
 
 import (
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -94,4 +95,42 @@ func TestScrollingPane(t *testing.T) {
 		t.Fatalf("end: hover %d offset %v", p.hover, p.offset())
 	}
 	CloseContextMenu()
+}
+
+func TestPaneWidthClampedToCanvas(t *testing.T) {
+	h := newHarness(t)
+	long := strings.Repeat("Sehr langer Menüeintrag ", 10)
+	ShowContextMenu(h.c(), fyne.NewPos(10, 10), []Item{{Label: long, Shortcut: "Strg+Umschalt+S", Action: func() {}}})
+	l := ctxLayer
+	defer CloseContextMenu()
+	if w := l.canvasSize().Width; l.panes[0].size.Width > w-4*menustyle.ScreenMargin+0.01 {
+		t.Fatalf("pane %v wider than canvas %v", l.panes[0].size.Width, w)
+	}
+	if d := l.panes[0].disp[0]; d == long || !strings.HasSuffix(d, "…") {
+		t.Fatalf("label not shortened: %q", d)
+	}
+}
+
+func TestContextMenuForwardsShortcut(t *testing.T) {
+	h := newHarness(t)
+	var got fyne.KeyName
+	ContextCombo = func(k fyne.KeyName, _ fyne.KeyModifier) { got = k }
+	defer func() { ContextCombo = nil }()
+	ShowContextMenu(h.c(), fyne.NewPos(10, 10), []Item{{Label: "Eins", Action: func() {}}})
+	ctxLayer.TypedShortcut(&fyne.ShortcutUndo{})
+	if ctxLayer != nil || got != fyne.KeyZ {
+		t.Fatalf("ctx=%v key=%q", ctxLayer, got)
+	}
+}
+
+func TestPendingSubmenuCancelledOutside(t *testing.T) {
+	h := newHarness(t)
+	ShowContextMenu(h.c(), fyne.NewPos(10, 10), []Item{{Label: "Mehr", Children: []Item{{Label: "Zwei", Action: func() {}}}}})
+	l := ctxLayer
+	defer CloseContextMenu()
+	l.mouseAt(l.panes[0].Position().Add(fyne.NewPos(60, 14)))
+	l.mouseAt(fyne.NewPos(1000, 700))
+	if l.timer != nil {
+		t.Fatal("open timer still pending")
+	}
 }

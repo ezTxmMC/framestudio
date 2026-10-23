@@ -192,7 +192,7 @@ func showPalette(w fyne.Window, reg *command.Registry) *palette {
 	strut := canvas.NewRectangle(color.Transparent)
 	strut.SetMinSize(fyne.NewSize(1, st.PaletteSearchH))
 	fieldTheme := searchTheme{theme.Current()}
-	field := container.NewThemeOverride(p.entry, fieldTheme)
+	field := container.New(vCenterFill{}, container.NewThemeOverride(p.entry, fieldTheme))
 	search := container.NewStack(strut, container.NewBorder(nil, nil,
 		container.New(layout.NewCustomPaddedLayout(0, 0, 16, 4), container.NewCenter(icon)), nil, field))
 	line := canvas.NewRectangle(studiotheme.MenuSep)
@@ -451,13 +451,9 @@ func (r *paletteRow) CreateRenderer() fyne.WidgetRenderer {
 		pr.label.TextSize = st.LabelSize
 		pr.cat = canvas.NewText(r.e.cmd.Category, studiotheme.Muted)
 		pr.cat.TextSize = st.ShortcutSize
-		if r.e.cmd.Toggle { // on/off state like the menus: a check mark, or an empty box
-			if r.e.cmd.Checked {
+		if r.e.cmd.Toggle { // on/off state like the menus: a check mark when on
+			if r.e.cmd.Checked { // off shows nothing, like the menus
 				pr.check = newGlyph(10, 8, 1.5, [][2]float64{{0.8, 4.4}, {3.8, 7.2}, {9.2, 0.8}})
-			} else {
-				pr.box = canvas.NewRectangle(color.Transparent)
-				pr.box.StrokeWidth = 1
-				pr.box.CornerRadius = 2
 			}
 		}
 		if sc := ShortcutText(command.Display(r.e.cmd.Shortcut), runtimeGOOS); sc != "" {
@@ -475,8 +471,7 @@ type paletteRowRenderer struct {
 	sep        *canvas.Rectangle // group separator above a later header
 	label, cat *canvas.Text
 	sc         *canvas.Text
-	check      *glyph            // toggle that is on
-	box        *canvas.Rectangle // toggle that is off
+	check      *glyph // toggle that is on
 }
 
 const (
@@ -512,11 +507,6 @@ func (pr *paletteRowRenderer) Layout(size fyne.Size) {
 		pr.check.obj.Resize(fyne.NewSize(10, 8))
 		pr.check.obj.Move(fyne.NewPos(kit.Snap(left+catColW, s), top+kit.CenterY(band, 8, s)))
 	}
-	if pr.box != nil {
-		pr.box.StrokeWidth = kit.Hair(s)
-		pr.box.Resize(fyne.NewSquareSize(10))
-		pr.box.Move(fyne.NewPos(kit.Snap(left+catColW, s), top+kit.CenterY(band, 10, s)))
-	}
 	if pr.sc != nil {
 		ss := pr.sc.MinSize()
 		pr.sc.Move(fyne.NewPos(kit.Snap(size.Width-st.PanePad-st.PadSide-ss.Width, s), top+kit.CenterY(band, ss.Height, s)))
@@ -540,12 +530,6 @@ func (pr *paletteRowRenderer) update() {
 		pr.bg.FillColor = studiotheme.MenuAccentRow()
 		if !enabled {
 			pr.bg.FillColor = studiotheme.MenuHover
-		}
-	}
-	if pr.box != nil {
-		pr.box.StrokeColor = studiotheme.Muted
-		if !enabled {
-			pr.box.StrokeColor = studiotheme.MenuDisabled
 		}
 	}
 	if pr.check != nil {
@@ -580,8 +564,25 @@ func (pr *paletteRowRenderer) Objects() []fyne.CanvasObject {
 	if pr.check != nil {
 		objs = append(objs, pr.check.obj)
 	}
-	if pr.box != nil {
-		objs = append(objs, pr.box)
-	}
 	return objs
+}
+
+// vCenterFill gives its child the full width and its own minimum height, centred
+// vertically, so the text sits on the centre line of the search icon.
+type vCenterFill struct{}
+
+func (vCenterFill) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objs {
+		h := o.MinSize().Height
+		o.Resize(fyne.NewSize(size.Width, h))
+		o.Move(fyne.NewPos(0, kit.CenterY(size.Height, h, 1)))
+	}
+}
+
+func (vCenterFill) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	var m fyne.Size
+	for _, o := range objs {
+		m = m.Max(o.MinSize())
+	}
+	return m
 }

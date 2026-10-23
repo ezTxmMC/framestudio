@@ -66,6 +66,7 @@ func newBars(sh *Shell) *bars {
 			sh.combo(k, m)
 		}
 	}
+	menubar.ContextCombo = b.menu.OnCombo
 	b.menu.SetHeight(chrome.BarHeight(false))
 	sh.menuBar = b.menu
 	b.project = chrome.NewTitleText(12)

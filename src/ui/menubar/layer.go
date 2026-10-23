@@ -66,7 +66,11 @@ func (l *layer) canvasSize() fyne.Size {
 // maxPaneH is the height a pane may take before it scrolls.
 func (l *layer) maxPaneH() float32 { return l.canvasSize().Height - 4*menustyle.ScreenMargin }
 
-func (l *layer) newPane(src func() []row) *pane { return newPane(src, l.scale(), l.maxPaneH()) }
+func (l *layer) maxPaneW() float32 { return l.canvasSize().Width - 4*menustyle.ScreenMargin }
+
+func (l *layer) newPane(src func() []row) *pane {
+	return newPane(src, l.scale(), l.maxPaneH(), l.maxPaneW())
+}
 
 func (l *layer) setRoot(keyboard bool) {
 	l.cancel()
@@ -326,6 +330,7 @@ func (l *layer) mouseAt(pos fyne.Position) {
 	}
 	d, ri := l.hit(pos)
 	if d < 0 {
+		l.cancel()
 		deep := l.panes[len(l.panes)-1]
 		if deep.sub < 0 {
 			deep.setHover(-1)
@@ -586,6 +591,13 @@ func (l *layer) KeyUp(ev *fyne.KeyEvent) {
 func (l *layer) TypedShortcut(sc fyne.Shortcut) {
 	l.altSolo = false
 	if l.bar == nil {
+		// context menu: close it and hand the combo to the window
+		if key, mods, ok := command.ComboOf(sc); ok {
+			l.shut(true)
+			if ContextCombo != nil {
+				ContextCombo(key, mods)
+			}
+		}
 		return
 	}
 	if l.bar.HandleShortcut(sc) {
@@ -602,6 +614,10 @@ func (l *layer) TypedShortcut(sc fyne.Shortcut) {
 	}
 	l.bar.reg.Dispatch(key, mods)
 }
+
+// ContextCombo, when set, receives the key combinations typed while a context menu is
+// open (the menu closes first), so app shortcuts keep working.
+var ContextCombo func(key fyne.KeyName, mods fyne.KeyModifier)
 
 // ctxLayer is the open context menu (one at a time).
 var ctxLayer *layer

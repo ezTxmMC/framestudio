@@ -187,31 +187,36 @@ func Detect(e Env) Result {
 	}
 	wayland := WaylandSession(e.Getenv)
 
+	unscaled := false
+	if wayland && e.ReadFile != nil {
+		dir := e.Getenv("XDG_CONFIG_HOME")
+		if dir == "" {
+			dir = filepath.Join(e.Getenv("HOME"), ".config")
+		}
+		if b, err := e.ReadFile(filepath.Join(dir, "kdeglobals")); err == nil && XwaylandClientsScaleOff(string(b)) {
+			unscaled = true
+		}
+	}
+
 	// a) Xft.dpi
 	if e.Run != nil && e.Getenv("DISPLAY") != "" {
 		if out, err := e.Run("xrdb", "-query"); err == nil {
 			if dpi, sc, ok := ParseXftDPI(string(out)); ok {
-				return Result{Scale: sc, Source: SourceXft, DPI: dpi, Detected: true}
+				return Result{Scale: sc, Source: SourceXft, DPI: dpi, Detected: true, XwaylandUnscaled: unscaled}
 			}
 		}
 		if out, err := e.Run("xprop", "-root", "RESOURCE_MANAGER"); err == nil {
 			if dpi, sc, ok := ParseXftDPI(unquoteXprop(string(out))); ok {
-				return Result{Scale: sc, Source: SourceXft, DPI: dpi, Detected: true}
+				return Result{Scale: sc, Source: SourceXft, DPI: dpi, Detected: true, XwaylandUnscaled: unscaled}
 			}
 		}
 	}
 
 	// b) kscreen-doctor on a Wayland session
 	if wayland {
-		if e.ReadFile != nil {
-			dir := e.Getenv("XDG_CONFIG_HOME")
-			if dir == "" {
-				dir = filepath.Join(e.Getenv("HOME"), ".config")
-			}
-			if b, err := e.ReadFile(filepath.Join(dir, "kdeglobals")); err == nil && XwaylandClientsScaleOff(string(b)) {
-				res.XwaylandUnscaled = true
-				return res
-			}
+		if unscaled {
+			res.XwaylandUnscaled = true
+			return res
 		}
 		if e.Run != nil {
 			if out, err := e.Run("kscreen-doctor", "-j"); err == nil {
