@@ -23,9 +23,12 @@ func templateFormat(t Template) kit.Format {
 	return kit.Format{Width: t.Width, Height: t.Height, FPS: t.FPS, DropFrame: t.DropFrame && t.FPS.CanDropFrame()}
 }
 
-// templateMatching finds the index of the template with exactly format f, or -1.
+// templateMatching finds the index of the template with exactly format f, or -1. A user template wins over a
+// built-in one with the same values.
 func templateMatching(list []Template, f kit.Format) int {
-	for i, t := range list {
+	// Search from the end: user templates come after the built-in ones and win on equal values.
+	for i := len(list) - 1; i >= 0; i-- {
+		t := list[i]
 		if t.Width == f.Width && t.Height == f.Height && t.FPS.Equal(f.FPS) && (t.DropFrame && t.FPS.CanDropFrame()) == f.DropFrame {
 			return i
 		}
@@ -144,13 +147,55 @@ type newProject struct {
 	d      dialog.Dialog
 	name   *widget.Entry
 	picker *kit.FormatPicker
-	tl     *templateList
 	status *widget.Label
+	*templateOps
 
-	create, saveTpl, renameBtn, deleteBtn *widget.Button
+	create *widget.Button
 
 	cur    kit.Format
 	curErr error
+}
+
+// templateOps is the template list with its save, rename and delete buttons; the new-project
+// and the project settings dialog both use it.
+type templateOps struct {
+	sh *Shell
+	tl *templateList
+	// cur is the format the dialog currently holds (or why it is invalid); refresh runs
+	// after the templates changed.
+	cur     func() (kit.Format, error)
+	refresh func()
+
+	saveTpl, renameBtn, deleteBtn *widget.Button
+}
+
+func newTemplateOps(sh *Shell, tl *templateList, cur func() (kit.Format, error), refresh func()) *templateOps {
+	o := &templateOps{sh: sh, tl: tl, cur: cur, refresh: refresh}
+	o.saveTpl = widget.NewButtonWithIcon("Als Vorlage speichern…", theme.DocumentSaveIcon(), func() {
+		if _, err := o.cur(); err == nil {
+			o.askName("Als Vorlage speichern", "Speichern", "", o.saveTemplate)
+		}
+	})
+	o.renameBtn = widget.NewButtonWithIcon("Umbenennen…", theme.DocumentCreateIcon(), func() {
+		if t, ok := o.tl.current(); ok && t.User {
+			o.askName("Vorlage umbenennen", "Umbenennen", t.Name, o.renameTemplate)
+		}
+	})
+	o.deleteBtn = widget.NewButtonWithIcon("Löschen", theme.DeleteIcon(), func() {
+		t, ok := o.tl.current()
+		if !ok || !t.User {
+			return
+		}
+		dialog.NewConfirm("Vorlage löschen?", "Die Vorlage „"+t.Name+"“ wird gelöscht. Projekte, die sie nutzen, bleiben unverändert.", func(yes bool) {
+			if yes {
+				o.deleteTemplate()
+			}
+		}, sh.win).Show()
+	})
+	for _, b := range []*widget.Button{o.renameBtn, o.deleteBtn, o.saveTpl} {
+		b.Importance = widget.LowImportance
+	}
+	return o
 }
 
 // newProjectDialog asks for name and format and opens the new project. The format comes
@@ -182,42 +227,19 @@ func (sh *Shell) buildNewProject() *newProject {
 		}
 		n.refresh()
 	})
-	n.tl = newTemplateList(func(t Template) {
+	n.templateOps = newTemplateOps(sh, newTemplateList(func(t Template) {
 		n.cur, n.curErr = templateFormat(t), nil
 		n.picker.Set(n.cur)
 		n.refresh()
-	})
-
-	n.saveTpl = widget.NewButtonWithIcon("Als Vorlage speichern…", theme.DocumentSaveIcon(), func() {
-		if n.curErr == nil {
-			n.askName("Als Vorlage speichern", "Speichern", "", n.saveTemplate)
-		}
-	})
-	n.renameBtn = widget.NewButtonWithIcon("Umbenennen…", theme.DocumentCreateIcon(), func() {
-		if t, ok := n.tl.current(); ok && t.User {
-			n.askName("Vorlage umbenennen", "Umbenennen", t.Name, n.renameTemplate)
-		}
-	})
-	n.deleteBtn = widget.NewButtonWithIcon("Löschen", theme.DeleteIcon(), func() {
-		t, ok := n.tl.current()
-		if !ok || !t.User {
-			return
-		}
-		dialog.NewConfirm("Vorlage löschen?", "Die Vorlage „"+t.Name+"“ wird gelöscht. Projekte, die sie nutzen, bleiben unverändert.", func(yes bool) {
-			if yes {
-				n.deleteTemplate()
-			}
-		}, sh.win).Show()
-	})
-	for _, b := range []*widget.Button{n.renameBtn, n.deleteBtn, n.saveTpl} {
-		b.Importance = widget.LowImportance
-	}
+	}), func() (kit.Format, error) { return n.cur, n.curErr }, n.refresh)
+	n.name.OnSubmitted = func(string) { n.submit() }
+	n.picker.SetOnSubmitted(n.submit)
 
 	cancel := widget.NewButton("Abbrechen", func() { n.d.Hide() })
 	n.create = widget.NewButton("Anlegen", n.submit)
 	n.create.Importance = widget.HighImportance
 
-	listBox := container.NewBorder(formatLabel("Vorlage"), container.NewHBox(n.saveTpl, n.renameBtn, n.deleteBtn), nil, nil, n.tl.list)
+	listBox := container.NewBorder(formatLabel("Vorlage"), n.buttons(), nil, nil, n.tl.list)
 	left := container.NewStack(sizeRect(300, 380), listBox)
 	pick := container.NewVScroll(container.NewPadded(n.picker.Object()))
 	n.picker.Relayout = pick.Refresh
@@ -235,9 +257,8 @@ func (sh *Shell) buildNewProject() *newProject {
 	return n
 }
 
-// refresh enables the buttons and shows what will be created.
-func (n *newProject) refresh() {
-	ok := n.curErr == nil && strings.TrimSpace(n.name.Text) != ""
+// updateButtons enables the buttons for the current format and selection.
+func (o *templateOps) updateButtons() {
 	enable := func(b *widget.Button, on bool) {
 		if on {
 			b.Enable()
@@ -245,11 +266,27 @@ func (n *newProject) refresh() {
 			b.Disable()
 		}
 	}
-	enable(n.create, ok)
-	enable(n.saveTpl, n.curErr == nil)
+	_, err := o.cur()
+	enable(o.saveTpl, err == nil)
+	t, isTpl := o.tl.current()
+	enable(o.renameBtn, isTpl && t.User)
+	enable(o.deleteBtn, isTpl && t.User)
+}
+
+func (o *templateOps) buttons() fyne.CanvasObject {
+	return container.NewHBox(o.saveTpl, o.renameBtn, o.deleteBtn)
+}
+
+// refresh enables the buttons and shows what will be created.
+func (n *newProject) refresh() {
+	ok := n.curErr == nil && strings.TrimSpace(n.name.Text) != ""
+	if ok {
+		n.create.Enable()
+	} else {
+		n.create.Disable()
+	}
+	n.updateButtons()
 	t, isTpl := n.tl.current()
-	enable(n.renameBtn, isTpl && t.User)
-	enable(n.deleteBtn, isTpl && t.User)
 	switch {
 	case n.curErr != nil:
 		n.status.SetText("")
@@ -273,11 +310,11 @@ func (n *newProject) submit() {
 }
 
 // saveTemplate stores the current format as a user template.
-func (n *newProject) saveTemplate(name string) error {
-	if n.curErr != nil {
-		return n.curErr
+func (o *templateOps) saveTemplate(name string) error {
+	f, err0 := o.cur()
+	if err0 != nil {
+		return err0
 	}
-	f := n.cur
 	var failed error
 	err := settings.Update(func(s *settings.Settings) {
 		_, failed = settings.AddTemplate(s, name, f.Width, f.Height, f.FPS, f.DropFrame)
@@ -286,17 +323,17 @@ func (n *newProject) saveTemplate(name string) error {
 		return failed
 	}
 	if err != nil {
-		n.sh.showErr(errSettingsSave(err))
+		o.sh.showErr(errSettingsSave(err))
 	}
-	n.tl.reload()
-	n.tl.selectMatching(f)
-	n.refresh()
+	o.tl.reload()
+	o.tl.selectMatching(f)
+	o.refresh()
 	return nil
 }
 
 // renameTemplate renames the selected user template.
-func (n *newProject) renameTemplate(name string) error {
-	t, ok := n.tl.current()
+func (o *templateOps) renameTemplate(name string) error {
+	t, ok := o.tl.current()
 	if !ok || !t.User {
 		return errors.New("Es ist keine eigene Vorlage ausgewählt.")
 	}
@@ -306,30 +343,32 @@ func (n *newProject) renameTemplate(name string) error {
 		return failed
 	}
 	if err != nil {
-		n.sh.showErr(errSettingsSave(err))
+		o.sh.showErr(errSettingsSave(err))
 	}
-	n.tl.reload()
-	n.tl.selectMatching(n.cur)
-	n.refresh()
+	o.tl.reload()
+	f, _ := o.cur()
+	o.tl.selectMatching(f)
+	o.refresh()
 	return nil
 }
 
 // deleteTemplate deletes the selected user template.
-func (n *newProject) deleteTemplate() {
-	t, ok := n.tl.current()
+func (o *templateOps) deleteTemplate() {
+	t, ok := o.tl.current()
 	if !ok || !t.User {
 		return
 	}
 	if err := settings.Update(func(s *settings.Settings) { _ = settings.DeleteTemplate(s, t.ID) }); err != nil {
-		n.sh.showErr(errSettingsSave(err))
+		o.sh.showErr(errSettingsSave(err))
 	}
-	n.tl.reload()
-	n.tl.selectMatching(n.cur)
-	n.refresh()
+	o.tl.reload()
+	f, _ := o.cur()
+	o.tl.selectMatching(f)
+	o.refresh()
 }
 
 // askName shows a small dialog for a template name; ok returns the error to show.
-func (n *newProject) askName(title, confirm, initial string, ok func(string) error) {
+func (o *templateOps) askName(title, confirm, initial string, ok func(string) error) {
 	entry := widget.NewEntry()
 	entry.SetText(initial)
 	entry.SetPlaceHolder("z. B. Kino 24p")
@@ -348,10 +387,10 @@ func (n *newProject) askName(title, confirm, initial string, ok func(string) err
 	confirmBtn := widget.NewButton(confirm, submit)
 	confirmBtn.Importance = widget.HighImportance
 	nd = dialog.NewCustomWithoutButtons(title, container.NewGridWrap(fyne.NewSize(380, 0),
-		container.NewVBox(widget.NewLabel("Name der Vorlage"), entry, errLabel)), n.sh.win)
+		container.NewVBox(widget.NewLabel("Name der Vorlage"), entry, errLabel)), o.sh.win)
 	nd.SetButtons([]fyne.CanvasObject{widget.NewButton("Abbrechen", func() { nd.Hide() }), confirmBtn})
 	nd.Show()
-	n.sh.win.Canvas().Focus(entry)
+	o.sh.win.Canvas().Focus(entry)
 }
 
 func formatLabel(s string) fyne.CanvasObject {

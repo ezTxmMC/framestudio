@@ -294,3 +294,22 @@ func TestSummarizeChange(t *testing.T) {
 		t.Errorf("30 fps cannot drop frames: %q", s.Text())
 	}
 }
+
+func TestDropFrameChoiceSurvivesRateRoundTrip(t *testing.T) {
+	test.NewTempApp(t)
+	p := NewFormatPicker(Format{Width: 1920, Height: 1080, FPS: model.NTSC30, DropFrame: true}, FormatOptions{}, func(Format, error) {})
+	p.Rate.Select().SetSelected(model.Rate25.Label())
+	if f, _ := p.Value(); f.DropFrame {
+		t.Fatal("25 fps has no drop-frame")
+	}
+	p.Rate.Select().SetSelected(model.NTSC30.Label())
+	if f, _ := p.Value(); !f.DropFrame {
+		t.Fatal("drop-frame must come back with 29,97")
+	}
+	p.Rate.SetDropFrame(false)
+	p.Rate.Select().SetSelected(model.Rate25.Label())
+	p.Rate.Select().SetSelected(model.NTSC30.Label())
+	if f, _ := p.Value(); f.DropFrame {
+		t.Fatal("an explicit off stays off")
+	}
+}

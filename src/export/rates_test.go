@@ -183,3 +183,33 @@ func TestTimelineFramesRational(t *testing.T) {
 		t.Errorf("3000 frames at 29.97 are 100.1 s = 4804800 samples: %v\n%s", ok, mix.Filter)
 	}
 }
+
+func TestGIFRateCapped(t *testing.T) {
+	for _, fps := range []model.Rate{model.Rate60, model.NTSC60, model.Rate120, model.IntRate(240)} {
+		o := Options{Format: FormatGIF, FPS: fps}
+		if got := OutputRate(o, model.Rate25); got != model.IntRate(50) {
+			t.Errorf("GIF at %v -> %v, want 50", fps, got)
+		}
+		if RateNote(o) == "" {
+			t.Error("note missing")
+		}
+	}
+	if got := OutputRate(Options{Format: FormatGIF, FPS: model.Rate30}, model.Rate25); got != model.Rate30 || RateNote(Options{Format: FormatGIF, FPS: model.Rate30}) != "" {
+		t.Error("30 fps GIF is fine")
+	}
+	if got := OutputRate(Options{Format: FormatMP4, FPS: model.Rate120}, model.Rate25); got != model.Rate120 {
+		t.Error("MP4 120 fps")
+	}
+}
+
+func TestPoolShrinksForHugeFrames(t *testing.T) {
+	if poolFor(1920, 1080) != workers() {
+		t.Error("HD uses the full pool")
+	}
+	if poolFor(16384, 16384) != 1 || poolFor(8192, 8192) > 2 {
+		t.Error("huge frames use one worker")
+	}
+	if MemoryNote(Options{Format: FormatMP4, Width: 8192, Height: 8192}) == "" || MemoryNote(Options{Format: FormatMP4, Width: 1920, Height: 1080}) != "" {
+		t.Error("MemoryNote")
+	}
+}

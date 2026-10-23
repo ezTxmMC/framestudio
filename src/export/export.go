@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"framestudio-proto/src/media"
@@ -146,6 +147,9 @@ type Progress struct {
 func OutputRate(o Options, project model.Rate) model.Rate {
 	project = project.Or(model.Rate25).Reduced()
 	if !o.FPS.IsZero() {
+		if o.Format == FormatGIF && o.FPS.Float() > gifLimitFPS {
+			return model.IntRate(gifLimitFPS)
+		}
 		return o.FPS.Reduced()
 	}
 	if o.Format == FormatGIF && project.Float() > gifMaxFPS {
@@ -166,6 +170,36 @@ func Range(p *model.Project, o Options) (from, to int) {
 var lookFFmpeg = func() bool {
 	_, err := execLookPath("ffmpeg")
 	return err == nil
+}
+
+// RateNote says, in German, that a GIF cannot play at the chosen rate; empty otherwise.
+func RateNote(o Options) string {
+	if o.Format == FormatGIF && !o.FPS.IsZero() && o.FPS.Float() > gifLimitFPS {
+		return fmt.Sprintf("GIF unterstützt höchstens %d Bilder pro Sekunde: Der Export nutzt %d fps.", gifLimitFPS, gifLimitFPS)
+	}
+	return ""
+}
+
+// bigFramePixels is the size from which MemoryNote warns (about 8192 × 8192 is 67 Mpx).
+const bigFramePixels = 64 << 20
+
+// MemoryNote warns, in German, that very large frames need a lot of memory; empty otherwise.
+func MemoryNote(o Options) string {
+	if o.Format == FormatWAV || o.Width*o.Height < bigFramePixels {
+		return ""
+	}
+	return "Sehr große Auflösung: Der Export braucht viel Arbeitsspeicher und läuft langsam. Bei zu wenig Speicher eine kleinere Auflösung wählen."
+}
+
+// Notes joins all hints for the options (rate, size rounding, memory).
+func Notes(o Options) string {
+	var parts []string
+	for _, n := range []string{RateNote(o), EvenNote(o), MemoryNote(o)} {
+		if n != "" {
+			parts = append(parts, n)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // EvenNote says, in German, that Run rounds the size of o to even numbers; empty when it
@@ -345,7 +379,7 @@ func Run(ctx context.Context, p *model.Project, r *render.Renderer, o Options, p
 		r = render.New(media.NewCache())
 	}
 	rep := newReporter(progress)
-	rep.note = EvenNote(o)
+	rep.note = Notes(o)
 	o.Width, o.Height = EvenSize(o)
 	var err error
 	switch o.Format {

@@ -72,7 +72,25 @@ func (r Rate) IsZero() bool { return r.Num == 0 && r.Den == 0 }
 
 // Valid reports whether the rate lies in MinFPS..MaxFPS.
 func (r Rate) Valid() bool {
-	return r.Num > 0 && r.Den > 0 && r.Num >= MinFPS*r.Den && int64(r.Num) <= int64(MaxFPS)*int64(r.Den)
+	return r.Num > 0 && r.Den > 0 && r.Num <= maxTerm && r.Den <= maxTerm &&
+		r.Num >= MinFPS*r.Den && int64(r.Num) <= int64(MaxFPS)*int64(r.Den)
+}
+
+// maxTerm bounds numerator and denominator so that Den*1e9 and Num*sampleRate stay far
+// inside int64.
+const maxTerm = 1 << 31
+
+// SnapFraction snaps an exact fraction to the integer or NTSC rate it lies within 0.0005 fps
+// of (2997/100 becomes 30000/1001); any other fraction is returned reduced and unchanged.
+func SnapFraction(r Rate) Rate {
+	r = r.Reduced()
+	if r.Num <= 0 || r.Den <= 0 {
+		return r
+	}
+	if s := SnapRate(r.Float()); s.Den == 1 || s.Den == 1001 {
+		return s
+	}
+	return r
 }
 
 // Or returns r, or def if r is unset or invalid.
@@ -189,7 +207,11 @@ func (r *Rate) UnmarshalJSON(b []byte) error {
 		if err := json.Unmarshal(b, &a); err != nil {
 			return err
 		}
-		*r = Rate(a).Reduced()
+		v := Rate(a).Reduced()
+		if v.Num > maxTerm || v.Den > maxTerm {
+			return errors.New("Bildrate zu groß: Zähler und Nenner dürfen höchstens 2147483648 sein")
+		}
+		*r = v
 	case b[0] == '"':
 		var s string
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -256,7 +278,7 @@ func ParseRate(s string) (Rate, error) {
 		if err1 != nil || err2 != nil || n <= 0 || d <= 0 {
 			return Rate{}, bad
 		}
-		r = Rate{n, d}.Reduced()
+		r = SnapFraction(Rate{n, d})
 	} else {
 		f, err := strconv.ParseFloat(strings.Replace(t, ",", ".", 1), 64)
 		if err != nil || f <= 0 || math.IsNaN(f) || math.IsInf(f, 0) {
@@ -350,7 +372,16 @@ func (r Rate) FramesToSeconds(f int) float64 {
 
 // SecondsToFrames is the nearest whole frame count for sec seconds.
 func (r Rate) SecondsToFrames(sec float64) int {
-	return int(math.Round(sec * r.Float()))
+	v := math.Round(sec * r.Float())
+	switch {
+	case math.IsNaN(v):
+		return 0
+	case v >= math.MaxInt32*1024:
+		return math.MaxInt32 * 1024
+	case v <= -math.MaxInt32*1024:
+		return -math.MaxInt32 * 1024
+	}
+	return int(v)
 }
 
 // SamplesAt is the audio sample position of frame f at sampleRate, rounded to the nearest

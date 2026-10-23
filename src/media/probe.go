@@ -253,7 +253,7 @@ func parseRate(s string) model.Rate {
 	if err1 != nil || err2 != nil || n <= 0 || d <= 0 {
 		return model.Rate{}
 	}
-	return model.Rate{Num: int(n), Den: int(d)}.Reduced()
+	return model.SnapFraction(model.Rate{Num: int(n), Den: int(d)})
 }
 
 func parseFloat(s string) float64 {

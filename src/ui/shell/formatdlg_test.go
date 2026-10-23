@@ -285,3 +285,61 @@ func TestFormatDialogShots(t *testing.T) {
 		closeTop(w)
 	}
 }
+
+func TestSavedTemplateWinsOverBuiltinAndEnterConfirms(t *testing.T) {
+	sh, w, _ := newTestShell(t)
+	sh.newProjectDialog()
+	n := sh.npd
+	// 1920x1080 at 25 fps equals the built-in "1080p HD"
+	if err := n.saveTemplate("Mein 25"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, ok := n.tl.current(); !ok || !cur.User || cur.Name != "Mein 25" || n.deleteBtn.Disabled() {
+		t.Fatalf("the saved template must be selected: %+v %v", cur, ok)
+	}
+	// Enter in the name entry creates the project
+	n.name.SetText("Enter-Test")
+	n.name.OnSubmitted(n.name.Text)
+	if sh.Active() == nil || sh.Active().Project.Name != "Enter-Test" {
+		t.Fatal("Enter in the name entry must create the project")
+	}
+	closeTop(w)
+}
+
+func TestProjectSettingsTemplatesAndEnter(t *testing.T) {
+	sh, w, _ := newTestShell(t)
+	sh.newProject("T", Templates[0])
+	sh.projectSettings()
+	u := sh.psd
+	u.picker.Res.Width.SetText("2048")
+	u.picker.Res.Height.SetText("858")
+	if u.tpl.saveTpl.Disabled() {
+		t.Fatal("save button")
+	}
+	if err := u.tpl.saveTemplate("Kino"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, ok := u.tpl.tl.current(); !ok || cur.Name != "Kino" || u.tpl.deleteBtn.Disabled() {
+		t.Fatal("saved template selected")
+	}
+	// choose a built-in template, then the user template again
+	for i, it := range u.tpl.tl.items {
+		if it.Name == "Kino" {
+			u.tpl.tl.list.Select(i)
+		}
+	}
+	if u.cur.Width != 2048 || u.apply.Disabled() {
+		t.Fatalf("template applied to the picker: %+v", u.cur)
+	}
+	u.picker.Res.Width.OnSubmitted("2048") // Enter applies
+	if sh.Active().Project.Settings.Width != 2048 {
+		t.Fatal("Enter must apply")
+	}
+	sh.projectSettings()
+	u = sh.psd
+	u.tpl.deleteTemplate()
+	if len(settings.Get().General.Templates) != 0 {
+		t.Error("delete in project settings")
+	}
+	closeTop(w)
+}

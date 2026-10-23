@@ -21,7 +21,20 @@ import (
 	"framestudio-proto/src/render"
 )
 
-const gifMaxFPS = 15
+const (
+	gifMaxFPS   = 15 // default GIF rate for faster projects
+	gifLimitFPS = 50 // viewers play frame delays below 2 cs too slowly
+)
+
+// frameBudget caps the memory of in-flight frames in the render pool and source ring.
+const frameBudget = 3 << 29 // 1.5 GiB
+
+// poolFor is the render pool size for frames of w x h: workers(), reduced so that the pool
+// and the source ring (pool+2 frames each in flight) stay within frameBudget.
+func poolFor(w, h int) int {
+	frames := frameBudget / max(4*w*h, 1)
+	return min(workers(), max((frames-2)/2, 1))
+}
 
 // workers is the size of the render pool.
 func workers() int { return min(max(runtime.NumCPU()-1, 1), 6) }
@@ -246,10 +259,10 @@ func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Optio
 		return fmt.Errorf("ffmpeg kann nicht gestartet werden: %w", err)
 	}
 
-	fr := newFrameRenderer(p, r, o.Width, o.Height, workers())
+	fr := newFrameRenderer(p, r, o.Width, o.Height, poolFor(o.Width, o.Height))
 	defer fr.Close()
 	rep.Stage("Bilder rendern", 0, len(frames))
-	perr := pipeline(ctx, len(frames), workers(),
+	perr := pipeline(ctx, len(frames), poolFor(o.Width, o.Height),
 		func(i int) (*image.NRGBA, error) { return fr.frame(frames[i]), nil },
 		func(i int, img *image.NRGBA) error {
 			if _, err := stdin.Write(img.Pix[:4*o.Width*o.Height]); err != nil {
@@ -351,7 +364,7 @@ func runPNG(ctx context.Context, p *model.Project, r *render.Renderer, o Options
 		return fmt.Errorf("Ordner neben %s kann nicht angelegt werden: %w", dir, err)
 	}
 	defer os.RemoveAll(tmp) // empty after a successful swap
-	pool := workers()
+	pool := poolFor(o.Width, o.Height)
 	fr := newFrameRenderer(p, r, o.Width, o.Height, pool)
 	defer fr.Close()
 	enc := png.Encoder{CompressionLevel: png.BestSpeed}

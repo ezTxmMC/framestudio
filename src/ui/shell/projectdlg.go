@@ -25,6 +25,7 @@ type projectSettingsUI struct {
 	d  dialog.Dialog
 
 	picker   *kit.FormatPicker
+	tpl      *templateOps
 	swatches []*kit.Swatch
 	summary  *widget.Label
 	warn     *widget.Label
@@ -76,6 +77,14 @@ func (sh *Shell) buildProjectSettings(p *project) *projectSettingsUI {
 		u.refresh()
 	})
 
+	u.picker.SetOnSubmitted(u.Apply)
+	u.tpl = newTemplateOps(sh, newTemplateList(func(t Template) {
+		u.cur, u.curErr = templateFormat(t), nil
+		u.picker.Set(u.cur)
+		u.refresh()
+	}), func() (kit.Format, error) { return u.cur, u.curErr }, u.refresh)
+	tplBox := container.NewVBox(formatLabel("Vorlage"), container.NewStack(sizeRect(0, 120), u.tpl.tl.list), u.tpl.buttons())
+
 	row := container.NewHBox()
 	for _, c := range projectBackColors {
 		sw := kit.NewSwatch(c.NRGBA(), func() { u.pickBackground(c) })
@@ -89,11 +98,11 @@ func (sh *Shell) buildProjectSettings(p *project) *projectSettingsUI {
 
 	// The dialog keeps its size while hints appear and vanish: the form scrolls in a fixed
 	// frame and the summary has reserved room below it.
-	form := container.NewVScroll(container.NewPadded(container.NewVBox(u.picker.Object(), kit.Labeled("Hintergrundfarbe", row))))
+	form := container.NewVScroll(container.NewPadded(container.NewVBox(tplBox, u.picker.Object(), kit.Labeled("Hintergrundfarbe", row))))
 	u.picker.Relayout = form.Refresh
 	u.sumBox = container.NewVBox(u.summary, u.warnBox)
 	summary := container.NewStack(sizeRect(0, 116), u.sumBox)
-	body := container.NewStack(sizeRect(430, 500), container.NewBorder(nil, summary, nil, nil, form))
+	body := container.NewStack(sizeRect(430, 600), container.NewBorder(nil, summary, nil, nil, form))
 	d := dialog.NewCustomWithoutButtons("Projekteinstellungen", body, sh.win)
 	d.SetButtons([]fyne.CanvasObject{cancel, u.apply})
 	u.d = d
@@ -121,6 +130,14 @@ func (u *projectSettingsUI) settings() model.Settings {
 func (u *projectSettingsUI) refresh() {
 	if u.apply == nil {
 		return
+	}
+	if u.tpl != nil {
+		if u.curErr == nil {
+			u.tpl.tl.selectMatching(u.cur)
+		} else {
+			u.tpl.tl.selectMatching(kit.Format{})
+		}
+		u.tpl.updateButtons()
 	}
 	if u.curErr != nil {
 		u.sum = kit.ChangeSummary{}

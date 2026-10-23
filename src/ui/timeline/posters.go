@@ -23,7 +23,8 @@ const (
 
 type posterKey struct {
 	id, path string
-	frame    int // source frame in project frames, quantised to the tile grid
+	frame    int        // source frame in project frames, quantised to the tile grid
+	rate     model.Rate // project rate the frame counts in; a rate change must not reuse tiles
 }
 
 type posterEntry struct {
@@ -64,7 +65,7 @@ func (l *posterLoader) get(m model.MediaItem, frame int, fps model.Rate) image.I
 	if l == nil || l.src == nil {
 		return nil
 	}
-	k := posterKey{m.ID, m.Path, frame}
+	k := posterKey{m.ID, m.Path, frame, fps.Reduced()}
 	l.mu.Lock()
 	if e, ok := l.items[k]; ok {
 		img := e.img

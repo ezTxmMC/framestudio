@@ -359,6 +359,7 @@ type RatePicker struct {
 
 	same     bool
 	updating bool
+	wantDrop bool // the user's drop-frame choice, kept while the rate cannot drop frames
 	onChange func()
 }
 
@@ -377,7 +378,12 @@ func NewRatePicker(r model.Rate, opts RateOptions, changed func()) *RatePicker {
 	p.custom.Validator = func(s string) error { _, _, err := ParseRateText(s); return err }
 	p.custom.OnChanged = func(string) { p.typed() }
 	p.custom.Hide()
-	p.drop = NewCheck("Drop-Frame-Timecode (nur 29,97 und 59,94 fps)", func(bool) { p.changed() })
+	p.drop = NewCheck("Drop-Frame-Timecode (nur 29,97 und 59,94 fps)", func(on bool) {
+		if !p.updating {
+			p.wantDrop = on
+		}
+		p.changed()
+	})
 	p.hint = newHint(widget.LowImportance)
 	p.hint.Hide()
 	objs := []fyne.CanvasObject{Labeled("Bildrate", p.sel), p.custom, p.hint}
@@ -435,6 +441,7 @@ func (p *RatePicker) Set(r model.Rate, drop bool) {
 	} else {
 		p.custom.SetText("")
 	}
+	p.wantDrop = drop
 	p.drop.SetChecked(drop)
 	p.sync()
 }
@@ -540,6 +547,10 @@ func (p *RatePicker) sync() {
 	if p.opts.DropFrame {
 		if err == nil && !same && r.CanDropFrame() {
 			p.drop.Enable()
+			was := p.updating
+			p.updating = true
+			p.drop.SetChecked(p.wantDrop)
+			p.updating = was
 		} else {
 			was := p.updating
 			p.updating = true
@@ -636,6 +647,15 @@ func NewFormatPicker(f Format, opts FormatOptions, changed func(Format, error)) 
 	}
 	p.box = container.New(layout.NewCustomPaddedVBoxLayout(12), objs...)
 	return p
+}
+
+// SetOnSubmitted runs fn when Enter is pressed in one of the text entries (width, height,
+// custom frame rate).
+func (p *FormatPicker) SetOnSubmitted(fn func()) {
+	f := func(string) { fn() }
+	p.Res.Width.OnSubmitted = f
+	p.Res.Height.OnSubmitted = f
+	p.Rate.custom.OnSubmitted = f
 }
 
 func (p *FormatPicker) relayout() {

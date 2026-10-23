@@ -34,8 +34,16 @@ func (p *Project) SetSettings(st Settings) error {
 					c.Length = limit
 				}
 			}
-			c.FadeIn = min(conv(c.FadeIn), c.Length)
-			c.FadeOut = min(conv(c.FadeOut), c.Length)
+			// A fade of a split clip (FadeInFrom/FadeOutTo > 0) may be longer than the clip;
+			// clamping it would change the curve, so only full fades are limited.
+			c.FadeIn = conv(c.FadeIn)
+			if c.FadeInFrom == 0 {
+				c.FadeIn = min(c.FadeIn, c.Length)
+			}
+			c.FadeOut = conv(c.FadeOut)
+			if c.FadeOutTo == 0 {
+				c.FadeOut = min(c.FadeOut, c.Length)
+			}
 			prevEnd = c.End()
 		}
 	}

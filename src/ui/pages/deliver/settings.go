@@ -364,7 +364,7 @@ func (f *settingsForm) updateNotes() {
 		setNote(f.rateNote, fmt.Sprintf("Bilder werden beim Export umgerechnet: %s → %s. Bilder werden ausgelassen oder wiederholt, nicht überblendet.",
 			strings.TrimSuffix(proj.Label(), " fps"), out.Label()), f.formBox)
 	}
-	setNote(f.evenNote, export.EvenNote(o), f.formBox)
+	setNote(f.evenNote, export.Notes(o), f.formBox)
 }
 
 // advancedSummary describes the collapsed "Erweitert" settings, e.g.

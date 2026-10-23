@@ -1185,3 +1185,24 @@ func TestScreenshotRound2(t *testing.T) {
 	tl.startRename(p.Tracks[1].ID)
 	capture(t, w, "fs-r2-timeline-rename.png")
 }
+
+func TestPosterCacheKeyedByRate(t *testing.T) {
+	q := kit.UseUIQueue(t)
+	test.NewTempApp(t)
+	src := &posterFake{}
+	l := newPosterLoader(src, func() {})
+	m := model.MediaItem{ID: "v", Path: "/x/v.mov", Kind: model.KindVideo, Duration: 10 * time.Second}
+	l.get(m, 100, model.Rate25)
+	if !q.Until(func() bool { return l.get(m, 100, model.Rate25) != nil }, 5*time.Second) {
+		t.Fatal("no poster")
+	}
+	l.get(m, 100, model.Rate50) // the same frame number is another time at 50 fps
+	if !q.Until(func() bool { return l.get(m, 100, model.Rate50) != nil }, 5*time.Second) {
+		t.Fatal("no poster at 50 fps")
+	}
+	secs := src.requests()
+	slices.Sort(secs)
+	if !slices.Equal(secs, []float64{2, 4}) {
+		t.Fatalf("requested %v, want 2 s and 4 s", secs)
+	}
+}
