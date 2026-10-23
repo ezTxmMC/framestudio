@@ -10,6 +10,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/display"
+	"framestudio-proto/src/ui/osscale"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/winchrome"
 )
@@ -112,7 +114,15 @@ func (w *window) windowInfo() fyne.CanvasObject {
 	note := widget.NewLabel("Unter Wayland läuft die eigene Titelleiste über XWayland, ohne Schatten des Fensterverwalters. " +
 		"Ausgeschaltet bleibt das native Wayland-Fenster mit der Titelleiste des Systems. Beim Umschalten ist ein Neustart nötig.")
 	note.Wrapping = fyne.TextWrapWord
+	scale := widget.NewLabel("")
+	scale.Wrapping = fyne.TextWrapWord
 	w.infoRefresh = func() {
+		var c fyne.Canvas
+		if w.win != nil {
+			c = w.win.Canvas()
+		}
+		rows := osscale.Rows(osscale.Current(), display.LiveScale(c))
+		scale.SetText(osscale.Text(rows[1:]))
 		d := settings.Get().Display
 		system.SetText("Fenstersystem: " + winchrome.PlatformLabel(winchrome.CurrentPlatform(), os.Getenv))
 		_, text := winchrome.Describe(d)
@@ -120,5 +130,5 @@ func (w *window) windowInfo() fyne.CanvasObject {
 	}
 	w.infoRefresh()
 	return container.New(layout.NewCustomPaddedLayout(14, 14, rowPadX, rowPadX),
-		container.NewVBox(head, system, state, note))
+		container.NewVBox(head, system, state, scale, note))
 }

@@ -2,18 +2,26 @@ package application
 
 import (
 	"os"
+	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/display"
+	"framestudio-proto/src/ui/osscale"
 )
 
 // Environment variables Fyne reads at start-up.
 const (
 	envPlatform = "FYNE_PLATFORM"
 	envScale    = "FYNE_SCALE"
+	envNoDPI    = "FYNE_DISABLE_DPI_DETECTION"
+)
+
+// goos and detectOS are replaced by tests: the real ones read the machine.
+var (
+	goos     = runtime.GOOS
+	detectOS = func() osscale.Result { return osscale.Detect(osscale.SystemEnv()) }
 )
 
 // StartEnv returns the environment variables to set before the Fyne app is created so
@@ -28,6 +36,12 @@ const (
 // WAYLAND_DISPLAY, "x11" needs DISPLAY): forcing a missing one would make GLFW fail and
 // every start crash. StartWarning explains the fallback.
 func StartEnv(s settings.Settings, getenv func(string) string) map[string]string {
+	env, _ := planStart(s, getenv)
+	return env
+}
+
+// planStart is StartEnv plus the scale decision for the diagnostics.
+func planStart(s settings.Settings, getenv func(string) string) (map[string]string, osscale.Report) {
 	env := map[string]string{}
 	if getenv(envPlatform) == "" {
 		if p := wantedPlatform(s); p != "" && platformAvailable(p, getenv) {
@@ -38,10 +52,64 @@ func StartEnv(s settings.Settings, getenv func(string) string) map[string]string
 			env[envPlatform] = "x11"
 		}
 	}
-	if getenv(envScale) == "" && s.Display.Scale > 0 {
-		env[envScale] = strconv.FormatFloat(min(s.Display.Scale, 4), 'f', -1, 64)
+	rep := planScale(s, getenv, env)
+	return env, rep
+}
+
+// effectiveWindowSystem is the window system GLFW will pick on Linux: "x11" (incl.
+// XWayland), "wayland" or "" when neither display exists.
+func effectiveWindowSystem(getenv func(string) string, env map[string]string) string {
+	p := getenv(envPlatform)
+	if p == "" {
+		p = env[envPlatform]
 	}
-	return env
+	switch strings.ToLower(p) {
+	case "x11":
+		return "x11"
+	case "wayland":
+		return "wayland"
+	}
+	if getenv("WAYLAND_DISPLAY") != "" {
+		return "wayland"
+	}
+	if getenv("DISPLAY") != "" {
+		return "x11"
+	}
+	return ""
+}
+
+// planScale adds FYNE_SCALE (and FYNE_DISABLE_DPI_DETECTION) to env.
+//
+// Precedence: the user's FYNE_SCALE (nothing is touched) > Display.Scale > the scale of
+// the desktop > 1. On the X11 / XWayland path Fyne cannot see the desktop scale (it
+// guesses from the monitor's physical size), so the detected scale is passed as
+// FYNE_SCALE and Fyne's own guess is switched off, always together. On native Wayland,
+// Windows and macOS Fyne already follows the system; Display.Scale is an extra factor.
+func planScale(s settings.Settings, getenv func(string) string, env map[string]string) osscale.Report {
+	rep := osscale.Report{GOOS: goos, Setting: s.Display.Scale, UserEnv: getenv(envScale),
+		WaylandSession: osscale.WaylandSession(getenv), OS: osscale.Result{Scale: 1}}
+	x11 := goos == "linux" && effectiveWindowSystem(getenv, env) == "x11"
+	rep.X11Path = x11
+	if rep.UserEnv != "" {
+		return rep
+	}
+	if x11 {
+		rep.OS = detectOS()
+		final := rep.OS.Scale
+		if s.Display.Scale > 0 {
+			final = min(s.Display.Scale, 4)
+		}
+		env[envScale] = osscale.Format(final)
+		env[envNoDPI] = "1"
+		rep.Wanted = final
+		rep.DisableDPI = true
+		return rep
+	}
+	if s.Display.Scale > 0 {
+		rep.Wanted = min(s.Display.Scale, 4)
+		env[envScale] = osscale.Format(rep.Wanted)
+	}
+	return rep
 }
 
 // wantedPlatform is the window system the settings force ("" = automatic).

@@ -60,6 +60,9 @@ func SetEnvOverrides(m map[string]string) {
 func envOverride(label string) string {
 	stateMu.Lock()
 	defer stateMu.Unlock()
+	if label == "Eigene Skalierung" {
+		label = "Skalierung"
+	}
 	return envOver[label]
 }
 
