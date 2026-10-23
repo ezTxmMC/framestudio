@@ -141,8 +141,10 @@ func (sh *Shell) bindGlobal() {
 			}},
 		b("window.close", sh.closeFocusedWindow, nil),
 		sh.customChromeBinding(),
+		sh.buttonsBinding("window.buttons.auto", "auto"),
 		sh.buttonsBinding("window.buttons.mac", "mac"),
 		sh.buttonsBinding("window.buttons.win", "win"),
+		sh.buttonsBinding("window.buttons.linux", "linux"),
 		b("window.nextProject", func() { sh.cycleProject(+1) }, func() bool { return len(sh.projects) > 1 }),
 		b("window.prevProject", func() { sh.cycleProject(-1) }, func() bool { return len(sh.projects) > 1 }),
 		command.Binding{ID: "help.shortcuts", Run: sh.showShortcuts, Icon: theme.HelpIcon()},
@@ -226,6 +228,14 @@ func (sh *Shell) customChromeBinding() command.Binding {
 // the own title bar is inactive.
 func (sh *Shell) buttonsBinding(id, value string) command.Binding {
 	b := sh.radio(id, func(s *settings.Settings) *string { return &s.Display.WindowButtons }, value)
+	// anything but the three explicit styles counts as automatic
+	b.Checked = func() bool {
+		cur := settings.Get().Display.WindowButtons
+		if cur != "mac" && cur != "win" && cur != "linux" {
+			cur = "auto"
+		}
+		return cur == value
+	}
 	b.Enabled = func() bool { return winchrome.Wanted(settings.Get().Display) }
 	return b
 }

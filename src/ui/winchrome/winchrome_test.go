@@ -2,12 +2,14 @@ package winchrome
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2/test"
 
 	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/chrome"
 )
 
 func env(m map[string]string) func(string) string {
@@ -56,16 +58,21 @@ func TestWantsXWayland(t *testing.T) {
 func TestWantedAndStyle(t *testing.T) {
 	fk := UseFake(t)
 	d := settings.Defaults().Display
-	if !Wanted(d) || Style(d) != "mac" {
-		t.Fatal("defaults: custom chrome with mac buttons")
+	if !Wanted(d) || d.WindowButtons != "auto" || Style(d) != chrome.ResolveStyle("auto", runtime.GOOS) {
+		t.Fatal("defaults: custom chrome with automatic buttons")
+	}
+	for goos, want := range map[string]string{"darwin": "mac", "windows": "win", "linux": "linux", "freebsd": "linux"} {
+		if got := StyleFor(d, goos); got != want {
+			t.Fatalf("%s: %s", goos, got)
+		}
 	}
 	d.WindowButtons = "win"
 	if Style(d) != "win" {
 		t.Fatal("win")
 	}
 	d.WindowButtons = "bogus"
-	if Style(d) != "mac" {
-		t.Fatal("unknown styles fall back to mac")
+	if Style(d) != chrome.ResolveStyle("auto", runtime.GOOS) {
+		t.Fatal("unknown styles are automatic")
 	}
 	fk.CanChrome = false
 	if Wanted(settings.Defaults().Display) {

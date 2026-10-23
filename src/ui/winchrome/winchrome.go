@@ -52,12 +52,12 @@ type handler struct {
 // window system supports it.
 func Wanted(d settings.Display) bool { return d.CustomChrome && Can() }
 
-// Style is the button style of d ("mac" or "win").
-func Style(d settings.Display) string {
-	if d.WindowButtons == chrome.StyleWin {
-		return chrome.StyleWin
-	}
-	return chrome.StyleMac
+// Style is the button style of d for the running system ("mac", "win" or "linux").
+func Style(d settings.Display) string { return StyleFor(d, runtime.GOOS) }
+
+// StyleFor is Style for any operating system name (runtime.GOOS values).
+func StyleFor(d settings.Display, goos string) string {
+	return chrome.ResolveStyle(d.WindowButtons, goos)
 }
 
 // Undecorate removes the system title bar of w. On failure the error is remembered for

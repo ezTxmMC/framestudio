@@ -23,7 +23,8 @@ type field struct {
 	cat     *category
 	label   string
 	help    string
-	restart bool // applies after a restart only
+	helpTxt *widget.RichText // the rendered help (set by buildRow), for live help texts
+	restart bool             // applies after a restart only
 
 	control fyne.CanvasObject
 	row     fyne.CanvasObject
@@ -64,6 +65,7 @@ func (w *window) buildRow(f *field) fyne.CanvasObject {
 		help := widget.NewRichText(&widget.TextSegment{Text: f.help, Style: widget.RichTextStyle{
 			ColorName: studiotheme.ColorNameMuted, SizeName: theme.SizeNameCaptionText}})
 		help.Wrapping = fyne.TextWrapWord
+		f.helpTxt = help
 		p := theme.InnerPadding()
 		left = append(left, container.New(layout.NewCustomPaddedLayout(-p, -p, -p, -p), help))
 	}
@@ -351,4 +353,18 @@ func (w *window) accent(c *category, label, help string) *field {
 				ch.sw.SetSelected(ch.id == s.Display.Accent || (!known && i == 0))
 			}
 		}})
+}
+
+// setHelp replaces the help text of f (live descriptions such as "Aktuell: Linux").
+func (f *field) setHelp(text string) {
+	if f.help == text {
+		return
+	}
+	f.help = text
+	if f.helpTxt != nil {
+		if seg, ok := f.helpTxt.Segments[0].(*widget.TextSegment); ok {
+			seg.Text = text
+			f.helpTxt.Refresh()
+		}
+	}
 }

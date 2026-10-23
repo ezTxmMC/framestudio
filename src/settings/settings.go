@@ -12,7 +12,7 @@ import (
 	"sync"
 )
 
-const Version = 1
+const Version = 2
 
 type Settings struct {
 	Version int `json:"version"`
@@ -90,7 +90,8 @@ type Display struct {
 	// CustomChrome replaces the system title bar by the app's own (borderless window).
 	// Falls back to the system title bar where the window system cannot support it.
 	CustomChrome bool `json:"customChrome"`
-	// WindowButtons is "mac" (circles on the left) or "win" (icons on the right).
+	// WindowButtons is "auto" (by operating system), "mac" (circles on the left), "win"
+	// (icons on the right) or "linux" (symbolic icons in discs on the right).
 	WindowButtons string `json:"windowButtons"`
 }
 
@@ -105,7 +106,7 @@ func Defaults() Settings {
 			ShowFilmstrip: true, ShowWaveforms: true, RippleSyncLock: true},
 		Media:   Media{FrameCacheMB: 512, StillCacheMB: 256, AudioCacheMB: 1536, MaxDecoders: 4},
 		Export:  Export{Notify: true},
-		Display: Display{Platform: "auto", Accent: "steel", CustomChrome: true, WindowButtons: "mac", PageBar: true, StatusBar: true, SaveLayoutOnQuit: true, Layout: "Standard"},
+		Display: Display{Platform: "auto", Accent: "steel", CustomChrome: true, WindowButtons: "auto", PageBar: true, StatusBar: true, SaveLayoutOnQuit: true, Layout: "Standard"},
 		Keymap:  map[string]string{},
 	}
 }
@@ -154,6 +155,7 @@ func Load() (Settings, error) {
 	}
 	var broken error
 	if err == nil {
+		s.Version = 0 // a file without a version is a version 1 file
 		if err := json.Unmarshal(b, &s); err != nil {
 			// Keep the damaged file for the user and go on with the defaults, saving
 			// later changes as usual.
@@ -165,6 +167,10 @@ func Load() (Settings, error) {
 	}
 	if s.Keymap == nil {
 		s.Keymap = map[string]string{}
+	}
+	if s.Version < 2 && s.Display.WindowButtons == "mac" {
+		// version 1 made "mac" the default on every system; "auto" resolves to mac on macOS
+		s.Display.WindowButtons = "auto"
 	}
 	s.Version = Version
 	mu.Lock()

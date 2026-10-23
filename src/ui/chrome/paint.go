@@ -100,6 +100,18 @@ func (p *painter) rect(x0, y0, x1, y1 float64, c color.NRGBA) {
 	}, c)
 }
 
+// frame paints a rounded rectangle outline whose stroke is centred on the given box.
+func (p *painter) frame(x0, y0, x1, y1, w, rad float64, c color.NRGBA) {
+	hx, hy := (x1-x0)/2, (y1-y0)/2
+	mx, my := (x0+x1)/2, (y0+y1)/2
+	e := w / 2
+	p.fill([4]float64{x0 - e, y0 - e, x1 + e, y1 + e}, func(x, y float64) float64 {
+		dx, dy := math.Abs(x-mx)-(hx-rad), math.Abs(y-my)-(hy-rad)
+		d := math.Hypot(math.Max(dx, 0), math.Max(dy, 0)) + math.Min(math.Max(dx, dy), 0) - rad
+		return math.Abs(d) - e
+	}, c)
+}
+
 // line paints a segment of width w with round caps.
 func (p *painter) line(x0, y0, x1, y1, w float64, c color.NRGBA) {
 	r := w / 2

@@ -365,15 +365,15 @@ func TestStyleSwitchLive(t *testing.T) {
 		t.Fatalf("win leading at %v", lead.Position().X)
 	}
 	tb.SetStyle("unsinn")
-	if tb.Style() != StyleMac || tb.Controls().Position().X != 0 {
-		t.Fatal("unknown style falls back to mac")
+	if tb.Style() != ResolveStyle("auto", runtime.GOOS) {
+		t.Fatal("unknown style follows the system")
 	}
 }
 
 func TestMinSizes(t *testing.T) {
 	fb := newFake()
 	for _, compact := range []bool{false, true} {
-		for _, st := range []string{StyleMac, StyleWin} {
+		for _, st := range []string{StyleMac, StyleWin, StyleLinux} {
 			w := test.NewTempWindow(t, nil)
 			tb := NewTitlebar(w, Options{Style: st, Compact: compact, Backend: fb}, nil, nil, nil)
 			m := tb.MinSize()
