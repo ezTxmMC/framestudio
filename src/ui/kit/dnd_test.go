@@ -24,7 +24,7 @@ func newZone() *zone {
 }
 
 func (z *zone) MinSize() fyne.Size                           { return fyne.NewSize(100, 100) }
-func (z *zone) MediaDragOver(ids []string, _ fyne.Position) { z.over = ids }
+func (z *zone) MediaDragOver(ids []string, _ fyne.Position)  { z.over = ids }
 func (z *zone) MediaDragLeave()                              { z.left = true }
 func (z *zone) MediaDrop(ids []string, p fyne.Position) bool { z.dropped = p; return true }
 
