@@ -61,6 +61,8 @@ type Page struct {
 	pickFiles pickFunc
 	picking   bool
 	fileDlg   *fileDialog // open fallback browser, for tests
+	// formatDialog replaces the confirmation of "Als Projektformat verwenden" in tests.
+	formatDialog func(title, msg string, ask bool, yes func())
 
 	view       []model.MediaItem // pool items after search and kind filter
 	query      string

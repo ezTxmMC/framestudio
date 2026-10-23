@@ -25,28 +25,17 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
-// Template is a preset for new projects.
-type Template struct {
-	Label         string
-	Width, Height int
-	FPS           model.Rate
-}
+// Template is a format preset for new projects (built-in or the user's own).
+type Template = settings.Template
 
-// Templates are offered in the "Neues Projekt" dialog; the first is the default.
-var Templates = []Template{
-	{"1080p HD · 25 fps", 1920, 1080, model.Rate25},
-	{"720p HD · 25 fps", 1280, 720, model.Rate25},
-	{"4K UHD · 25 fps", 3840, 2160, model.Rate25},
-	{"1080p HD · 30 fps", 1920, 1080, model.Rate30},
-	{"1080p HD · 60 fps", 1920, 1080, model.Rate60},
-	{"Hochkant 1080×1920 · 30 fps (Social)", 1080, 1920, model.Rate30},
-	{"Quadrat 1080×1080 · 30 fps", 1080, 1080, model.Rate30},
-}
+// Templates are the built-in templates; the first is the factory default.
+var Templates = settings.BuiltinTemplates()
 
 // manager is the full-window project manager: library grid plus recent projects.
 type manager struct {
@@ -569,30 +558,6 @@ func (m *manager) typedKey(k *fyne.KeyEvent) bool {
 		return false
 	}
 	return true
-}
-
-// newProjectDialog asks for name and preset and opens the new project.
-func (sh *Shell) newProjectDialog() {
-	name := widget.NewEntry()
-	name.SetText(defaultProjectName())
-	name.Validator = nonEmpty
-	labels := make([]string, len(Templates))
-	for i, t := range Templates {
-		labels[i] = t.Label
-	}
-	preset := widget.NewSelect(labels, nil)
-	preset.SetSelectedIndex(0)
-	d := dialog.NewForm("Neues Projekt", "Anlegen", "Abbrechen", []*widget.FormItem{
-		widget.NewFormItem("Name", name),
-		widget.NewFormItem("Vorlage", preset),
-	}, func(ok bool) {
-		if ok {
-			sh.newProject(strings.TrimSpace(name.Text), Templates[max(0, preset.SelectedIndex())])
-		}
-	}, sh.win)
-	d.Resize(fyne.NewSize(480, 200))
-	d.Show()
-	sh.win.Canvas().Focus(name)
 }
 
 // defaultProjectName proposes a name that is not yet used in the library.
