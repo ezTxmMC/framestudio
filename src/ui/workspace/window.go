@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"image/color"
 	"time"
 
@@ -12,10 +13,13 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/chrome"
 	"framestudio-proto/src/ui/command"
 	fslayout "framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/ui/winchrome"
 )
 
 // cursorIdle is how long the pointer may rest on a clean feed before it disappears.
@@ -41,12 +45,24 @@ type detached struct {
 	// header says so instead of claiming the monitor.
 	unplaced bool
 
-	header   *fyne.Container
-	title    *canvas.Text
-	where    *canvas.Text
-	fsButton *widget.Button
-	body     *fyne.Container
-	idle     *idleArea
+	header    *fyne.Container // system title bar mode: the thin header below it
+	title     *canvas.Text
+	where     *canvas.Text
+	icon      fyne.CanvasObject
+	fsButton  *barButton
+	monButton *barButton
+	backBtn   *barButton
+	body      *fyne.Container
+	stack     fyne.CanvasObject // backdrop, body and the clean feed's idle area
+	idle      *idleArea
+
+	// Custom chrome (Display.CustomChrome): the header row is the window's title bar.
+	custom      bool
+	undecorated bool
+	arranged    string // key of the content installed by arrange
+	chrome      *winchrome.Chrome
+	unwatch     func()
+	last        chrome.State // window state at the last watch event
 
 	closing   bool
 	done      bool
@@ -63,7 +79,11 @@ func newDetached(m *Manager, info page.PanelInfo) *detached {
 		d.win.SetIcon(info.Icon)
 	}
 	d.win.SetPadded(false)
+	d.custom = winchrome.Wanted(settings.Get().Display)
 	d.buildChrome()
+	d.arrange()
+	winchrome.OnClose(d.win, d.close)
+	winchrome.OnFullscreen(d.win, d.setFullscreen)
 	d.rebuild()
 	c := d.win.Canvas()
 	c.SetOnTypedKey(d.typedKey)
@@ -78,7 +98,8 @@ func newDetached(m *Manager, info page.PanelInfo) *detached {
 
 func (d *detached) cleanFeed() bool { return d.id == page.PanelCleanFeed }
 
-// buildChrome creates the thin studio header and the body stack.
+// buildChrome creates the widgets of the header (icon, title, place, buttons) and the
+// body stack; arrange puts them into the system header or the custom title bar.
 func (d *detached) buildChrome() {
 	d.title = canvas.NewText(d.info.Title, studiotheme.Text)
 	d.title.TextSize = 12
@@ -90,25 +111,12 @@ func (d *detached) buildChrome() {
 	if icon == nil {
 		icon = theme.ComputerIcon()
 	}
-	ic := widget.NewIcon(icon)
-	iconBox := container.NewGridWrap(fyne.NewSize(16, 16), ic)
+	d.icon = container.NewGridWrap(fyne.NewSize(16, 16), widget.NewIcon(icon))
 
-	d.fsButton = headerButton("Vollbild", theme.ViewFullScreenIcon(), d.toggleFullscreen)
-	var monButton *widget.Button
-	monButton = headerButton("Auf Monitor", theme.MenuDropDownIcon(), func() { d.showMonitorMenu(monButton) })
-	monButton.IconPlacement = widget.ButtonIconTrailingText
-	back := headerButton("Zurück ins Hauptfenster", theme.LogoutIcon(), d.close)
-
-	sep := canvas.NewRectangle(studiotheme.Border)
-	sep.SetMinSize(fyne.NewSize(1, 14))
-	left := container.NewHBox(spacer(6), centerV(iconBox), spacer(2), centerV(d.title), spacer(8), centerV(sep), spacer(8), centerV(d.where))
-	right := container.NewHBox(d.fsButton, monButton, back, spacer(2))
-	bg := canvas.NewRectangle(studiotheme.Panel)
-	line := canvas.NewRectangle(studiotheme.Border)
-	line.SetMinSize(fyne.NewSize(1, 1))
-	height := canvas.NewRectangle(color.Transparent)
-	height.SetMinSize(fyne.NewSize(0, 30))
-	d.header = container.NewVBox(container.NewStack(bg, height, container.NewBorder(nil, nil, left, right)), line)
+	d.fsButton = newBarButton("Vollbild", theme.ViewFullScreenIcon(), d.toggleFullscreen)
+	d.monButton = newBarButton("Auf Monitor", theme.MenuDropDownIcon(), func() { d.showMonitorMenu(d.monButton) })
+	d.monButton.trailingIcon = true
+	d.backBtn = newBarButton("Zurück ins Hauptfenster", theme.LogoutIcon(), d.close)
 
 	d.body = container.NewStack()
 	backdrop := canvas.NewRectangle(studiotheme.Gap)
@@ -122,7 +130,114 @@ func (d *detached) buildChrome() {
 		d.idle = newIdleArea(d)
 		stack.Add(d.idle)
 	}
-	d.win.SetContent(container.NewBorder(d.header, nil, nil, nil, stack))
+	d.stack = stack
+}
+
+// systemHeader is the thin studio header below the system title bar: icon, title and
+// place at the left, the window buttons at the right.
+func (d *detached) systemHeader() *fyne.Container {
+	sep := canvas.NewRectangle(studiotheme.Border)
+	sep.SetMinSize(fyne.NewSize(1, 14))
+	left := container.NewHBox(spacer(6), centerV(d.icon), spacer(2), centerV(d.title), spacer(8), centerV(sep), spacer(8), centerV(d.where))
+	right := container.NewHBox(d.fsButton, d.monButton, d.backBtn, spacer(2))
+	bg := canvas.NewRectangle(studiotheme.Panel)
+	line := canvas.NewRectangle(studiotheme.Border)
+	line.SetMinSize(fyne.NewSize(1, 1))
+	height := canvas.NewRectangle(color.Transparent)
+	height.SetMinSize(fyne.NewSize(0, 30))
+	return container.NewVBox(container.NewStack(bg, height, container.NewBorder(nil, nil, left, right)), line)
+}
+
+// arrange installs the window content for the current mode: the custom title bar in a
+// resize frame, or the system header; a fullscreen clean feed shows neither (no bar, no
+// frame, no resize grips).
+func (d *detached) arrange() {
+	bare := d.custom && d.cleanFeed() && d.win.FullScreen()
+	key := fmt.Sprint(d.custom, bare)
+	if key == d.arranged {
+		return
+	}
+	d.arranged = key
+	if d.chrome != nil {
+		d.chrome.Close()
+		d.chrome = nil
+	}
+	switch {
+	case d.custom && bare:
+		d.header = nil
+		d.win.SetContent(d.stack)
+	case d.custom:
+		d.header = nil
+		o := winchrome.Options(settings.Get().Display, true, true, true)
+		parts := winchrome.Parts{
+			Leading:  container.NewHBox(spacer(4), centerV(d.icon), spacer(6), centerV(d.where)),
+			Center:   container.NewCenter(d.title),
+			Trailing: container.NewHBox(d.fsButton, d.monButton, d.backBtn, spacer(4)),
+		}
+		root, c := winchrome.Build(d.win, o, parts, d.stack)
+		d.chrome = c
+		d.win.SetContent(root)
+	default:
+		d.header = d.systemHeader()
+		d.win.SetContent(container.NewBorder(d.header, nil, nil, nil, d.stack))
+	}
+}
+
+// decorate takes the system title bar off the native window (custom mode) or gives it
+// back; call it once the window is shown. If the window system refuses, the window keeps
+// its system title bar and the header.
+func (d *detached) decorate() {
+	if d.custom {
+		if err := winchrome.Undecorate(d.win); err != nil {
+			d.custom = false
+			d.arrange()
+		} else {
+			d.undecorated = true
+		}
+	} else if d.undecorated {
+		_ = winchrome.Redecorate(d.win)
+		d.undecorated = false
+	}
+	if d.unwatch == nil && !d.closing {
+		d.unwatch = winchrome.Sys.Watch(d.win, d.stateChanged)
+	}
+}
+
+// stateChanged follows maximize and fullscreen done with the title bar or the window
+// manager: the place text and the layout mode stay true.
+func (d *detached) stateChanged(s chrome.State) {
+	if d.closing || d.done {
+		return
+	}
+	was := d.last
+	d.last = s
+	switch {
+	case s.Fullscreen:
+		d.mode = fslayout.ModeFullscreen
+	case s.Maximized:
+		d.mode = fslayout.ModeMaximized
+	case was.Maximized || was.Fullscreen: // left maximize or fullscreen
+		d.mode = fslayout.ModeWindow
+	}
+	d.updateHeader()
+	d.m.refresh()
+}
+
+// applyChrome follows Display.CustomChrome and Display.WindowButtons live.
+func (d *detached) applyChrome(s settings.Display) {
+	if d.closing || d.done {
+		return
+	}
+	if want := winchrome.Wanted(s); want != d.custom {
+		d.custom = want
+		d.arrange()
+		d.decorate()
+		d.updateHeader()
+		return
+	}
+	if d.chrome != nil {
+		d.chrome.Bar.SetStyle(winchrome.Style(s))
+	}
 }
 
 // panelMinSize is the smallest body a detached panel stays usable at: the scopes need
@@ -136,13 +251,6 @@ func panelMinSize(id string) fyne.Size {
 		return fyne.NewSize(420, 440)
 	}
 	return fyne.Size{}
-}
-
-// headerButton is a flat, compact button for the window header.
-func headerButton(label string, icon fyne.Resource, tap func()) *widget.Button {
-	b := widget.NewButtonWithIcon(label, icon, tap)
-	b.Importance = widget.LowImportance
-	return b
 }
 
 func spacer(w float32) fyne.CanvasObject {
@@ -227,13 +335,16 @@ func (d *detached) updateHeader() {
 		d.fsButton.SetText("Vollbild")
 		d.fsButton.SetIcon(theme.ViewFullScreenIcon())
 	}
-	if d.cleanFeed() && full {
-		d.header.Hide()
-	} else {
-		d.header.Show()
-		if d.idle != nil {
-			d.idle.show()
+	d.arrange()
+	if d.header != nil {
+		if d.cleanFeed() && full {
+			d.header.Hide()
+		} else {
+			d.header.Show()
 		}
+	}
+	if d.idle != nil && !(d.cleanFeed() && full) {
+		d.idle.show()
 	}
 }
 
@@ -313,6 +424,15 @@ func (d *detached) closed() {
 		d.panel = nil
 	}
 	d.ctx, d.built = nil, false
+	if d.unwatch != nil {
+		d.unwatch()
+		d.unwatch = nil
+	}
+	if d.chrome != nil {
+		d.chrome.Close()
+		d.chrome = nil
+	}
+	winchrome.Forget(d.win)
 	d.m.disp.Forget(d.win)
 	d.m.remove(d)
 }

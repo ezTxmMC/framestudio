@@ -40,6 +40,9 @@ func (sh *Shell) settingsChanged(s settings.Settings) {
 	if s.Display.PageBar != old.Display.PageBar || s.Display.StatusBar != old.Display.StatusBar {
 		sh.bars.applyDisplay(s.Display)
 	}
+	if s.Display.CustomChrome != old.Display.CustomChrome || s.Display.WindowButtons != old.Display.WindowButtons {
+		sh.applyChromeSettings(old.Display, s.Display)
+	}
 	sh.reg.Refresh()
 }
 

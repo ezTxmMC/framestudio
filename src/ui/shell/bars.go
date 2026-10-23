@@ -17,6 +17,7 @@ import (
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/menubar"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/ui/winchrome"
 )
 
 const (
@@ -37,15 +38,14 @@ type menuOpener interface {
 	HandleShortcut(fyne.Shortcut) bool
 }
 
-// bars holds the two top rows (menu bar with wordmark; project tabs with save status and
-// undo/redo) and the bottom bar (page buttons and the status line with format and
+// bars holds the two top rows (menu bar with wordmark, which is the title bar in the
+// custom chrome; project tabs with save status and undo/redo) and the bottom bar (page buttons and the status line with format and
 // duration). Display.PageBar and Display.StatusBar switch the parts of the bottom bar.
 type bars struct {
 	sh          *Shell
-	top, bottom *fyne.Container   // project tabs; page bar and status line
-	menuRow     fyne.CanvasObject // wordmark, menu bar and project name, above everything
+	top, bottom *fyne.Container // project tabs; page bar and status line
 	menu        *menubar.MenuBar
-	project     *canvas.Text // active project name at the right of the menu row
+	project     *canvas.Text // active project name (right of the menu row, centred in the title bar)
 	tabs        *fyne.Container
 	status      *canvas.Text
 	undo, redo  *widget.Button
@@ -68,10 +68,6 @@ func newBars(sh *Shell) *bars {
 	}
 	sh.menuBar = b.menu
 	b.project = text("", studiotheme.Faint, 11, false)
-	b.menuRow = bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
-		container.NewHBox(strut(10, 0), container.NewCenter(wordmark()), strut(10, 0)),
-		container.NewHBox(container.NewCenter(b.project), strut(12, 0)),
-		b.menu))
 
 	// Row 2: project tabs, save status, undo/redo.
 	plus := newIconTap(theme.ContentAddIcon(), 14, sh.ShowManager)
@@ -100,6 +96,27 @@ func newBars(sh *Shell) *bars {
 	b.bottom = container.NewStack()
 	b.applyDisplay(settings.Get().Display)
 	return b
+}
+
+// systemRow is the menu row below the system title bar: wordmark, menu bar and the
+// project name at the right. It is the same menu bar widget the title bar holds in the
+// custom chrome, so only one of the two is shown at a time.
+func (b *bars) systemRow() fyne.CanvasObject {
+	b.project.Color = studiotheme.Faint
+	return bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
+		container.NewHBox(strut(10, 0), container.NewCenter(wordmark()), strut(10, 0)),
+		container.NewHBox(container.NewCenter(b.project), strut(12, 0)),
+		b.menu))
+}
+
+// titleParts are the areas of the custom title bar: wordmark and menu bar after the
+// window buttons, the project name in the middle, nothing at the right.
+func (b *bars) titleParts() winchrome.Parts {
+	b.project.Color = studiotheme.Muted
+	return winchrome.Parts{
+		Leading: container.NewHBox(strut(6, 0), container.NewCenter(wordmark()), strut(10, 0), b.menu),
+		Center:  container.NewCenter(b.project),
+	}
 }
 
 // wordmark is the app name with a small frame glyph in the accent colour.
@@ -216,6 +233,7 @@ func (b *bars) refresh() {
 	if p != nil && !sh.showManager {
 		b.project.Text = ellipsize(p.sess.Project.Name, 40)
 	}
+	b.project.Refresh()
 	if p == nil {
 		b.undo.Disable()
 		b.redo.Disable()

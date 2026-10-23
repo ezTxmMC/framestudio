@@ -22,6 +22,7 @@ import (
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/settingsui"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/ui/winchrome"
 	"framestudio-proto/src/ui/workspace"
 )
 
@@ -189,6 +190,8 @@ func (sh *Shell) diagnostics() [][2]string {
 		platform = sessionType()
 	}
 	add("Fenstersystem", workspace.PlatformName(platform))
+	_, chromeText := winchrome.Describe(settings.Get().Display)
+	add("Eigene Titelleiste", chromeText)
 	tool := func(name string) string {
 		if p, err := exec.LookPath(name); err == nil {
 			return "vorhanden (" + p + ")"

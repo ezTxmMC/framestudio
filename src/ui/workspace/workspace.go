@@ -21,6 +21,7 @@ import (
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
+	"framestudio-proto/src/ui/winchrome"
 )
 
 // Host is what the shell provides to the workspace manager.
@@ -54,6 +55,7 @@ type Manager struct {
 	wins   []*detached     // open detached windows, in opening order
 	closed bool
 	dlg    *monitorDialog
+	unsub  func() // settings subscription (custom title bar follows the settings)
 
 	// mods reports the modifiers held with the current key event (desktop driver).
 	mods func() fyne.KeyModifier
@@ -83,7 +85,31 @@ func NewWithDisplay(h Host, d Display) *Manager {
 	}
 	h.OnActiveChange(m.activeChanged)
 	d.OnChange(m.monitorsChanged)
+	last := settings.Get().Display
+	m.unsub = settings.Subscribe(func(s settings.Settings) {
+		if m.closed || (s.Display.CustomChrome == last.CustomChrome && s.Display.WindowButtons == last.WindowButtons) {
+			last = s.Display
+			return
+		}
+		last = s.Display
+		for _, d := range append([]*detached(nil), m.wins...) {
+			d.applyChrome(s.Display)
+		}
+	})
 	return m
+}
+
+// CloseFocused closes the detached window that has the focus and reports whether there
+// was one (window.close).
+func (m *Manager) CloseFocused() bool {
+	for _, d := range m.wins {
+		if !d.closing && winchrome.Sys.State(d.win).Focused {
+			d.close()
+			m.refresh()
+			return true
+		}
+	}
+	return false
 }
 
 // Bindings returns the workspace.* commands and registers the dynamic submenus.
@@ -260,6 +286,7 @@ func (m *Manager) open(id, monitor, mode string, r layout.Rect, fallbackFrom str
 		d = newDetached(m, info)
 		m.wins = append(m.wins, d)
 		d.win.Show()
+		d.decorate() // the system title bar goes once the native window exists
 	}
 	d.fallbackFrom = fallbackFrom
 	if fallbackFrom != "" {
@@ -508,6 +535,10 @@ func (m *Manager) shutdown(live bool) {
 		m.dlg.hide()
 	}
 	m.closed = true
+	if m.unsub != nil {
+		m.unsub()
+		m.unsub = nil
+	}
 	for _, d := range append([]*detached(nil), m.wins...) {
 		if live {
 			d.close()

@@ -39,6 +39,7 @@ import (
 	editpage "framestudio-proto/src/ui/pages/edit"
 	mediapage "framestudio-proto/src/ui/pages/media"
 	"framestudio-proto/src/ui/settingsui"
+	"framestudio-proto/src/ui/winchrome"
 	"framestudio-proto/src/ui/workspace"
 )
 
@@ -62,6 +63,7 @@ func Run(a fyne.App, files []string) {
 	sh.Start(files)
 	sigs := catchSignals(sh)
 	a.Lifecycle().SetOnStarted(func() {
+		sh.decorateAgain()
 		sh.ws.Restore()
 		if loadErr != nil {
 			sh.showErr(errSettingsLoad(loadErr))
@@ -77,7 +79,11 @@ func Run(a fyne.App, files []string) {
 	defer func() { settingsui.Restart = nil }()
 	stop := sh.StartAutosave(autosaveInterval(settings.Get()))
 	w.SetMaster() // closing the main window always ends the app
-	w.ShowAndRun()
+	// Show the window, take the system title bar off at once (before the first frame is
+	// drawn, so there is hardly a flicker) and run.
+	w.Show()
+	sh.decorate()
+	a.Run()
 	sigs.stop()
 	stop()
 	if !sh.shutdownDone {
@@ -204,13 +210,18 @@ type Shell struct {
 	projects []*project
 	active   *project
 
-	root        *fyne.Container
-	frame       *fyne.Container // menu bar, tabs, page content and page bar
-	content     *fyne.Container
-	bars        *bars
-	mgr         *manager
-	toast       *toaster
-	showManager bool
+	chromeOn      bool              // the main window shows the custom title bar (chrome.go)
+	retryDecorate bool              // decorate failed once: ask again after the start
+	undecorated   bool              // the system title bar was taken off the native window
+	chrome        *winchrome.Chrome // title bar and frame while chromeOn
+	unwatch       func()            // stops the window state watch
+	root          *fyne.Container
+	frame         *fyne.Container // menu bar, tabs, page content and page bar
+	content       *fyne.Container
+	bars          *bars
+	mgr           *manager
+	toast         *toaster
+	showManager   bool
 
 	// Commands, keys and menus (commands.go, keys.go).
 	reg            *command.Registry
@@ -283,12 +294,17 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh.mgr = newManager(sh)
 	sh.root = container.NewStack()
 	w.SetPadded(false)
-	// The menu row stays on top of the workspace and the project manager alike.
-	w.SetContent(container.NewBorder(sh.bars.menuRow, nil, nil, nil, sh.root))
+	// The menu row (the title bar in the custom chrome) stays on top of the workspace
+	// and the project manager alike. The native title bar goes in decorate, once the
+	// window exists.
+	sh.chromeOn = winchrome.Wanted(sh.lastSettings.Display)
+	sh.installContent()
+	winchrome.OnClose(w, sh.Quit)
+	winchrome.OnFullscreen(w, sh.setFullscreen)
 	sh.installKeys()
 	sh.disposers = append(sh.disposers,
 		sh.reg.Subscribe(sh.registerShortcuts),
-		settings.Subscribe(sh.settingsChanged))
+		settings.Subscribe(sh.settingsChanged), sh.releaseChrome)
 	w.SetOnDropped(sh.droppedAt)
 	w.SetCloseIntercept(sh.Quit)
 	sh.refreshChrome()
