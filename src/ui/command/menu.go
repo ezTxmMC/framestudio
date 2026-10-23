@@ -86,6 +86,7 @@ var MenuBar = []Menu{
 		Sep(), Cmd("view.fullscreen"), Cmd("view.viewerFullscreen"), Sep(),
 		Cmd("view.safeArea"), Cmd("grade.compare"),
 		Sub("Scopes", Cmd("scopes.histogram"), Cmd("scopes.waveform"), Cmd("scopes.vectorscope")),
+		Sub("Bereiche der Schnittseite", Cmd("edit.hide.viewer"), Cmd("edit.hide.library"), Cmd("edit.hide.inspector")),
 		Sep(), Cmd("view.pageBar"), Cmd("view.statusBar"), Sep(), Cmd("app.palette"),
 	}},
 	{Title: "Arbeitsbereich", Items: []Item{

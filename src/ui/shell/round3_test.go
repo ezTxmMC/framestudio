@@ -378,15 +378,30 @@ func TestMenuKeys(t *testing.T) {
 	sh, _, _ := newTestShell(t)
 	sh.Start([]string{saveSample(t, "Menütasten", 1920, 1080, 25, 100)})
 	sh.typedKey(&fyne.KeyEvent{Name: fyne.KeyF10})
+	if !sh.menuBar.IsOpen() {
+		t.Fatal("F10 did not focus the menu bar")
+	}
+	sh.menuBar.Close()
 	sh.keyDown(&fyne.KeyEvent{Name: desktop.KeyAltLeft})
 	sh.typedKey(&fyne.KeyEvent{Name: desktop.KeyAltLeft})
 	sh.keyUp(&fyne.KeyEvent{Name: desktop.KeyAltLeft})
+	if !sh.menuBar.IsOpen() {
+		t.Fatal("Alt alone did not focus the menu bar")
+	}
+	sh.menuBar.Close()
 	// Alt then another key: no menu.
 	sh.keyDown(&fyne.KeyEvent{Name: desktop.KeyAltLeft})
 	sh.keyDown(&fyne.KeyEvent{Name: fyne.KeyTab})
 	sh.keyUp(&fyne.KeyEvent{Name: desktop.KeyAltLeft})
+	if sh.menuBar.IsOpen() {
+		t.Fatal("Alt+Tab focused the menu bar")
+	}
 	// Alt+H opens Hilfe (no command uses it); Alt+X runs its command instead.
 	typeShortcut(t, sh, &desktop.CustomShortcut{KeyName: fyne.KeyH, Modifier: fyne.KeyModifierAlt})
+	if !sh.menuBar.IsOpen() {
+		t.Fatal("Alt+H did not open Hilfe")
+	}
+	sh.menuBar.Close()
 	s := sh.Active()
 	s.SetIn(5)
 	s.SetOut(20)
@@ -604,9 +619,7 @@ func TestScreenshotRound3(t *testing.T) {
 	capture(t, w, "/tmp/fs-r3-shell.png")
 	sh.menuBar.Open(0)
 	capture(t, w, "/tmp/fs-r3-shell-menu.png")
-	for w.Canvas().Overlays().Top() != nil {
-		w.Canvas().Overlays().Remove(w.Canvas().Overlays().Top())
-	}
+	sh.menuBar.Close()
 	_ = settings.Update(func(s *settings.Settings) { s.Display.PageBar = false })
 	capture(t, w, "/tmp/fs-r3-shell-nopagebar.png")
 	_ = settings.Update(func(s *settings.Settings) { s.Display.PageBar = true })

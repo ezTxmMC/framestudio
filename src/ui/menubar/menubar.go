@@ -399,3 +399,32 @@ func (r *barRenderer) Objects() []fyne.CanvasObject {
 }
 
 func (r *barRenderer) Destroy() {}
+
+// TitlePos returns the canvas position of the centre of the menu title (for UI
+// automation and integration tests).
+func (m *MenuBar) TitlePos(title string) (fyne.Position, bool) {
+	for i, mn := range m.menus {
+		if mn.Title == title {
+			bp, bs := m.barRect()
+			return fyne.NewPos(bp.X+m.titleX[i]+m.titleW[i]/2, bp.Y+bs.Height/2), true
+		}
+	}
+	return fyne.Position{}, false
+}
+
+// ItemPos returns the canvas position of the open menu row with label (deepest open
+// pane first; for UI automation and integration tests).
+func (m *MenuBar) ItemPos(label string) (fyne.Position, bool) {
+	if m.layer == nil {
+		return fyne.Position{}, false
+	}
+	for d := len(m.layer.panes) - 1; d >= 0; d-- {
+		p := m.layer.panes[d]
+		for i, r := range p.rows {
+			if !r.sep && r.label == label {
+				return p.Position().Add(fyne.NewPos(60, p.tops[i]+rowHeight/2)), true
+			}
+		}
+	}
+	return fyne.Position{}, false
+}

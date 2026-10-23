@@ -35,6 +35,7 @@ import (
 	deliverpage "framestudio-proto/src/ui/pages/deliver"
 	editpage "framestudio-proto/src/ui/pages/edit"
 	mediapage "framestudio-proto/src/ui/pages/media"
+	"framestudio-proto/src/ui/settingsui"
 	"framestudio-proto/src/ui/workspace"
 )
 
@@ -42,21 +43,44 @@ import (
 func Run(a fyne.App, files []string) {
 	// The settings are normally loaded by main before the theme is chosen; loading again
 	// is harmless (every change is saved at once) and reports a damaged file here.
-	_, loadErr := settings.Load()
+	// When application.Run loaded them already, its load error waits in settingsui.
+	loadErr := settingsui.TakeStartupError()
+	if !settings.Loaded() {
+		_, loadErr = settings.Load()
+	}
 	w := a.NewWindow("Frame Studio")
 	w.Resize(fyne.NewSize(1440, 900))
 	w.CenterOnScreen()
 	sh := New(a, w)
 	sh.thumbnails = true
+	// Detached windows go fullscreen on chosen monitors only once the main window is
+	// shown and GLFW runs, so the layout is restored when the app has started.
+	sh.deferRestore = true
 	sh.Start(files)
-	if loadErr != nil {
-		sh.showErr(errSettingsLoad(loadErr))
-	}
+	a.Lifecycle().SetOnStarted(func() {
+		sh.ws.Restore()
+		if loadErr != nil {
+			sh.showErr(errSettingsLoad(loadErr))
+		}
+	})
+	settingsui.Restart = sh.restart
+	defer func() { settingsui.Restart = nil }()
 	stop := sh.StartAutosave(autosaveInterval(settings.Get()))
 	w.ShowAndRun()
 	stop()
 	// Quit normally released everything already (exports and previews, then audio); if
 	// the run loop ended another way, do it now, then stop the decoders shared by all.
+	sh.releaseAll()
+	sh.dispose()
+	sh.cache.Close()
+}
+
+// newWorkspace creates the workspace manager; tests swap in a fake display backend.
+var newWorkspace = workspace.New
+
+// Close releases what Run releases after the run loop: open projects, subscriptions and
+// the shared media cache. For hosts that build the shell with New (tests, tools).
+func (sh *Shell) Close() {
 	sh.releaseAll()
 	sh.dispose()
 	sh.cache.Close()
@@ -131,10 +155,11 @@ type Shell struct {
 	bound          map[string]bool // page IDs bound for boundFor
 	activeScope    string
 	dispatchingKey bool // a key (not the menu) is running a command
-	altArmed       bool // Alt went down alone; releasing it opens the menu
 	keySig         string
 	registered     []fyne.Shortcut
 	fullscreen     bool
+	deferRestore   bool // Run restores the workspace once the app has started
+	restarting     bool // quitting for a restart (settingsui.Restart)
 
 	// Workspace host (host.go) and settings (prefs.go).
 	ws           *workspace.Manager
@@ -181,7 +206,7 @@ func New(a fyne.App, w fyne.Window) *Shell {
 		}
 	}
 	sh.bindGlobal()
-	sh.ws = workspace.New(sh)
+	sh.ws = newWorkspace(sh)
 	sh.reg.Bind(command.Global, sh.ws.Bindings()...)
 
 	sh.toast = newToaster()
@@ -238,7 +263,9 @@ func (sh *Shell) Start(files []string) {
 	if len(sh.projects) == 0 {
 		sh.ShowManager()
 	}
-	sh.ws.Restore()
+	if !sh.deferRestore {
+		sh.ws.Restore()
+	}
 }
 
 // reopen opens the projects of the last session; missing files are reported once.

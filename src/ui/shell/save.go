@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fmt"
+	"framestudio-proto/src/ui/settingsui"
 	"maps"
 	"os"
 	"path/filepath"
@@ -187,9 +188,22 @@ func (sh *Shell) closeActive() {
 	}
 }
 
+// restart quits through the normal flow (busy and save prompts, layout, audio) and
+// starts the program again afterwards. Cancelling a prompt cancels the restart: a later
+// Quit is a plain quit.
+func (sh *Shell) restart() {
+	sh.restarting = true
+	sh.quit()
+}
+
 // Quit closes the window, asking first about running exports and then once about all
 // unsaved projects.
 func (sh *Shell) Quit() {
+	sh.restarting = false
+	sh.quit()
+}
+
+func (sh *Shell) quit() {
 	var busy []string
 	for _, p := range sh.projects {
 		if b := projectBusy(p); b != "" {
@@ -248,6 +262,12 @@ func (sh *Shell) quitSaved() {
 // shutdown remembers the open projects for the next start, lets the workspace save its
 // layout and close the detached windows, releases all projects and closes the window.
 func (sh *Shell) shutdown() {
+	if sh.restarting {
+		settingsui.RequestRestart() // quitting is certain now; application.Run restarts
+	}
+	if sh.menuBar != nil {
+		sh.menuBar.Close()
+	}
 	sh.saveLastOpen()
 	sh.ws.Shutdown()
 	sh.releaseAll()

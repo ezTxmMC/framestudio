@@ -36,7 +36,7 @@ var Catalog = []Info{
 	{ID: "edit.cut", Label: "Ausschneiden", Category: "Bearbeiten", Shortcut: "Ctrl+X"},
 	{ID: "edit.copy", Label: "Kopieren", Category: "Bearbeiten", Shortcut: "Ctrl+C"},
 	{ID: "edit.paste", Label: "Am Playhead einfügen", Category: "Bearbeiten", Shortcut: "Ctrl+V"},
-	{ID: "edit.duplicate", Label: "Duplizieren", Category: "Bearbeiten", Shortcut: "Alt+D"},
+	{ID: "edit.duplicate", Label: "Duplizieren", Category: "Bearbeiten", Shortcut: "Ctrl+Shift+D"},
 	{ID: "edit.delete", Label: "Löschen", Category: "Bearbeiten", Shortcut: "Delete"},
 	{ID: "edit.rippleDelete", Label: "Löschen und Lücke schließen", Category: "Bearbeiten", Shortcut: "Shift+Delete"},
 	{ID: "edit.selectAll", Label: "Alles auswählen", Category: "Bearbeiten", Shortcut: "Ctrl+A"},
@@ -150,6 +150,10 @@ var Catalog = []Info{
 	{ID: "view.safeArea", Label: "Sichere Bereiche anzeigen", Category: "Ansicht"},
 	{ID: "view.pageBar", Label: "Seitenleiste anzeigen", Category: "Ansicht"},
 	{ID: "view.statusBar", Label: "Statuszeile anzeigen", Category: "Ansicht"},
+	// OWNER edit page (areas of the Schnitt page)
+	{ID: "edit.hide.viewer", Label: "Programm-Monitor ausblenden", Category: "Ansicht"},
+	{ID: "edit.hide.library", Label: "Bibliothek ausblenden", Category: "Ansicht"},
+	{ID: "edit.hide.inspector", Label: "Inspector ausblenden", Category: "Ansicht"},
 
 	// Arbeitsbereich — OWNER workspace
 	{ID: "workspace.monitors", Label: "Monitore und Fenster…", Category: "Arbeitsbereich", Shortcut: "Ctrl+Alt+W"},

@@ -154,14 +154,33 @@ func (r *Registry) DynamicItems(id string) []Item {
 	return nil
 }
 
+// current resolves the binding of id: an active page scope wins over any other active
+// scope, which wins over Global; within the same rank the later registration wins. So a
+// page's own binding of an ID the shell also binds globally (play.toggle on Ton,
+// edit.selectAll on Medien) applies while the page is visible, whatever the bind order.
 func (r *Registry) current(id string) (binding, bool) {
 	list := r.bindings[id]
+	best, rank := -1, -1
 	for i := len(list) - 1; i >= 0; i-- {
-		if r.active[list[i].scope] {
-			return list[i], true
+		sc := list[i].scope
+		if !r.active[sc] {
+			continue
+		}
+		k := 0
+		switch {
+		case strings.HasPrefix(sc, "page:"):
+			k = 2
+		case sc != Global:
+			k = 1
+		}
+		if k > rank {
+			best, rank = i, k
 		}
 	}
-	return binding{}, false
+	if best < 0 {
+		return binding{}, false
+	}
+	return list[best], true
 }
 
 // Get resolves a command. Unknown IDs return ok=false.

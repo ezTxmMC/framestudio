@@ -3,6 +3,7 @@ package shell
 import (
 	"errors"
 	"fmt"
+	"framestudio-proto/src/ui/settingsui"
 	"maps"
 	"os"
 	"regexp"
@@ -71,6 +72,16 @@ var templateIDPattern = regexp.MustCompile(`^(\d+)p(\d+)$`)
 // first template.
 func templateByID(id string) Template {
 	id = strings.ToLower(strings.TrimSpace(id))
+	for _, st := range settingsui.Templates { // the IDs the settings window stores
+		if strings.EqualFold(st.ID, id) {
+			for _, t := range Templates {
+				if t.Width == st.Width && t.Height == st.Height && t.FPS == st.FPS {
+					return t
+				}
+			}
+			return Template{Label: st.Label, Width: st.Width, Height: st.Height, FPS: st.FPS}
+		}
+	}
 	for _, t := range Templates {
 		if id == templateID(t) {
 			return t

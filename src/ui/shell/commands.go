@@ -18,6 +18,8 @@ import (
 	"framestudio-proto/src/ui/keymapui"
 	"framestudio-proto/src/ui/menubar"
 	"framestudio-proto/src/ui/page"
+	deliverpage "framestudio-proto/src/ui/pages/deliver"
+	mediapage "framestudio-proto/src/ui/pages/media"
 	"framestudio-proto/src/ui/settingsui"
 )
 
@@ -257,6 +259,7 @@ func (sh *Shell) syncScopes() {
 		}
 		sh.bound = map[string]bool{}
 		sh.boundFor = p
+		sh.bindProjectScope(p)
 	}
 	if p != nil {
 		for _, id := range slices.Sorted(maps.Keys(p.cmds)) {
@@ -281,6 +284,22 @@ func (sh *Shell) syncScopes() {
 	}
 }
 
+// projectScope holds the commands of the active project that work from every page
+// (import, export, render queue); they open their page when needed. Always active;
+// rebound on every tab change. A visible page's own bindings of the same IDs win.
+const projectScope = "project"
+
+// bindProjectScope binds the page-independent commands of p (none when p is nil).
+func (sh *Shell) bindProjectScope(p *project) {
+	sh.reg.Unbind(projectScope)
+	if p == nil {
+		return
+	}
+	sh.reg.SetScopeActive(projectScope, true)
+	sh.reg.Bind(projectScope, mediapage.GlobalCommands(p.ctx)...)
+	sh.reg.Bind(projectScope, deliverpage.GlobalCommands(p.ctx)...)
+}
+
 // unbindProject drops the page commands of p when its tab closes.
 func (sh *Shell) unbindProject(p *project) {
 	if sh.boundFor != p {
@@ -289,6 +308,7 @@ func (sh *Shell) unbindProject(p *project) {
 	for id := range sh.bound {
 		sh.reg.Unbind(command.PageScope(id))
 	}
+	sh.reg.Unbind(projectScope)
 	sh.bound = map[string]bool{}
 	sh.boundFor = nil
 }

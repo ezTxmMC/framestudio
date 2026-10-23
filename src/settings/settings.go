@@ -139,9 +139,15 @@ func Load() (Settings, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Get(), err
 	}
+	var broken error
 	if err == nil {
 		if err := json.Unmarshal(b, &s); err != nil {
-			return Get(), errors.New("Einstellungen sind beschädigt und wurden auf Standard zurückgesetzt: " + err.Error())
+			// Keep the damaged file for the user and go on with the defaults, saving
+			// later changes as usual.
+			backup := p + ".beschaedigt"
+			_ = os.Rename(p, backup)
+			broken = errors.New("Einstellungen sind beschädigt und wurden auf Standard zurückgesetzt. Die alte Datei liegt unter " + backup + " (" + err.Error() + ")")
+			s = Defaults()
 		}
 	}
 	if s.Keymap == nil {
@@ -152,7 +158,14 @@ func Load() (Settings, error) {
 	path = p
 	current = s
 	mu.Unlock()
-	return s, nil
+	return s, broken
+}
+
+// Loaded reports whether Load has run successfully enough to know the settings file.
+func Loaded() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return path != ""
 }
 
 // Get returns a copy of the current settings.

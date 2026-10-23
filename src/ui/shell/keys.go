@@ -24,8 +24,8 @@ import (
 // typedKey: the driver turns them into shortcuts, so every such command shortcut is
 // registered on the canvas (registerShortcuts) and re-registered when the keymap
 // changes. Fyne hands shortcuts to a focused text field instead, so while one has focus
-// only its own editing shortcuts work. Alt alone, F10 and Alt+menu letter open the menu
-// bar. While a dialog is open no key reaches the pages or commands.
+// only its own editing shortcuts work. Alt alone, F10 and Alt+menu letter go to the
+// menu bar. While a dialog is open no key reaches the pages or commands.
 
 // pageKeys are the digit keys of the page switch alternatives Alt+1…5 and Ctrl+1…5.
 var pageKeys = []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5}
@@ -186,7 +186,6 @@ func (sh *Shell) shortcutTyped(sc fyne.Shortcut) {
 	if !ok || sh.modal() { // a dialog is open: keys must not edit what is behind it
 		return
 	}
-	sh.altArmed = false
 	sh.combo(k, m)
 }
 
@@ -197,7 +196,9 @@ func (sh *Shell) combo(k fyne.KeyName, m fyne.KeyModifier) bool {
 	}
 	if m == fyne.KeyModifierAlt {
 		if i, ok := menuMnemonics(command.MenuBar)[k]; ok {
-			sh.openMenu(i)
+			if sh.menuBar == nil || sh.menuBar.HandleShortcut(&desktop.CustomShortcut{KeyName: k, Modifier: m}) {
+				sh.menuOpened = append(sh.menuOpened, i)
+			}
 			return true
 		}
 	}
@@ -211,24 +212,21 @@ func (sh *Shell) dispatch(k fyne.KeyName, m fyne.KeyModifier) bool {
 	return sh.reg.Dispatch(k, m)
 }
 
-// openMenu opens top-level menu i of the menu bar.
-func (sh *Shell) openMenu(i int) {
-	if sh.menuBar != nil {
-		sh.menuBar.Open(i)
-	}
-	sh.menuOpened = append(sh.menuOpened, i)
-}
-
-// keyDown / keyUp detect Alt pressed and released alone, which opens the menu bar.
+// keyDown / keyUp go to the menu bar: Alt pressed and released alone puts the keyboard
+// focus on the bar (and shows the menu letters while held).
 func (sh *Shell) keyDown(k *fyne.KeyEvent) {
-	sh.altArmed = k.Name == desktop.KeyAltLeft || k.Name == desktop.KeyAltRight
+	if sh.menuBar != nil {
+		sh.menuBar.HandleKeyDown(k)
+	}
 }
 
 func (sh *Shell) keyUp(k *fyne.KeyEvent) {
-	if (k.Name == desktop.KeyAltLeft || k.Name == desktop.KeyAltRight) && sh.altArmed && !sh.modal() {
-		sh.openMenu(0)
+	if sh.menuBar == nil || (sh.modal() && !sh.menuBar.IsOpen()) {
+		return
 	}
-	sh.altArmed = false
+	if sh.menuBar.HandleKeyUp(k) {
+		sh.menuOpened = append(sh.menuOpened, 0)
+	}
 }
 
 // heldModifiers returns the modifier keys the driver reported with the current key
@@ -254,15 +252,16 @@ func (sh *Shell) modal() bool {
 // command registry. Umschalt+digit switches pages before the page sees the digit.
 func (sh *Shell) typedKey(k *fyne.KeyEvent) {
 	if k.Name == desktop.KeyAltLeft || k.Name == desktop.KeyAltRight {
-		return // Alt alone opens the menu on release (keyUp)
+		return // Alt alone focuses the menu bar on release (keyUp)
 	}
-	sh.altArmed = false
 	if sh.modal() {
 		return
 	}
 	mods := sh.modifiers()
-	if k.Name == fyne.KeyF10 && mods == 0 {
-		sh.openMenu(0)
+	if k.Name == fyne.KeyF10 && mods == 0 && sh.menuBar != nil {
+		if sh.menuBar.HandleKey(k) {
+			sh.menuOpened = append(sh.menuOpened, 0)
+		}
 		return
 	}
 	if sh.showManager {

@@ -27,7 +27,15 @@ const (
 )
 
 // menuOpener is the part of the menu bar the key routing uses.
-type menuOpener interface{ Open(i int) }
+type menuOpener interface {
+	Open(i int)
+	Close()
+	IsOpen() bool
+	HandleKey(*fyne.KeyEvent) bool
+	HandleKeyDown(*fyne.KeyEvent) bool
+	HandleKeyUp(*fyne.KeyEvent) bool
+	HandleShortcut(fyne.Shortcut) bool
+}
 
 // bars holds the two top rows (menu bar with wordmark; project tabs with save status and
 // undo/redo) and the bottom bar (page buttons and the status line with format and
