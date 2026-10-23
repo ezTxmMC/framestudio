@@ -181,6 +181,26 @@ func (c *Cache) Get(path string) (*PCM, error) {
 	return p, nil
 }
 
+// SetBudget changes the memory budget in bytes (<= 0 = DefaultBudget). Shrinking it
+// evicts the least recently used unpinned PCM at once; a decode that no longer fits
+// stops with what it has.
+func (c *Cache) SetBudget(budget int64) {
+	if budget <= 0 {
+		budget = DefaultBudget
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.budget = budget
+	c.evictLocked(nil)
+}
+
+// Budget is the memory budget in bytes.
+func (c *Cache) Budget() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.budget
+}
+
 // Drop forgets the PCM stored under key and stops its decoder (e.g. after a relink).
 func (c *Cache) Drop(key string) {
 	c.mu.Lock()

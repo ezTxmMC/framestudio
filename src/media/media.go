@@ -79,6 +79,7 @@ type Cache struct {
 	jobs map[string]map[*int]context.CancelFunc
 
 	hits, misses atomic.Int64 // frame cache statistics
+	decoders     atomic.Int32 // limit of concurrent playback decoders (SetMaxDecoders)
 }
 
 // Limits for background ffmpeg jobs.
@@ -90,7 +91,7 @@ const (
 
 func NewCache() *Cache {
 	ctx, stop := context.WithCancel(context.Background())
-	return &Cache{
+	c := &Cache{
 		stills:      newLRU(stillBudget),
 		frames:      newLRU(frameBudget),
 		thumbs:      newLRU(thumbBudget),
@@ -103,6 +104,9 @@ func NewCache() *Cache {
 		bg:          make(chan struct{}, maxBackground),
 		jobs:        map[string]map[*int]context.CancelFunc{},
 	}
+	c.decoders.Store(maxPrefetchers)
+	register(c)
+	return c
 }
 
 // gen returns the invalidation generation of a media ID.
@@ -385,6 +389,7 @@ func (c *Cache) Close() {
 	c.pmu.Lock()
 	c.closed = true
 	c.pmu.Unlock()
+	unregister(c)
 	c.stop()
 	c.stopPrefetch("")
 	c.wg.Wait()

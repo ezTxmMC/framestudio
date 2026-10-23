@@ -33,10 +33,12 @@ func (realClock) Now() time.Time { return time.Now() }
 
 // Config sets up an Engine. Zero values pick the production defaults.
 type Config struct {
-	Clock   Clock
-	Open    func() (Output, error) // nil = OpenPlayer
-	Cache   *Cache                 // nil = a new ffmpeg-backed cache; closed with the engine
-	Latency time.Duration          // fixed output latency; 0 = the output's estimate or FS_AUDIO_LATENCY_MS
+	Clock Clock
+	Open  func() (Output, error) // nil = OpenPlayer
+	Cache *Cache                 // nil = a new ffmpeg-backed cache; closed with the engine
+	// Latency fixes the output latency and wins over everything else; 0 = FS_AUDIO_LATENCY_MS,
+	// else the user setting (SetLatency), else the output's estimate.
+	Latency time.Duration
 	// OnWrite, if set, sees every block right before it is written (tests, measurements).
 	OnWrite func(at time.Time, block []byte)
 }
@@ -47,8 +49,13 @@ type Engine struct {
 	clock    Clock
 	open     func() (Output, error)
 	cache    *Cache
-	fixedLat time.Duration
+	fixedLat time.Duration // Config.Latency
+	envLat   time.Duration // FS_AUDIO_LATENCY_MS
 	onWrite  func(time.Time, []byte)
+
+	// monitor settings, read by the loop: master gain (float64 bits) and mute
+	gain  atomic.Uint64
+	muted atomic.Bool
 
 	mu       sync.Mutex
 	voices   []*Voice
@@ -57,6 +64,8 @@ type Engine struct {
 	openedAt time.Time
 	retryAt  time.Time
 	outErr   error
+	userLat  time.Duration // SetLatency
+	openGen  int           // bumped by SetOpener
 	closed   bool
 	started  bool
 
@@ -85,11 +94,10 @@ func New(cfg Config) *Engine {
 	if e.cache == nil {
 		e.cache = NewCache(nil, nil, 0)
 	}
-	if e.fixedLat == 0 {
-		if ms, err := strconv.Atoi(os.Getenv("FS_AUDIO_LATENCY_MS")); err == nil && ms > 0 {
-			e.fixedLat = time.Duration(ms) * time.Millisecond
-		}
+	if ms, err := strconv.Atoi(os.Getenv("FS_AUDIO_LATENCY_MS")); err == nil && ms > 0 {
+		e.envLat = time.Duration(ms) * time.Millisecond
 	}
+	e.gain.Store(math.Float64bits(1))
 	e.wg.Add(1)
 	go e.prepLoop()
 	return e
@@ -156,8 +164,13 @@ func (e *Engine) Latency() time.Duration {
 }
 
 func (e *Engine) latencyLocked() time.Duration {
-	if e.fixedLat > 0 {
+	switch {
+	case e.fixedLat > 0:
 		return e.fixedLat
+	case e.envLat > 0:
+		return e.envLat
+	case e.userLat > 0:
+		return e.userLat
 	}
 	if e.out != nil {
 		return e.out.Latency()
@@ -179,14 +192,20 @@ func (e *Engine) output() (Output, error) {
 	}
 	e.mu.Unlock()
 
-	out, err := e.open()
+	e.mu.Lock()
+	open, gen := e.open, e.openGen
+	e.mu.Unlock()
+	out, err := open()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
+	if e.closed || gen != e.openGen {
 		if out != nil {
 			_ = out.Close()
 		}
-		return nil, errClosed
+		if e.closed {
+			return nil, errClosed
+		}
+		return nil, errSwitched // the player changed meanwhile: the next Step opens it
 	}
 	if err != nil {
 		e.outErr = err
@@ -201,6 +220,57 @@ func (e *Engine) output() (Output, error) {
 	}
 	e.out, e.isNull, e.outErr, e.openedAt = out, false, nil, e.clock.Now()
 	return out, nil
+}
+
+// MaxMasterGain is the highest monitor gain (+12 dB).
+const MaxMasterGain = 4
+
+// SetMasterGain sets the linear monitor gain of the preview output (1 = unity, clamped
+// to 0..MaxMasterGain). It does not change the project or the export. Any goroutine.
+func (e *Engine) SetMasterGain(g float64) {
+	if math.IsNaN(g) || g < 0 {
+		g = 0
+	}
+	e.gain.Store(math.Float64bits(min(g, MaxMasterGain)))
+}
+
+// MasterGain is the current monitor gain.
+func (e *Engine) MasterGain() float64 { return math.Float64frombits(e.gain.Load()) }
+
+// SetMuted silences the preview output; meters keep showing the mix. Any goroutine.
+func (e *Engine) SetMuted(on bool) { e.muted.Store(on) }
+
+// Muted reports whether the preview output is muted.
+func (e *Engine) Muted() bool { return e.muted.Load() }
+
+// SetLatency sets the output latency the engine compensates (the user setting; 0 = the
+// output's estimate). FS_AUDIO_LATENCY_MS and Config.Latency still win. Any goroutine.
+func (e *Engine) SetLatency(d time.Duration) {
+	e.mu.Lock()
+	e.userLat = max(d, 0)
+	e.mu.Unlock()
+}
+
+// SetOpener switches the output to another player: the current output is closed now and
+// the loop opens the new one for its next block (a short gap, no restart of the engine).
+// Any goroutine.
+func (e *Engine) SetOpener(open func() (Output, error)) {
+	if open == nil {
+		open = OpenPlayer
+	}
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return
+	}
+	e.open = open
+	e.openGen++
+	old := e.out
+	e.out, e.isNull, e.outErr, e.retryAt = nil, false, nil, time.Time{}
+	e.mu.Unlock()
+	if old != nil {
+		_ = old.Close() // a Write in progress fails; failed() sees it is no longer current
+	}
 }
 
 // failed drops an output whose Write failed (the player quit).
@@ -219,7 +289,10 @@ func (e *Engine) failed(out Output) {
 	}
 }
 
-var errClosed = errors.New("audio engine closed")
+var (
+	errClosed   = errors.New("audio engine closed")
+	errSwitched = errors.New("audio player switched")
+)
 
 // Step renders one block for all voices and writes it to the output.
 func (e *Engine) Step() error {
@@ -242,6 +315,15 @@ func (e *Engine) Step() error {
 	for _, v := range voices {
 		if v.render(heard, BlockFrames, e.mix) && outErr != nil {
 			v.report(outErr)
+		}
+	}
+	// The monitor controls act after the meters (voices record their levels while
+	// rendering): muting or turning down the preview never hides what the mix does.
+	if e.muted.Load() {
+		clear(e.mix)
+	} else if g := float32(math.Float64frombits(e.gain.Load())); g != 1 {
+		for i := range e.mix {
+			e.mix[i] *= g
 		}
 	}
 	for i, x := range e.mix {

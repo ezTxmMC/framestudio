@@ -18,7 +18,7 @@ import (
 
 const (
 	prefetchSeconds = 3                // how far a prefetcher decodes ahead of the last request
-	maxPrefetchers  = 4                // concurrent background decoders per cache
+	maxPrefetchers  = 4                // default concurrent background decoders per cache
 	prefetchIdle    = 10 * time.Second // a decoder nobody asks for exits after this
 	frameWait       = 20 * time.Second // longest a request waits for its frame
 )
@@ -367,15 +367,15 @@ func (c *Cache) prefetcherFor(m model.MediaItem, s stream, n int) (*prefetcher, 
 	if len(same) >= 2 {
 		c.evict(same)
 	}
-	all := make([]int, len(c.prefetchers))
-	for i := range all {
-		all[i] = i
-	}
-	if len(all) >= maxPrefetchers {
+	for limit := c.maxDecoders(); len(c.prefetchers) > 0 && len(c.prefetchers) >= limit; {
+		all := make([]int, len(c.prefetchers))
+		for i := range all {
+			all[i] = i
+		}
 		c.evict(all)
 	}
 	ahead := prefetchSeconds * s.fps
-	if limit := int(c.frames.budget / 4 / int64(s.w*s.h*4)); ahead > limit {
+	if limit := int(c.frames.getBudget() / 4 / int64(s.w*s.h*4)); ahead > limit {
 		ahead = max(limit, 1)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

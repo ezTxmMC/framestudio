@@ -41,8 +41,15 @@ var (
 	users   int
 	// scrubbing plays a short snippet when the paused playhead moves.
 	scrubbing = true
-	// newEngine creates the shared engine when the first session is driven.
-	newEngine = func() *audio.Engine { return audio.New(audio.Config{}) }
+	// cfg is the user configuration (Configure); guarded by mu.
+	cfg = DefaultConfig()
+	// openerFor opens the output of a player choice; tests replace it.
+	openerFor = audio.Opener
+	// newEngine creates the shared engine when the first session is driven. It is called
+	// with mu held and may read cfg.
+	newEngine = func() *audio.Engine {
+		return audio.New(audio.Config{Open: openerFor(cfg.Player), Cache: audio.NewCache(nil, nil, int64(cfg.CacheMB)<<20)})
+	}
 )
 
 // UseEngine replaces how the shared engine is created, e.g. with a fake output in
@@ -67,6 +74,7 @@ func Drive(s *session.Session, onError func(error)) (stop func()) {
 	mu.Lock()
 	if engine == nil {
 		engine = newEngine()
+		applyMonitor(engine, cfg)
 		engine.Start()
 	}
 	users++
@@ -186,8 +194,13 @@ func lookup(s *session.Session) *driver {
 }
 
 // SetScrubbing turns the audio snippets on playhead moves while paused on or off
-// (on by default). UI thread only.
-func SetScrubbing(on bool) { scrubbing = on }
+// (on by default; Configure sets it from the settings). UI thread only.
+func SetScrubbing(on bool) {
+	scrubbing = on
+	mu.Lock()
+	cfg.Scrub = on
+	mu.Unlock()
+}
 
 func (d *driver) changed(c session.Change) {
 	if c&session.ChangeProject != 0 {
