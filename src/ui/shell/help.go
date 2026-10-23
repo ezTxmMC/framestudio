@@ -192,6 +192,7 @@ func (sh *Shell) diagnostics() [][2]string {
 	add("Fenstersystem", workspace.PlatformName(platform))
 	_, chromeText := winchrome.Describe(settings.Get().Display)
 	add("Eigene Titelleiste", chromeText)
+	add("Fensterknöpfe", settings.Get().Display.WindowButtons+" → "+winchrome.Style(settings.Get().Display))
 	tool := func(name string) string {
 		if p, err := exec.LookPath(name); err == nil {
 			return "vorhanden (" + p + ")"

@@ -181,8 +181,10 @@ var Catalog = []Info{
 	{ID: "window.zoom", Label: "Maximieren / Wiederherstellen", Category: "Fenster"},
 	{ID: "window.close", Label: "Fenster schließen", Category: "Fenster"},
 	{ID: "window.customChrome", Label: "Eigene Titelleiste", Category: "Fenster"},
+	{ID: "window.buttons.auto", Label: "Fensterknöpfe: Automatisch", Category: "Fenster"},
 	{ID: "window.buttons.mac", Label: "Fensterknöpfe: macOS-Stil (links)", Category: "Fenster"},
 	{ID: "window.buttons.win", Label: "Fensterknöpfe: Windows-Stil (rechts)", Category: "Fenster"},
+	{ID: "window.buttons.linux", Label: "Fensterknöpfe: Linux-Stil (rechts)", Category: "Fenster"},
 
 	// Hilfe — OWNER shell
 	{ID: "help.shortcuts", Label: "Tastenkürzel", Category: "Hilfe", Shortcut: "F1"},

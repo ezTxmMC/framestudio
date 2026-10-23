@@ -12,7 +12,28 @@ import "fyne.io/fyne/v2"
 const (
 	StyleMac = "mac" // red/yellow/green circles on the left, glyphs on hover
 	StyleWin = "win" // minimize / maximize / close icons on the right, red close on hover
+	// StyleLinux has symbolic icons in round hover discs on the right (Adwaita / Breeze).
+	StyleLinux = "linux"
+	// StyleAuto is only a setting value: it resolves by operating system (ResolveStyle).
+	StyleAuto = "auto"
 )
+
+// ResolveStyle maps the Display.WindowButtons setting to a style for the operating system
+// goos (runtime.GOOS): "auto" and unknown values follow the system (darwin: mac, windows:
+// win, anything else: linux); explicit "mac", "win" and "linux" are honoured everywhere.
+func ResolveStyle(setting, goos string) string {
+	switch setting {
+	case StyleMac, StyleWin, StyleLinux:
+		return setting
+	}
+	switch goos {
+	case "darwin":
+		return StyleMac
+	case "windows":
+		return StyleWin
+	}
+	return StyleLinux
+}
 
 // Backend is the window system as the chrome needs it (display implements it; tests fake it).
 type Backend interface {
@@ -31,7 +52,7 @@ type State struct{ Focused, Maximized, Fullscreen, Minimized bool }
 
 // Options configure a title bar.
 type Options struct {
-	Style         string // StyleMac or StyleWin
+	Style         string // StyleMac, StyleWin or StyleLinux
 	Compact       bool   // thinner bar for secondary windows
 	Backend       Backend
 	CanMaximize   bool // false hides/disables the zoom button (dialog-like windows)

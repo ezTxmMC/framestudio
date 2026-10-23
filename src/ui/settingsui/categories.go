@@ -3,6 +3,7 @@ package settingsui
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"framestudio-proto/src/audio"
 	"framestudio-proto/src/export"
 	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/chrome"
 	"framestudio-proto/src/ui/keymapui"
 	"framestudio-proto/src/ui/layout"
 )
@@ -156,9 +158,14 @@ func (w *window) buildCategories() []*category {
 		func(s *settings.Settings) *bool { return &s.Display.StatusBar })
 	w.check(display, "Eigene Titelleiste", "Ersetzt die Titelleiste des Systems durch die von Frame Studio. Aus: Fenster zeigen die Titelleiste des Systems.",
 		func(s *settings.Settings) *bool { return &s.Display.CustomChrome })
-	choice(w, display, "Fensterknöpfe", "Schließen, Minimieren und Vollbild wie unter macOS (links, farbige Kreise) oder wie unter Windows (rechts).", []option[string]{
-		{"mac", "Wie macOS (links)"}, {"win", "Wie Windows (rechts)"},
+	buttons := choice(w, display, "Fensterknöpfe", buttonsHelp(settings.Defaults().Display.WindowButtons), []option[string]{
+		{"auto", "Automatisch (passend zum System)"}, {"mac", "macOS"}, {"win", "Windows"}, {"linux", "Linux"},
 	}, func(s *settings.Settings) *string { return &s.Display.WindowButtons })
+	loadButtons := buttons.load
+	buttons.load = func(s settings.Settings) {
+		loadButtons(s)
+		buttons.setHelp(buttonsHelp(s.Display.WindowButtons))
+	}
 	display.extra = w.windowInfo
 	display.onShow = func() {
 		if w.infoRefresh != nil {
@@ -270,4 +277,14 @@ func formatGain(pct float64) string {
 	}
 	s = strings.ReplaceAll(strings.ReplaceAll(s, ".", ","), "-", "−")
 	return fmt.Sprintf("%.0f %% · %s dB", pct, s)
+}
+
+// styleNames are the names of the window button styles in the settings.
+var styleNames = map[string]string{"mac": "macOS", "win": "Windows", "linux": "Linux"}
+
+// buttonsHelp explains the window buttons setting and names the style in use.
+func buttonsHelp(setting string) string {
+	cur := styleNames[chrome.ResolveStyle(setting, runtime.GOOS)]
+	return "Aussehen von Schließen, Minimieren und Maximieren: macOS (links, farbige Kreise), Windows oder Linux (rechts). " +
+		"Automatisch wählt den Stil des Systems. Aktuell: " + cur + "."
 }

@@ -126,7 +126,7 @@ func TestLiveSwitchKeepsState(t *testing.T) {
 
 func TestWindowCommandsBound(t *testing.T) {
 	sh, w, fk := chromeShell(t)
-	for _, id := range []string{"window.minimize", "window.zoom", "window.close", "window.customChrome", "window.buttons.mac", "window.buttons.win"} {
+	for _, id := range []string{"window.minimize", "window.zoom", "window.close", "window.customChrome", "window.buttons.auto", "window.buttons.mac", "window.buttons.win", "window.buttons.linux"} {
 		found := false
 		for _, c := range sh.reg.Available() {
 			found = found || c.ID == id
@@ -149,13 +149,23 @@ func TestWindowCommandsBound(t *testing.T) {
 		t.Fatalf("%s missing", id)
 		return false
 	}
-	if !checked("window.customChrome") || !checked("window.buttons.mac") || checked("window.buttons.win") {
-		t.Fatal("initial check marks")
+	if !checked("window.customChrome") || !checked("window.buttons.auto") || checked("window.buttons.mac") || checked("window.buttons.win") || checked("window.buttons.linux") {
+		t.Fatal("initial check marks: automatic expected")
+	}
+	for _, v := range []string{"win", "linux", "mac", "auto"} {
+		sh.reg.Run("window.buttons." + v)
+		for _, o := range []string{"auto", "mac", "win", "linux"} {
+			if checked("window.buttons."+o) != (o == v) {
+				t.Fatalf("radio after %s: %s checked=%v", v, o, !(o == v))
+			}
+		}
+	}
+	// an unknown stored value counts as automatic
+	_ = settings.Update(func(s *settings.Settings) { s.Display.WindowButtons = "bogus" })
+	if !checked("window.buttons.auto") || checked("window.buttons.linux") {
+		t.Fatal("unknown value must show automatic")
 	}
 	sh.reg.Run("window.buttons.win")
-	if checked("window.buttons.mac") || !checked("window.buttons.win") {
-		t.Fatal("radio did not switch")
-	}
 	sh.reg.Run("window.customChrome")
 	if checked("window.customChrome") || sh.CustomChrome() {
 		t.Fatal("toggle did not switch off")
@@ -237,7 +247,7 @@ func TestWindowMenuHasWindowEntries(t *testing.T) {
 		}
 		walk(m.Items)
 	}
-	for _, want := range []string{"window.minimize", "window.zoom", "view.fullscreen", "window.customChrome", "window.buttons.mac", "window.buttons.win"} {
+	for _, want := range []string{"window.minimize", "window.zoom", "view.fullscreen", "window.customChrome", "window.buttons.auto", "window.buttons.mac", "window.buttons.win", "window.buttons.linux"} {
 		found := false
 		for _, id := range ids {
 			found = found || id == want

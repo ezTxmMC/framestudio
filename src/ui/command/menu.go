@@ -107,7 +107,8 @@ var MenuBar = []Menu{
 		Dyn(DynProjects), Sep(), Cmd("window.nextProject"), Cmd("window.prevProject"), Sep(),
 		Cmd("window.minimize"), Cmd("window.zoom"), Cmd("view.fullscreen"), Cmd("window.close"), Sep(),
 		Cmd("window.customChrome"),
-		Sub("Fensterknöpfe", CmdL("window.buttons.mac", "Wie macOS (links)"), CmdL("window.buttons.win", "Wie Windows (rechts)")),
+		Sub("Fensterknöpfe", CmdL("window.buttons.auto", "Automatisch"), Sep(), CmdL("window.buttons.mac", "macOS-Stil (links)"),
+			CmdL("window.buttons.win", "Windows-Stil (rechts)"), CmdL("window.buttons.linux", "Linux-Stil (rechts)")),
 	}},
 	{Title: "Hilfe", Items: []Item{
 		Cmd("help.shortcuts"), Cmd("app.palette"), Sep(), Cmd("help.diagnostics"), Cmd("help.configFolder"), Sep(), Cmd("help.about"),

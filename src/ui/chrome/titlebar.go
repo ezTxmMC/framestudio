@@ -235,7 +235,7 @@ func (r *titlebarRenderer) Layout(size fyne.Size) {
 
 	cw := t.ctl.MinSize().Width
 	left, right := float32(0), size.Width
-	if t.style == StyleWin {
+	if t.ctl.spec().right {
 		right -= cw
 		t.ctl.Move(fyne.NewPos(right, 0))
 	} else {
@@ -269,7 +269,7 @@ func (r *titlebarRenderer) Layout(size fyne.Size) {
 			free = 0
 		}
 		x, w := left, free
-		if t.style == StyleMac && isText(t.center) {
+		if t.ctl.spec().centreText && isText(t.center) {
 			if m := t.center.MinSize().Width; m < free {
 				x, w = left+(free-m)/2, m
 			}
