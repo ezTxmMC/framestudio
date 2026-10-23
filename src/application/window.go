@@ -2,6 +2,7 @@ package application
 
 import (
 	"fmt"
+	"framestudio-proto/src/ui/viewer"
 	"log"
 	"os"
 	"sync/atomic"
@@ -91,6 +92,7 @@ func startMemory() {
 	}
 	w := NewMemoryWatcher(limit, nil)
 	w.Add(mediaCaches)
+	w.Add(viewer.Budgets{})
 	memWatcher.Store(w)
 	w.Start()
 }

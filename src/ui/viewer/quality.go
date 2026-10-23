@@ -58,6 +58,7 @@ func (v *Viewer) applySettings(s settings.Settings) {
 	if v.closed {
 		return
 	}
+	v.applyCacheBudget(s)
 	q, h := s.Playback.PreviewQuality, s.Playback.MaxPreviewH
 	if q == v.quality && h == v.maxH {
 		return

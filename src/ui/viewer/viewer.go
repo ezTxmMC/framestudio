@@ -9,6 +9,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -63,19 +64,25 @@ type Viewer struct {
 
 	// The picture pipeline (see package preview). The render goroutine lives in sched;
 	// the UI thread only swaps the newest ready frame into img.
-	sched    *preview.Scheduler
-	cache    *preview.FrameCache
-	gov      *preview.LoadGovernor
-	rev      uint64
-	cur      *preview.Frame // frame displayed by img; released when replaced
-	notified atomic.Bool    // a showReady post is in flight (coalesces notifications)
-	monitor  atomic.Bool    // the playback monitor goroutine runs
-	playingA atomic.Bool    // mirrors s.Playing for the monitor goroutine
-	statsOn  atomic.Bool    // mirrors overlay.shown
-	chipOn   atomic.Bool    // mirrors the visibility of the overload chip
-	govern   bool
-	overlay  *statsOverlay
-	chipTill time.Time
+	sched        *preview.Scheduler
+	cache        *preview.FrameCache
+	gov          *preview.LoadGovernor
+	rev          uint64
+	cur          *preview.Frame // frame displayed by img; released when replaced
+	notified     atomic.Bool    // a showReady post is in flight (coalesces notifications)
+	monitor      atomic.Bool    // the playback monitor goroutine runs
+	playingA     atomic.Bool    // mirrors s.Playing for the monitor goroutine
+	statsOn      atomic.Bool    // mirrors overlay.shown
+	cacheBudget  atomic.Int64
+	prewarmMu    sync.Mutex
+	prewarmTimer *time.Timer
+	warmProj     atomic.Pointer[model.Project]
+	warmPos      atomic.Int64
+	warmH        atomic.Int64
+	chipOn       atomic.Bool // mirrors the visibility of the overload chip
+	govern       bool
+	overlay      *statsOverlay
+	chipTill     time.Time
 }
 
 // request identifies the last request handed to the scheduler, to skip duplicates.
@@ -107,6 +114,7 @@ func New(s *session.Session, r *render.Renderer) *Viewer {
 		container.New(layout.NewCustomPaddedLayout(2, 2, 7, 7), label)))
 	v.badge.Hide()
 	v.snap = s.Project.Clone()
+	v.warmProj.Store(v.snap)
 	v.ratio = aspect(v.snap)
 	v.fill = canvas.NewRectangle(v.snap.Settings.Background.NRGBA())
 	v.safe = newSafeArea()
@@ -122,6 +130,8 @@ func New(s *session.Session, r *render.Renderer) *Viewer {
 	v.unsub = s.Subscribe(v.changed)
 	v.applySettings(settings.Get())
 	v.unsubSetting = settings.Subscribe(v.applySettings)
+	v.applyCacheBudget(settings.Get())
+	register(v)
 	v.ExtendBaseWidget(v)
 	return v
 }
@@ -197,6 +207,12 @@ func (v *Viewer) Close() {
 		return
 	}
 	v.closed = true
+	unregister(v)
+	v.prewarmMu.Lock()
+	if v.prewarmTimer != nil {
+		v.prewarmTimer.Stop()
+	}
+	v.prewarmMu.Unlock()
 	v.unsub()
 	v.unsubSetting()
 	v.sched.Close()
@@ -208,6 +224,7 @@ func (v *Viewer) Close() {
 func (v *Viewer) changed(c session.Change) {
 	if c&session.ChangeProject != 0 {
 		v.snap = v.s.Project.Clone()
+		v.warmProj.Store(v.snap)
 		v.rev++
 		if r := aspect(v.snap); r != v.ratio {
 			v.ratio = r
@@ -283,6 +300,9 @@ func (v *Viewer) requestRender() {
 		pin: v.Quality(), maxH: v.maxH, playing: v.s.Playing, rate: v.s.Rate}
 	if req == v.last {
 		return
+	}
+	if req.f != v.last.f || req.p != v.last.p {
+		v.prewarm()
 	}
 	v.last = req
 	v.sched.SetTarget(t)

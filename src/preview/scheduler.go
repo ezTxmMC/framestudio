@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 )
@@ -390,7 +391,7 @@ func (s *Scheduler) process(j *job) {
 		if f, ok := cache.Get(key); ok {
 			s.st.CacheLookup(true)
 			s.publish(f, j, period, true)
-			s.scheduleRefine(j, q, w, h)
+			s.scheduleRefine(j, q, w, h, false)
 			return
 		}
 		s.st.CacheLookup(false)
@@ -420,6 +421,13 @@ func (s *Scheduler) process(j *job) {
 	if j.kind == ReqPlay {
 		opts.Rate = j.speed
 	}
+	rep := &render.Report{}
+	ph := &render.PreviewHint{Scrub: j.kind == ReqScrub && !j.isolated, Accurate: j.kind == ReqStill,
+		Q: media.Quality(q), RenderH: h, Report: rep}
+	if j.kind == ReqScrub && !j.isolated {
+		ph.Deadline = s.cfg.Now().Add(period)
+	}
+	opts.Preview = ph
 	_, err := s.r.RenderInto(ctx, f.Img, j.proj, j.pos, opts)
 	cancel()
 	s.mu.Lock()
@@ -431,10 +439,11 @@ func (s *Scheduler) process(j *job) {
 	}
 	cost := s.cfg.Now().Sub(t0)
 	f.Pos, f.Gen, f.Q, f.RenderNS = j.pos, j.rev, q, int64(cost)
-	f.Src = SrcSW
+	f.Src = Source(rep.Src)
+	s.st.SetKFOnly(rep.KFOnly)
 	late := j.kind == ReqPlay && s.cfg.Now().Sub(j.at) > period
 	f.Late = late
-	if cache != nil {
+	if cache != nil && !rep.Approx {
 		cache.Put(key, f)
 	}
 	s.st.addRender(int64(cost))
@@ -447,7 +456,7 @@ func (s *Scheduler) process(j *job) {
 		s.mu.Unlock()
 	}
 	s.publish(f, j, period, false)
-	s.scheduleRefine(j, q, w, h)
+	s.scheduleRefine(j, q, w, h, rep.Approx)
 }
 
 // publish puts f into the ready slot (it takes over the caller's reference), replacing
@@ -482,7 +491,7 @@ func (s *Scheduler) publish(f *Frame, j *job, period time.Duration, hit bool) {
 
 // scheduleRefine arms the idle timer that re-renders the position at full quality
 // when the picture shown is smaller than what the pins and the widget allow.
-func (s *Scheduler) scheduleRefine(j *job, q Quality, w, h int) {
+func (s *Scheduler) scheduleRefine(j *job, q Quality, w, h int, approx bool) {
 	if j.kind == ReqStill {
 		return
 	}
@@ -494,7 +503,7 @@ func (s *Scheduler) scheduleRefine(j *job, q Quality, w, h int) {
 		want = QQuarter
 	}
 	fw, fh := SizeFor(j.tgt, want)
-	if q == want && w == fw && h == fh {
+	if q == want && w == fw && h == fh && !approx {
 		return
 	}
 	s.mu.Lock()

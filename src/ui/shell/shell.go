@@ -268,6 +268,7 @@ type Shell struct {
 // New builds the shell UI into w without showing it.
 func New(a fyne.App, w fyne.Window) *Shell {
 	cache := media.NewCache()
+	startPerfServices(cache)
 	sh := &Shell{
 		app: a, win: w, cache: cache, renderer: render.New(cache),
 		pageDefs: defaultPages(), now: time.Now, closeWindow: w.Close, modifiers: heldModifiers,

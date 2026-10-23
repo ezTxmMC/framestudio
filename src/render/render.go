@@ -9,6 +9,7 @@ package render
 import (
 	"context"
 	"image"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,64 @@ type Options struct {
 	// When it is not 0 or 1 and the source implements PlaybackSource, frames are fetched
 	// with PlaybackFrame so reverse and fast playback can decode ahead and skip frames.
 	Rate float64
+
+	// Preview switches video fetching to IntoSource (pooled buffers, proxies, hardware
+	// decode, scrub deadlines) when the source supports it. Export never sets it.
+	Preview *PreviewHint
+}
+
+// PreviewHint carries the live preview's wishes down to the media layer.
+type PreviewHint struct {
+	Scrub    bool
+	Accurate bool // originals only, exact (idle refine)
+	Q        media.Quality
+	RenderH  int       // height of the destination picture (proxy choice)
+	Deadline time.Time // zero = wait for the exact frame
+	Report   *Report   // optional: what the media layer did
+}
+
+// Report collects how the pictures of one frame were produced. Safe for concurrent use.
+type Report struct {
+	mu     sync.Mutex
+	Src    media.SourceKind // dominant: hw beats proxy beats sw; cache only when all are cached
+	Approx bool
+	KFOnly bool
+	n      int
+	cached int
+}
+
+func rank(k media.SourceKind) int {
+	switch k {
+	case media.SrcHW:
+		return 3
+	case media.SrcProxy:
+		return 2
+	case media.SrcSW:
+		return 1
+	}
+	return 0
+}
+
+func (r *Report) add(d media.Decoded) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.n++
+	if d.Src == media.SrcCache {
+		r.cached++
+	}
+	if rank(d.Src) > rank(r.Src) || r.n == 1 {
+		r.Src = d.Src
+	}
+	r.Approx = r.Approx || d.Approx
+	r.KFOnly = r.KFOnly || d.KFOnly
+	r.mu.Unlock()
+}
+
+// IntoSource is the pooled, hint-aware fetch of *media.Cache.
+type IntoSource interface {
+	VideoFrameInto(ctx context.Context, m model.MediaItem, t time.Duration, rate model.Rate, w, h int, hint media.MediaHint) (media.Decoded, error)
 }
 
 // PlaybackSource is an optional VideoSource extension for shuttle playback.
@@ -161,7 +220,7 @@ func (r *Renderer) compose(ctx context.Context, img *image.NRGBA, p *model.Proje
 			continue
 		}
 		l := getLayer(w, h)
-		bounds, offline := r.drawClip(l, p, c, f, src, o.Rate)
+		bounds, offline := r.drawClip(ctx, l, p, c, f, src, o)
 		if grade && !offline {
 			gradeRect(l, bounds, c.Grade)
 		}

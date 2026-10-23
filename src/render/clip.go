@@ -1,10 +1,12 @@
 package render
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 )
 
@@ -12,7 +14,7 @@ var errNoSource = errors.New("keine Medienquelle")
 
 // drawClip renders clip c at timeline frame f into the transparent layer l and returns
 // the region it touched. offline is true when a placeholder was drawn instead.
-func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f int, vs VideoSource, rate float64) (bounds image.Rectangle, offline bool) {
+func (r *Renderer) drawClip(ctx context.Context, l *image.NRGBA, p *model.Project, c *model.Clip, f int, vs VideoSource, o Options) (bounds image.Rectangle, offline bool) {
 	w, h := l.Rect.Dx(), l.Rect.Dy()
 	switch c.Kind {
 	case model.KindColor:
@@ -29,7 +31,12 @@ func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f i
 	rw, rh := requestSize(c.Fit, *m, w, h)
 	var src image.Image
 	var err error
-	if m.Kind == model.KindImage {
+	rate := o.Rate
+	var release func()
+	if is, ok := vs.(IntoSource); ok && o.Preview != nil && m.Kind == model.KindVideo && !isNil(is) {
+		n := max(0, c.SourceIn+f-c.Start)
+		src, release, err = r.fetchInto(ctx, is, *m, n, fps, rw, rh, o)
+	} else if m.Kind == model.KindImage {
 		src, err = r.still(*m, rw, rh, vs)
 	} else {
 		n := max(0, c.SourceIn+f-c.Start)
@@ -46,6 +53,9 @@ func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f i
 		})
 	}
 	if err != nil || src == nil || src.Bounds().Empty() {
+		if release != nil {
+			release()
+		}
 		return drawOffline(l, c.Name), true
 	}
 	s, pooled := toNRGBAPooled(src, true)
@@ -53,6 +63,9 @@ func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f i
 	drawScaled(l, s, d)
 	if pooled {
 		putLayer(s)
+	}
+	if release != nil {
+		release()
 	}
 	return d.Intersect(l.Rect), false
 }
@@ -80,4 +93,22 @@ func safeFetch(fn func() (image.Image, error)) (img image.Image, err error) {
 		}
 	}()
 	return fn()
+}
+
+// fetchInto gets a pooled frame through VideoFrameInto; release returns its buffer.
+func (r *Renderer) fetchInto(ctx context.Context, is IntoSource, m model.MediaItem, n int, fps model.Rate, w, h int, o Options) (img image.Image, release func(), err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			img, release, err = nil, nil, fmt.Errorf("Dekodierfehler: %v", v)
+		}
+	}()
+	ph := o.Preview
+	hint := media.MediaHint{Speed: o.Rate, Scrub: ph.Scrub, Accurate: ph.Accurate, RenderH: ph.RenderH, Q: ph.Q, Deadline: ph.Deadline}
+	d, err := is.VideoFrameInto(ctx, m, fps.FramesToDuration(n), fps, w, h, hint)
+	if err != nil {
+		return nil, nil, err
+	}
+	ph.Report.add(d)
+	rgba := &image.RGBA{Pix: d.Pix, Stride: d.Stride, Rect: image.Rect(0, 0, d.W, d.H)}
+	return rgba, d.Release, nil
 }

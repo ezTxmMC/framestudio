@@ -1,6 +1,7 @@
 package viewer
 
 import (
+	"framestudio-proto/src/workgate"
 	"image/color"
 	"time"
 
@@ -147,10 +148,12 @@ func (v *Viewer) startMonitor() {
 			n++
 			if !v.playingA.Load() {
 				v.gov.Reset()
+				workgate.SetUIBusy(false)
 				return
 			}
 			if v.govern {
 				v.gov.Probe(kit.Do)
+				v.setBusy()
 			}
 			if n%5 == 0 {
 				st := v.sched.Stats()

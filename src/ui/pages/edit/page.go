@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -21,7 +22,6 @@ import (
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
-	"framestudio-proto/src/ui/statsui"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/timeline"
 	"framestudio-proto/src/ui/viewer"
@@ -44,8 +44,9 @@ type Page struct {
 	hsplit       *container.Split // library | rest (nil while the library is hidden)
 	rsplit       *container.Split // centre | inspector (nil while the inspector is hidden)
 	viewer       *viewer.Viewer
-	stats        *statsui.Overlay
 	statsStop    func()
+	cacheStop    chan struct{}
+	cacheBar     atomic.Pointer[[]timeline.CacheRange]
 	transport    *viewer.TransportBar
 	tl           *timeline.Timeline
 	timelineHost *fyne.Container
@@ -121,6 +122,7 @@ func (p *Page) Content() fyne.CanvasObject {
 	p.start()
 	p.buildViewer(false)
 	p.buildTimeline()
+	p.wireCacheBar()
 	p.buildLibrary()
 	p.buildInspector()
 
@@ -174,10 +176,9 @@ func (p *Page) buildViewer(clean bool) {
 	}
 	p.transport = viewer.NewTransportBar(s, true)
 	// the statistics overlay and the "Wiedergabe überlastet" chip sit over the picture
-	picture, overlay := statsui.Wrap(p.viewer, statsui.Current)
-	p.stats = overlay
-	p.statsStop = overlay.FollowSettings()
-	p.progBox = container.NewBorder(nil, p.transport.Content(), nil, nil, picture)
+	p.viewer.SetStats(settings.Get().Playback.Stats)
+	p.statsStop = settings.Subscribe(func(s settings.Settings) { p.viewer.SetStats(s.Playback.Stats) })
+	p.progBox = container.NewBorder(nil, p.transport.Content(), nil, nil, p.viewer)
 	p.progName = text("", studiotheme.Text, 12)
 	p.progMeta = kit.MonoText("", studiotheme.Faint, 11)
 	p.viewer.ShowSafeArea(p.prefs.Playback.SafeArea)
@@ -302,11 +303,11 @@ func (p *Page) Close() {
 	if p.tl != nil {
 		p.tl.Close()
 	}
+	if p.cacheStop != nil {
+		close(p.cacheStop)
+	}
 	if p.statsStop != nil {
 		p.statsStop()
-	}
-	if p.stats != nil {
-		p.stats.Close()
 	}
 	if p.viewer != nil {
 		p.viewer.Close()
