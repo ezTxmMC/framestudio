@@ -140,9 +140,9 @@ func (sh *Shell) bindGlobal() {
 				return "Maximieren"
 			}},
 		b("window.close", sh.closeFocusedWindow, nil),
-		sh.toggle("window.customChrome", func(s *settings.Settings) *bool { return &s.Display.CustomChrome }),
-		sh.radio("window.buttons.mac", func(s *settings.Settings) *string { return &s.Display.WindowButtons }, "mac"),
-		sh.radio("window.buttons.win", func(s *settings.Settings) *string { return &s.Display.WindowButtons }, "win"),
+		sh.customChromeBinding(),
+		sh.buttonsBinding("window.buttons.mac", "mac"),
+		sh.buttonsBinding("window.buttons.win", "win"),
 		b("window.nextProject", func() { sh.cycleProject(+1) }, func() bool { return len(sh.projects) > 1 }),
 		b("window.prevProject", func() { sh.cycleProject(-1) }, func() bool { return len(sh.projects) > 1 }),
 		command.Binding{ID: "help.shortcuts", Run: sh.showShortcuts, Icon: theme.HelpIcon()},
@@ -209,6 +209,25 @@ func (sh *Shell) toggle(id string, field func(*settings.Settings) *bool) command
 		},
 		Checked: func() bool { s := settings.Get(); return *field(&s) },
 	}
+}
+
+// customChromeBinding is the toggle for the own title bar; it shows checked only while the
+// custom chrome is really active (the window system can do it), not just wanted.
+func (sh *Shell) customChromeBinding() command.Binding {
+	b := sh.toggle("window.customChrome", func(s *settings.Settings) *bool { return &s.Display.CustomChrome })
+	b.Checked = func() bool { return winchrome.Wanted(settings.Get().Display) }
+	b.Run = func() {
+		sh.updateSettings(func(s *settings.Settings) { s.Display.CustomChrome = !s.Display.CustomChrome })
+	}
+	return b
+}
+
+// buttonsBinding picks the window button style; it has no effect (and is disabled) while
+// the own title bar is inactive.
+func (sh *Shell) buttonsBinding(id, value string) command.Binding {
+	b := sh.radio(id, func(s *settings.Settings) *string { return &s.Display.WindowButtons }, value)
+	b.Enabled = func() bool { return winchrome.Wanted(settings.Get().Display) }
+	return b
 }
 
 // radio binds one choice of a string setting; Checked marks the current one.

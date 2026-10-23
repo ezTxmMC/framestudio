@@ -105,6 +105,7 @@ func TestChromePlatform(t *testing.T) {
 	}{
 		{"wayland auto", true, "auto", wl, "x11"},
 		{"wayland empty setting", true, "", wl, "x11"},
+		{"mixed case and spaces", true, " Auto ", wl, "x11"},
 		{"chrome off", false, "auto", wl, ""},
 		{"user forces wayland", true, "wayland", wl, ""},
 		{"user forces x11", true, "x11", wl, ""},

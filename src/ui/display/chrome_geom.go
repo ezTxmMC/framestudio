@@ -3,6 +3,7 @@ package display
 import (
 	"os"
 	"runtime"
+	"strings"
 )
 
 // Pure geometry and policy helpers of the window chrome layer (no GLFW, fully testable).
@@ -142,6 +143,7 @@ func ChromePlatform(customChrome bool, platformSetting string, getenv func(strin
 	if !customChrome || runtime.GOOS != "linux" {
 		return ""
 	}
+	platformSetting = strings.ToLower(strings.TrimSpace(platformSetting))
 	if platformSetting != "" && platformSetting != "auto" {
 		return ""
 	}

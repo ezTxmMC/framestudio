@@ -16,6 +16,9 @@ import (
 const (
 	GripEdge   = 6
 	GripCorner = 8
+	// Inset is the margin between the window edge and the content. The grips lie below the
+	// content in z-order, so only this margin resizes and controls at the edge keep clicks.
+	Inset = 3
 )
 
 // GripRect is the area of a grip in frame coordinates.
@@ -128,17 +131,17 @@ func (r *frameRenderer) MinSize() fyne.Size {
 	if r.f.content == nil {
 		return fyne.NewSize(2*GripCorner, 2*GripCorner)
 	}
-	return r.f.content.MinSize()
+	return r.f.content.MinSize().AddWidthHeight(2*Inset, 2*Inset)
 }
 
 func (r *frameRenderer) Objects() []fyne.CanvasObject {
 	f := r.f
 	var objs []fyne.CanvasObject
-	if f.content != nil {
-		objs = append(objs, f.content)
-	}
 	for _, g := range f.grips {
 		objs = append(objs, g)
+	}
+	if f.content != nil {
+		objs = append(objs, f.content)
 	}
 	for _, o := range f.outline {
 		objs = append(objs, o)
@@ -149,8 +152,12 @@ func (r *frameRenderer) Objects() []fyne.CanvasObject {
 func (r *frameRenderer) Layout(s fyne.Size) {
 	f := r.f
 	if f.content != nil {
-		f.content.Move(fyne.NewPos(0, 0))
-		f.content.Resize(s)
+		in := float32(Inset)
+		if !f.Active() {
+			in = 0
+		}
+		f.content.Move(fyne.NewPos(in, in))
+		f.content.Resize(fyne.NewSize(s.Width-2*in, s.Height-2*in))
 	}
 	e, c := float32(GripEdge), float32(GripCorner)
 	rect := func(g *grip, x, y, w, h float32) {

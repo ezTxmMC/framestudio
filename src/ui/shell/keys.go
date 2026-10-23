@@ -187,6 +187,7 @@ func (sh *Shell) dispatch(k fyne.KeyName, m fyne.KeyModifier) bool {
 // keyDown / keyUp go to the menu bar: Alt pressed and released alone puts the keyboard
 // focus on the bar (and shows the menu letters while held).
 func (sh *Shell) keyDown(k *fyne.KeyEvent) {
+	sh.chromeAlt(k, true)
 	if sh.menuBar != nil {
 		sh.menuBar.HandleKeyDown(k)
 	}
@@ -200,7 +201,16 @@ func (sh *Shell) focusLost() {
 	}
 }
 
+// chromeAlt tells the title bar's window buttons that Alt/Option went down or up, so the
+// green light switches between fullscreen and maximize glyph without a pointer move.
+func (sh *Shell) chromeAlt(k *fyne.KeyEvent, down bool) {
+	if sh.chrome != nil && (k.Name == desktop.KeyAltLeft || k.Name == desktop.KeyAltRight) {
+		sh.chrome.Bar.Controls().SetAlt(down)
+	}
+}
+
 func (sh *Shell) keyUp(k *fyne.KeyEvent) {
+	sh.chromeAlt(k, false)
 	if sh.menuBar == nil || (sh.modal() && !sh.menuBar.IsOpen()) {
 		return
 	}
