@@ -189,7 +189,7 @@ func TestViewerCloseStopsRendering(t *testing.T) {
 func TestTransport(t *testing.T) {
 	test.NewTempApp(t)
 	s := newTestSession()
-	tr := newTransport(s)
+	tr := newTransport(s, false)
 	s.Seek(30)
 	if tr.tc.Text != "00:00:01:05" {
 		t.Fatalf("timecode %q", tr.tc.Text)
@@ -198,7 +198,7 @@ func TestTransport(t *testing.T) {
 		t.Fatalf("duration %q", tr.dur.Text)
 	}
 	test.Tap(tr.play)
-	if !s.Playing || tr.play.Tip != "Pause (Leertaste)" {
+	if !s.Playing || tr.play.Tip != tipPause {
 		t.Fatal("play button did not start playback")
 	}
 	test.Tap(tr.play)

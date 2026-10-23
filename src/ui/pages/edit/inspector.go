@@ -82,7 +82,7 @@ func newInspector(pg *Page) *inspector {
 	in := &inspector{pg: pg, s: pg.ctx.Session, box: container.NewVBox()}
 	in.kind = text("", studiotheme.Muted, 12)
 	in.content = container.NewThemeOverride(container.NewVScroll(
-		container.New(layout.NewCustomPaddedLayout(2, 8, 4, 6), in.box)), smallTheme{studiotheme.New()})
+		container.New(layout.NewCustomPaddedLayout(0, 6, 2, 6), in.box)), compactTheme{studiotheme.New()})
 	in.update()
 	return in
 }
@@ -90,14 +90,20 @@ func newInspector(pg *Page) *inspector {
 // update rebuilds or syncs after a session change.
 func (in *inspector) update() {
 	sig := "project"
-	if c, ok := in.s.Clip(); ok {
+	sel := in.pg.selection()
+	if len(sel) > 1 {
+		sig = "multi:" + strings.Join(sel, ",")
+	} else if c, ok := in.s.Clip(); ok {
 		sig = fmt.Sprintf("clip:%s:%s:%s", c.ID, c.Kind, c.MediaID)
 	}
 	if sig != in.sig {
 		in.sig = sig
 		in.syncs = nil
 		var rows []fyne.CanvasObject
-		if c, ok := in.s.Clip(); ok {
+		if len(sel) > 1 {
+			rows = in.buildMulti(sel)
+			in.kind.Text = "Auswahl"
+		} else if c, ok := in.s.Clip(); ok {
 			rows = in.buildClip(c)
 			in.kind.Text = kindNames[c.Kind]
 		} else {
@@ -182,12 +188,12 @@ func (in *inspector) buildClip(c *model.Clip) []fyne.CanvasObject {
 }
 
 func (in *clipEditor) build(c *model.Clip) []fyne.CanvasObject {
-	rows := []fyne.CanvasObject{in.clipHeader(), in.timingSection(c)}
-	switch c.Kind {
-	case model.KindColor:
-		rows = append(rows, in.colorSection("Füllung", "Farbe", fillColors, true))
-	default:
-		rows = append(rows, in.colorSection("Bezeichnung", "Clipfarbe", labelColors(), false))
+	rows := []fyne.CanvasObject{in.clipHeader()}
+	if c.Kind == model.KindColor {
+		rows = append(rows, in.timingSection(c), section("Füllung", in.colorRows("Farbe", fillColors, true)...))
+	} else {
+		// the label colour sits with name and timing: one section less to scroll
+		rows = append(rows, in.timingSection(c, in.colorRows("Clipfarbe", labelColors(), false)...))
 	}
 	if c.Kind == model.KindTitle {
 		rows = append(rows, in.titleSection())
@@ -198,15 +204,6 @@ func (in *clipEditor) build(c *model.Clip) []fyne.CanvasObject {
 		rows = append(rows, in.audioSection())
 	}
 	rows = append(rows, in.fadeSection())
-	if c.Kind.IsVisual() {
-		link := widget.NewHyperlink("Farbkorrektur öffnen", nil)
-		link.OnTapped = func() {
-			if in.pg.ctx.Navigate != nil {
-				in.pg.ctx.Navigate(page.Color)
-			}
-		}
-		rows = append(rows, container.NewHBox(fixed(labelWidth-6, 0), link))
-	}
 	return rows
 }
 
@@ -214,10 +211,9 @@ func (in *clipEditor) build(c *model.Clip) []fyne.CanvasObject {
 func (in *clipEditor) clipHeader() fyne.CanvasObject {
 	chip := canvas.NewRectangle(studiotheme.Steel)
 	chip.CornerRadius = 2
-	chip.SetMinSize(fyne.NewSize(4, 30))
-	name := text("", studiotheme.Text, 14)
-	name.TextStyle.Bold = true
-	sub := text("", studiotheme.Muted, 11)
+	chip.SetMinSize(fyne.NewSize(4, 28))
+	name, nameBox := truncLabel(true, false)
+	sub, subBox := truncLabel(false, true)
 	in.onSync(func() {
 		c := in.clip()
 		if c == nil {
@@ -226,23 +222,46 @@ func (in *clipEditor) clipHeader() fyne.CanvasObject {
 		_, ti, _ := in.s.Project.Clip(c.ID)
 		chip.FillColor = c.Color.NRGBA()
 		chip.Refresh()
-		name.Text = c.Name
-		name.Refresh()
-		sub.Text = kindNames[c.Kind] + "  ·  Spur " + in.s.Project.Tracks[ti].Name
+		name.SetText(c.Name)
+		info := kindNames[c.Kind] + "  ·  Spur " + in.s.Project.Tracks[ti].Name
 		if c.MediaID != "" {
 			if m, ok := in.s.Project.MediaByID(c.MediaID); ok {
-				sub.Text += "  ·  " + m.Name
+				info += "  ·  " + m.Name
 			} else {
-				sub.Text += "  ·  Medium fehlt"
+				info += "  ·  Medium fehlt"
 			}
 		}
-		sub.Refresh()
+		sub.SetText(info)
 	})
-	return container.New(layout.NewCustomPaddedLayout(2, 6, 0, 0), container.NewBorder(nil, nil,
-		container.NewCenter(chip), nil, container.NewVBox(name, sub)))
+	var link fyne.CanvasObject
+	if c := in.clip(); c != nil && c.Kind.IsVisual() {
+		// the colour page is one click away for every visual clip
+		h := widget.NewHyperlink("Farbkorrektur", nil)
+		h.OnTapped = func() {
+			if in.pg.ctx.Navigate != nil {
+				in.pg.ctx.Navigate(page.Color)
+			}
+		}
+		link = container.NewCenter(h)
+	}
+	return container.New(layout.NewCustomPaddedLayout(0, 4, 0, 0), container.NewBorder(nil, nil,
+		container.NewCenter(chip), link, container.New(layout.NewCustomPaddedVBoxLayout(0), nameBox, subBox)))
 }
 
-func (in *clipEditor) timingSection(c *model.Clip) fyne.CanvasObject {
+// truncLabel is a one-line label that shortens with an ellipsis instead of widening the
+// inspector; box holds it with the label padding trimmed.
+func truncLabel(bold, small bool) (*widget.Label, fyne.CanvasObject) {
+	l := widget.NewLabel("")
+	l.Truncation = fyne.TextTruncateEllipsis
+	l.TextStyle.Bold = bold
+	if small {
+		l.SizeName = theme.SizeNameCaptionText
+		l.Importance = widget.LowImportance
+	}
+	return l, container.New(layout.NewCustomPaddedLayout(-4, -4, -2, 0), l)
+}
+
+func (in *clipEditor) timingSection(c *model.Clip, extra ...fyne.CanvasObject) fyne.CanvasObject {
 	nameNote, timeNote := newNote(), newNote()
 	name := newCommitEntry(false, nil)
 	name.OnCommit = func(s string) {
@@ -310,13 +329,7 @@ func (in *clipEditor) timingSection(c *model.Clip) fyne.CanvasObject {
 		field("Name", name), nameNote.box,
 		field("Start", start), field("Dauer", dur), field("Ende", value(end)), timeNote.box,
 	}
-	if c.MediaID != "" {
-		if m, ok := in.s.Project.MediaByID(c.MediaID); ok {
-			src := text(m.Name, studiotheme.Muted, 12)
-			rows = append(rows, field("Quelle", value(src)))
-		}
-	}
-	return section("Clip", rows...)
+	return section("Clip", append(rows, extra...)...)
 }
 
 // timing runs a timing edit on the inspected clip and returns a readable error.
@@ -332,7 +345,8 @@ func (in *clipEditor) timing(label string, fn func(p *model.Project, c *model.Cl
 	return explain(err)
 }
 
-func (in *clipEditor) colorSection(title, label string, colors []model.RGBA, hex bool) fyne.CanvasObject {
+// colorRows are the swatches (and optionally a hex entry) for the clip colour.
+func (in *clipEditor) colorRows(label string, colors []model.RGBA, hex bool) []fyne.CanvasObject {
 	sw := newSwatches(colors, func(c model.RGBA) {
 		in.set("color", "Farbe ändern", false, func(cl *model.Clip) { cl.Color = c })
 	})
@@ -358,7 +372,7 @@ func (in *clipEditor) colorSection(title, label string, colors []model.RGBA, hex
 			}
 		}
 	})
-	return section(title, rows...)
+	return rows
 }
 
 func (in *clipEditor) titleSection() fyne.CanvasObject {

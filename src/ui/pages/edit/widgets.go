@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -16,7 +17,7 @@ import (
 )
 
 // labelWidth aligns the controls of every inspector section.
-const labelWidth = 96
+const labelWidth = 86
 
 // commitEntry applies its text on Enter or when it loses focus; Escape reverts.
 type commitEntry struct {
@@ -74,13 +75,18 @@ func (e *commitEntry) TypedKey(k *fyne.KeyEvent) {
 	e.Entry.TypedKey(k)
 }
 
-// row is a tappable list row with selection highlight and double-tap action.
+// row is a tappable list row with selection highlight and double-tap action. Media
+// rows also report the modifiers of a click (Ctrl/Shift multi-select) and drags.
 type row struct {
 	widget.BaseWidget
-	bg       *canvas.Rectangle
-	content  fyne.CanvasObject
-	OnTap    func()
-	OnDouble func()
+	bg        *canvas.Rectangle
+	content   fyne.CanvasObject
+	OnTap     func()
+	OnDouble  func()
+	OnTapMod  func(mod fyne.KeyModifier) // replaces OnTap when set
+	OnDrag    func(ev *fyne.DragEvent)
+	OnDragEnd func()
+	mod       fyne.KeyModifier // modifiers of the last mouse press
 }
 
 func newRow(content fyne.CanvasObject, tap, double func()) *row {
@@ -102,8 +108,28 @@ func (r *row) SetSelected(on bool) {
 }
 
 func (r *row) Tapped(*fyne.PointEvent) {
-	if r.OnTap != nil {
+	mod := r.mod
+	r.mod = 0
+	switch {
+	case r.OnTapMod != nil:
+		r.OnTapMod(mod)
+	case r.OnTap != nil:
 		r.OnTap()
+	}
+}
+
+func (r *row) MouseDown(e *desktop.MouseEvent) { r.mod = e.Modifier }
+func (r *row) MouseUp(*desktop.MouseEvent)     {}
+
+func (r *row) Dragged(ev *fyne.DragEvent) {
+	if r.OnDrag != nil {
+		r.OnDrag(ev)
+	}
+}
+
+func (r *row) DragEnd() {
+	if r.OnDragEnd != nil {
+		r.OnDragEnd()
 	}
 }
 
@@ -197,7 +223,7 @@ func newSwatches(colors []model.RGBA, pick func(model.RGBA)) *swatches {
 		edge.StrokeWidth = 1
 		edge.CornerRadius = 3
 		sw.chips = append(sw.chips, chip)
-		sw.box.Add(container.NewGridWrap(fyne.NewSize(26, 26), container.NewStack(
+		sw.box.Add(container.NewGridWrap(fyne.NewSize(22, 22), container.NewStack(
 			chip, container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), edge))))
 	}
 	return sw

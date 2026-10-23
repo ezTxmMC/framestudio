@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
@@ -27,7 +28,11 @@ type Page struct {
 	post func(func()) // hands background results to the UI thread
 
 	root         fyne.CanvasObject
+	vsplit       *container.Split // monitor row over timeline
+	hsplit       *container.Split // library | program and inspector
+	rsplit       *container.Split // program | inspector
 	viewer       *viewer.Viewer
+	transport    *viewer.TransportBar
 	tl           *timeline.Timeline
 	timelineHost *fyne.Container
 	lib          *library
@@ -38,15 +43,22 @@ type Page struct {
 
 	tool     timeline.Tool
 	snapping bool
+	bladeAll bool
 	zoom     float32
 
-	unsub  func()
-	closed bool
+	attached    fyne.Window // window the timeline was attached to for media drops
+	selectAllOn fyne.Canvas // canvas holding our Ctrl+A shortcut while active
+	unsub       func()
+	closed      bool
 }
 
 func New(ctx *page.Context) page.Page {
 	return &Page{ctx: ctx, post: kit.Do, snapping: true, zoom: 1}
 }
+
+// windowAttacher is implemented by timelines that accept media drags from the library
+// (timeline.AttachWindow). Asserted so the page builds with and without it.
+type windowAttacher interface{ AttachWindow(fyne.Window) }
 
 func (p *Page) Content() fyne.CanvasObject {
 	if p.root != nil {
@@ -55,10 +67,13 @@ func (p *Page) Content() fyne.CanvasObject {
 	s := p.ctx.Session
 	p.viewer = viewer.New(s, p.ctx.Renderer)
 	p.viewer.SetDeliver(p.post)
+	p.transport = viewer.NewTransportBar(s, true)
 	p.tl = timeline.New(s, p.ctx.Media)
 	p.tl.OnError = func(err error) { p.showErr(explain(err)) }
+	p.tl.OnZoomChanged = p.zoomChanged
 	p.tl.SetTool(p.tool)
 	p.tl.SetSnapping(p.snapping)
+	p.tl.SetBladeAllTracks(p.bladeAll)
 	p.tl.SetZoom(p.zoom)
 	p.timelineHost = container.NewStack(p.tl)
 
@@ -70,19 +85,33 @@ func (p *Page) Content() fyne.CanvasObject {
 	p.progMeta = kit.MonoText("", studiotheme.Faint, 11)
 	progInfo := container.NewHBox(container.NewCenter(p.progName), container.NewCenter(p.progMeta), fixed(4, 0))
 	program := kit.Panel("Programm", progInfo,
-		container.NewBorder(nil, viewer.Transport(s), nil, nil, p.viewer))
+		container.NewBorder(nil, p.transport.Content(), nil, nil, p.viewer))
 
-	right := container.NewHSplit(program, kit.Panel("Inspector", container.NewHBox(p.insp.kind, fixed(6, 0)), p.insp.content))
-	right.Offset = 0.7
-	top := container.NewHSplit(kit.Panel("Bibliothek", nil, p.lib.content), right)
-	top.Offset = 0.2
-	root := container.NewVSplit(top, kit.Panel("Timeline", p.bar.content, p.timelineHost))
-	root.Offset = 0.6
-	p.root = root
+	p.rsplit = container.NewHSplit(program, kit.Panel("Inspector", container.NewHBox(p.insp.kind, fixed(6, 0)), p.insp.content))
+	p.rsplit.Offset = 0.7
+	p.hsplit = container.NewHSplit(kit.Panel("Bibliothek", nil, p.lib.content), p.rsplit)
+	p.hsplit.Offset = 0.2
+	p.vsplit = container.NewVSplit(p.hsplit, kit.Panel("Timeline", p.bar.content, p.timelineHost))
+	p.vsplit.Offset = 0.6
+	p.root = container.New(&fitTimeline{pg: p}, p.vsplit)
 
 	p.unsub = s.Subscribe(p.changed)
 	p.changed(session.ChangeProject | session.ChangeSelection | session.ChangeMeta)
+	p.attachWindow()
 	return p.root
+}
+
+// attachWindow lets the timeline accept media dragged from the library (once the
+// window is known).
+func (p *Page) attachWindow() {
+	w := p.ctx.Window
+	if w == nil || w == p.attached || p.tl == nil {
+		return
+	}
+	if a, ok := any(p.tl).(windowAttacher); ok {
+		a.AttachWindow(w)
+		p.attached = w
+	}
 }
 
 func (p *Page) changed(c session.Change) {
@@ -98,6 +127,9 @@ func (p *Page) changed(c session.Change) {
 		setText(p.progName, pr.Name)
 		setText(p.progMeta, fmt.Sprintf("%d×%d  %d fps", pr.Settings.Width, pr.Settings.Height, pr.Settings.FPS))
 	}
+	if c&session.ChangeProject != 0 && p.root != nil {
+		p.root.Refresh() // track count may change the timeline height
+	}
 }
 
 func (p *Page) Activate() {
@@ -107,11 +139,25 @@ func (p *Page) Activate() {
 	if p.lib != nil {
 		p.lib.retryThumbs()
 	}
+	p.attachWindow()
+	if w := p.ctx.Window; w != nil && p.root != nil && p.selectAllOn == nil {
+		c := w.Canvas()
+		c.AddShortcut(&fyne.ShortcutSelectAll{}, func(fyne.Shortcut) { p.SelectAll() })
+		p.selectAllOn = c
+	}
 }
 
 func (p *Page) Deactivate() {
 	if p.viewer != nil {
 		p.viewer.SetActive(false)
+	}
+	p.dropShortcuts()
+}
+
+func (p *Page) dropShortcuts() {
+	if p.selectAllOn != nil {
+		p.selectAllOn.RemoveShortcut(&fyne.ShortcutSelectAll{})
+		p.selectAllOn = nil
 	}
 }
 
@@ -121,12 +167,21 @@ func (p *Page) Close() {
 		return
 	}
 	p.closed = true
+	p.dropShortcuts()
 	p.unsub()
 	p.tl.Close()
 	p.viewer.Close()
+	p.transport.Close()
 }
 
-// TypedKey handles the edit page shortcuts (JKL, arrows, I/O/M, A/B/S, Entf, +/-).
+// SelectAll selects every clip on unlocked tracks (Ctrl+A).
+func (p *Page) SelectAll() {
+	if p.root != nil {
+		p.ctx.Session.SelectAll()
+	}
+}
+
+// TypedKey handles the edit page shortcuts; see the key map in keymap.go.
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	if p.root == nil {
 		return false
@@ -135,18 +190,20 @@ func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	switch k.Name {
 	case fyne.KeySpace:
 		s.TogglePlaying()
-	case fyne.KeyJ, fyne.KeyUp:
-		s.Seek(s.PrevEdit())
+	case fyne.KeyJ:
+		s.Shuttle(-1)
 	case fyne.KeyK:
-		s.SetPlaying(false)
+		s.Shuttle(0)
 	case fyne.KeyL:
-		s.SetPlaying(true)
+		s.Shuttle(+1)
+	case fyne.KeyUp:
+		s.Seek(s.PrevEdit())
+	case fyne.KeyDown:
+		s.Seek(s.NextEdit())
 	case fyne.KeyLeft:
 		s.Seek(s.Playhead - 1)
 	case fyne.KeyRight:
 		s.Seek(s.Playhead + 1)
-	case fyne.KeyDown:
-		s.Seek(s.NextEdit())
 	case fyne.KeyHome:
 		s.Seek(0)
 	case fyne.KeyEnd:
@@ -161,8 +218,21 @@ func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 		p.setTool(timeline.ToolSelect)
 	case fyne.KeyB:
 		p.setTool(timeline.ToolBlade)
+	case fyne.KeyR:
+		p.setTool(timeline.ToolRipple)
+	case fyne.KeyN:
+		p.setTool(timeline.ToolRoll)
 	case fyne.KeyS:
 		p.split()
+	case fyne.KeyEscape:
+		if kit.MediaDragActive() {
+			kit.CancelMediaDrag()
+			return true
+		}
+		if len(s.Selected) == 0 && s.SelectedClip == "" {
+			return false
+		}
+		s.SelectClip("")
 	case fyne.KeyDelete, fyne.KeyBackspace:
 		return p.deleteSelected(false)
 	case fyne.KeyPlus, fyne.KeyEqual, fyne.KeyRightBracket: // "+" sits on "]" in German layouts
@@ -171,10 +241,10 @@ func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 		p.zoomBy(1 / 1.5)
 	case fyne.KeyReturn, fyne.KeyEnter:
 		if p.lib.mediaTabActive() {
-			if s.SelectedMedia == "" {
+			if len(p.lib.pickedIDs()) == 0 {
 				return false
 			}
-			p.insertMedia(s.SelectedMedia, false)
+			p.lib.insertMedia(false)
 		} else {
 			p.insertGenerator(generators[p.lib.gen].ID)
 		}
@@ -197,6 +267,21 @@ func (p *Page) edit(label string, fn func(*model.Project) error) error {
 	return err
 }
 
+func (p *Page) setBladeAll(on bool) {
+	p.bladeAll = on
+	p.tl.SetBladeAllTracks(on)
+	p.bar.update()
+}
+
+// zoomChanged follows zoom changes the timeline made itself (Ctrl+wheel, pinch).
+func (p *Page) zoomChanged(z float32) {
+	if z == p.zoom {
+		return
+	}
+	p.zoom = z
+	p.bar.update()
+}
+
 func (p *Page) setTool(t timeline.Tool) {
 	p.tool = t
 	p.tl.SetTool(t)
@@ -210,8 +295,8 @@ func (p *Page) toggleSnap() {
 }
 
 func (p *Page) setZoom(z float32) {
-	p.zoom = max(minZoom, min(maxZoom, z))
-	p.tl.SetZoom(p.zoom)
+	p.tl.SetZoom(max(minZoom, min(maxZoom, z)))
+	p.zoom = p.tl.Zoom()
 	p.bar.update()
 }
 
@@ -253,16 +338,29 @@ func (p *Page) split() {
 
 // deleteSelected removes the selected clip, closing the gap with ripple.
 func (p *Page) deleteSelected(ripple bool) bool {
-	id := p.ctx.Session.SelectedClip
-	if id == "" {
+	ids := p.selection()
+	if len(ids) == 0 {
 		return false
 	}
 	label := "Clip löschen"
+	if len(ids) > 1 {
+		label = fmt.Sprintf("%d Clips löschen", len(ids))
+	}
 	if ripple {
 		label = "Löschen und Lücke schließen"
 	}
-	p.edit(label, func(pr *model.Project) error { return pr.DeleteClip(id, ripple) })
+	p.edit(label, func(pr *model.Project) error { return pr.DeleteClips(ids, ripple) })
 	return true
+}
+
+// selection returns every selected clip ID (the primary clip included).
+func (p *Page) selection() []string {
+	s := p.ctx.Session
+	ids := append([]string(nil), s.Selected...)
+	if s.SelectedClip != "" && !s.IsSelected(s.SelectedClip) {
+		ids = append(ids, s.SelectedClip)
+	}
+	return ids
 }
 
 func (p *Page) addMarker() {
@@ -332,28 +430,57 @@ func (p *Page) removeTrack(id, name string) {
 
 // insertMedia places a media item at the playhead (or appends it) on a fitting track,
 // selects the new clip and moves the playhead to its end.
-func (p *Page) insertMedia(mediaID string, atEnd bool) {
+func (p *Page) insertMedia(mediaID string, atEnd bool) { p.insertMediaList([]string{mediaID}, atEnd) }
+
+// insertMediaList places media items one after another at the playhead (or the end) in
+// one undo step, selects the new clips and moves the playhead to the end of the last.
+func (p *Page) insertMediaList(mediaIDs []string, atEnd bool) {
 	s := p.ctx.Session
-	m, ok := s.Project.MediaByID(mediaID)
-	if !ok {
-		p.showErr(errors.New("Das Medium ist nicht mehr im Projekt. Liste aktualisieren und erneut wählen"))
+	var items []model.MediaItem
+	for _, mid := range mediaIDs {
+		m, ok := s.Project.MediaByID(mid)
+		if !ok {
+			p.showErr(errors.New("Das Medium ist nicht mehr im Projekt. Liste aktualisieren und erneut wählen"))
+			return
+		}
+		items = append(items, *m)
+	}
+	if len(items) == 0 {
 		return
 	}
-	item := *m
 	start := s.Playhead
 	if atEnd {
 		start = s.Project.Duration()
 	}
-	var id string
+	var ids []string
 	label := "Clip einfügen"
 	if atEnd {
 		label = "Clip anhängen"
 	}
-	if p.edit(label, func(pr *model.Project) (err error) {
-		id, err = insertMedia(pr, s.SelectedTrack, item, start)
-		return err
+	if len(items) > 1 {
+		label = fmt.Sprintf("%d Clips einfügen", len(items))
+		if atEnd {
+			label = fmt.Sprintf("%d Clips anhängen", len(items))
+		}
+	}
+	if p.edit(label, func(pr *model.Project) error {
+		at := start
+		for _, item := range items {
+			id, err := insertMedia(pr, s.SelectedTrack, item, at)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+			if c, _, _ := pr.Clip(id); c != nil {
+				at = c.End()
+			}
+		}
+		return nil
 	}) == nil {
-		p.selectInserted(id)
+		s.SelectClips(ids)
+		if c, _, _ := s.Project.Clip(ids[len(ids)-1]); c != nil {
+			s.Seek(c.End())
+		}
 	}
 }
 
@@ -384,4 +511,107 @@ func (p *Page) setFPS(fps int) {
 		return
 	}
 	p.edit("Bildrate ändern", func(pr *model.Project) error { return rescaleFPS(pr, fps) })
+}
+
+// Timeline metrics (see the timeline package) used to size the timeline panel so every
+// track of a typical project shows without scrolling.
+const (
+	tlRulerH  = 26
+	tlVideoH  = 70
+	tlAudioH  = 56
+	tlMaxPart = 0.55 // the timeline never takes more of the page height than this
+)
+
+// Preferred panel widths: the library and inspector keep a usable width, the program
+// monitor takes the rest.
+const (
+	libFrac, libMinW, libMaxW    = 0.2, 240, 300
+	inspFrac, inspMinW, inspMaxW = 0.25, 300, 380
+)
+
+// fitTimeline sizes the page splits for the window: the timeline panel shows all tracks
+// and library and inspector get a usable width. Each split follows the window until the
+// user drags its divider.
+type fitTimeline struct {
+	pg              *Page
+	vert, lib, insp autoOffset
+}
+
+// autoOffset sets a split offset until the user moves the divider.
+type autoOffset struct {
+	set    float64 // offset last chosen here; a different value means the user dragged
+	manual bool
+}
+
+func (a *autoOffset) apply(sp *container.Split, off float64) {
+	if a.set != 0 && sp.Offset != a.set {
+		a.manual = true
+	}
+	if a.manual {
+		return
+	}
+	off = max(0.05, min(0.95, off))
+	if off != sp.Offset {
+		sp.Offset = off
+		sp.Refresh()
+	}
+	a.set = sp.Offset
+}
+
+// splitGap returns the thickness of a split's divider, or the theme padding before the
+// first layout.
+func splitGap(sp *container.Split, total float32, horizontal bool) float32 {
+	a, b := sp.Leading.Size(), sp.Trailing.Size()
+	d := total - a.Height - b.Height
+	if horizontal {
+		d = total - a.Width - b.Width
+	}
+	if a.IsZero() || d < 0 || d > 40 {
+		return theme.Padding()
+	}
+	return d
+}
+
+func (l *fitTimeline) wantHeight() float32 {
+	p := l.pg.ctx.Session.Project
+	h := float32(tlRulerH + 4)
+	for _, t := range p.Tracks {
+		if t.Kind == model.TrackAudio {
+			h += tlAudioH
+		} else {
+			h += tlVideoH
+		}
+	}
+	bottom := l.pg.vsplit.Trailing
+	// panel chrome = panel min height minus the timeline's own min height
+	chrome := bottom.MinSize().Height - l.pg.timelineHost.MinSize().Height
+	return h + chrome
+}
+
+func (l *fitTimeline) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objs {
+		o.Move(fyne.Position{})
+		o.Resize(size)
+	}
+	if size.Height < 1 || size.Width < 1 {
+		return
+	}
+	pg := l.pg
+	avail := float64(size.Height - splitGap(pg.vsplit, size.Height, false))
+	want := float64(min(l.wantHeight(), size.Height*tlMaxPart))
+	l.vert.apply(pg.vsplit, 1-want/avail)
+
+	w := float64(size.Width)
+	libW := max(libMinW, min(libMaxW, libFrac*w))
+	l.lib.apply(pg.hsplit, libW/(w-float64(splitGap(pg.hsplit, size.Width, true))))
+	rest := float64(pg.rsplit.Size().Width)
+	if rest < 1 {
+		rest = w - libW
+	}
+	inspW := max(inspMinW, min(inspMaxW, inspFrac*w))
+	l.insp.apply(pg.rsplit, 1-inspW/(rest-float64(splitGap(pg.rsplit, float32(rest), true))))
+}
+
+func (l *fitTimeline) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	return objs[0].MinSize()
 }
