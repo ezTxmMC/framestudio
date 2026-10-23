@@ -87,6 +87,11 @@ type Display struct {
 	StatusBar        bool    `json:"statusBar"`
 	SaveLayoutOnQuit bool    `json:"saveLayoutOnQuit"`
 	Layout           string  `json:"layout"` // name of the active layout
+	// CustomChrome replaces the system title bar by the app's own (borderless window).
+	// Falls back to the system title bar where the window system cannot support it.
+	CustomChrome bool `json:"customChrome"`
+	// WindowButtons is "mac" (circles on the left) or "win" (icons on the right).
+	WindowButtons string `json:"windowButtons"`
 }
 
 // Defaults returns the factory settings.
@@ -100,7 +105,7 @@ func Defaults() Settings {
 			ShowFilmstrip: true, ShowWaveforms: true, RippleSyncLock: true},
 		Media:   Media{FrameCacheMB: 512, StillCacheMB: 256, AudioCacheMB: 1536, MaxDecoders: 4},
 		Export:  Export{Notify: true},
-		Display: Display{Platform: "auto", Accent: "steel", PageBar: true, StatusBar: true, SaveLayoutOnQuit: true, Layout: "Standard"},
+		Display: Display{Platform: "auto", Accent: "steel", CustomChrome: true, WindowButtons: "mac", PageBar: true, StatusBar: true, SaveLayoutOnQuit: true, Layout: "Standard"},
 		Keymap:  map[string]string{},
 	}
 }

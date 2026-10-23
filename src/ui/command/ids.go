@@ -177,6 +177,13 @@ var Catalog = []Info{
 	{ID: "window.nextProject", Label: "Nächstes Projekt", Category: "Fenster", Shortcut: "Ctrl+Tab"},
 	{ID: "window.prevProject", Label: "Vorheriges Projekt", Category: "Fenster", Shortcut: "Ctrl+Shift+Tab"},
 
+	{ID: "window.minimize", Label: "Minimieren", Category: "Fenster", Shortcut: "Ctrl+Alt+N"},
+	{ID: "window.zoom", Label: "Maximieren / Wiederherstellen", Category: "Fenster"},
+	{ID: "window.close", Label: "Fenster schließen", Category: "Fenster"},
+	{ID: "window.customChrome", Label: "Eigene Titelleiste", Category: "Fenster"},
+	{ID: "window.buttons.mac", Label: "Fensterknöpfe: macOS-Stil (links)", Category: "Fenster"},
+	{ID: "window.buttons.win", Label: "Fensterknöpfe: Windows-Stil (rechts)", Category: "Fenster"},
+
 	// Hilfe — OWNER shell
 	{ID: "help.shortcuts", Label: "Tastenkürzel", Category: "Hilfe", Shortcut: "F1"},
 	{ID: "help.diagnostics", Label: "Systeminfo und Diagnose", Category: "Hilfe"},
