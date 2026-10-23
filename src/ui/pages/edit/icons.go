@@ -46,3 +46,20 @@ var (
 func themed(r fyne.Resource) fyne.Resource { return theme.NewThemedResource(r) }
 
 func accent(r fyne.Resource) fyne.Resource { return theme.NewPrimaryThemedResource(r) }
+
+var (
+	iconRippleTrim = svgIcon("ripple-trim",
+		`<rect x="2.5" y="7" width="7" height="10" rx="1" fill="#fff"/><rect x="10.5" y="4" width="2" height="16" fill="#fff"/>`+
+			`<rect x="10.5" y="4" width="4" height="2" fill="#fff"/><rect x="10.5" y="18" width="4" height="2" fill="#fff"/>`+
+			`<rect x="15" y="11" width="4" height="2" fill="#fff"/><polygon points="18.5,8 22.5,12 18.5,16" fill="#fff"/>`)
+	iconRoll = svgIcon("roll",
+		`<rect x="2" y="10" width="8" height="10" rx="1" fill="#fff"/><rect x="14" y="10" width="8" height="10" rx="1" fill="#fff"/>`+
+			`<rect x="11" y="3" width="2" height="18" fill="#fff"/>`+
+			`<polygon points="2.5,5.5 6.5,2.5 6.5,8.5" fill="#fff"/><rect x="6.5" y="4.75" width="3" height="1.5" fill="#fff"/>`+
+			`<polygon points="21.5,5.5 17.5,2.5 17.5,8.5" fill="#fff"/><rect x="14.5" y="4.75" width="3" height="1.5" fill="#fff"/>`)
+	iconBladeAll = svgIcon("blade-all",
+		`<rect x="2" y="4" width="8" height="4" rx="0.8" fill="#fff"/><rect x="14" y="4" width="8" height="4" rx="0.8" fill="#fff"/>`+
+			`<rect x="2" y="10" width="8" height="4" rx="0.8" fill="#fff"/><rect x="14" y="10" width="8" height="4" rx="0.8" fill="#fff"/>`+
+			`<rect x="2" y="16" width="8" height="4" rx="0.8" fill="#fff"/><rect x="14" y="16" width="8" height="4" rx="0.8" fill="#fff"/>`+
+			`<rect x="11.25" y="2" width="1.5" height="20" fill="#fff"/>`)
+)

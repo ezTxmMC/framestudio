@@ -25,6 +25,9 @@ import (
 // Preview size limit while playing; paused frames render at full widget resolution.
 const playW, playH = 1280, 720
 
+// Preview size limit while shuttling (J/K/L at other than 1×).
+const shuttleW, shuttleH = 854, 480
+
 type Viewer struct {
 	widget.BaseWidget
 	s *session.Session
@@ -58,6 +61,9 @@ type Viewer struct {
 	wake    chan struct{}
 	quit    chan struct{}
 	running bool
+	// ready is the newest rendered frame not yet shown; while one waits for the UI
+	// thread, newer frames replace it instead of queueing (no backlog when shuttling).
+	ready *image.NRGBA
 }
 
 type request struct {
@@ -184,6 +190,11 @@ func (v *Viewer) renderSize() (int, int) {
 	}
 	if v.s.Playing {
 		limit(playW, playH)
+		if v.s.Rate != 1 {
+			// Shuttling skips frames anyway; smaller frames keep up with fast and
+			// reverse playback (decoding backwards is expensive).
+			limit(shuttleW, shuttleH)
+		}
 	}
 	limit(float64(v.snap.Settings.Width), float64(v.snap.Settings.Height))
 	return max(1, int(w+0.5)), max(1, int(h+0.5))
@@ -246,7 +257,23 @@ func (v *Viewer) run() {
 			return
 		default:
 		}
-		req.post(func() { v.show(img) })
+		v.mu.Lock()
+		queued := v.ready != nil
+		v.ready = img
+		v.mu.Unlock()
+		if !queued {
+			req.post(v.showReady)
+		}
+	}
+}
+
+func (v *Viewer) showReady() {
+	v.mu.Lock()
+	img := v.ready
+	v.ready = nil
+	v.mu.Unlock()
+	if img != nil {
+		v.show(img)
 	}
 }
 

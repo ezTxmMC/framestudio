@@ -15,6 +15,7 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -37,6 +38,13 @@ type library struct {
 	insertBtn *widget.Button
 	appendBtn *widget.Button
 
+	// picked holds the selected media IDs (Ctrl/Shift click); the session's
+	// SelectedMedia is the primary one. anchor is where a Shift range starts.
+	picked   []string
+	anchor   string
+	dragging bool
+	dragAt   fyne.Position
+
 	genRows []*row
 	gen     int
 }
@@ -45,8 +53,8 @@ func newLibrary(pg *Page) *library {
 	l := &library{pg: pg, rows: map[string]*row{}, thumbs: map[string]image.Image{}, loading: map[string]bool{}}
 
 	l.list = container.NewVBox()
-	l.insertBtn = widget.NewButtonWithIcon("Am Playhead einfügen", theme.ContentAddIcon(), func() { l.insertMedia(false) })
-	l.appendBtn = widget.NewButton("Ans Ende anhängen", func() { l.insertMedia(true) })
+	l.insertBtn = widget.NewButtonWithIcon("Einfügen", theme.ContentAddIcon(), func() { l.insertMedia(false) })
+	l.appendBtn = widget.NewButton("Ans Ende", func() { l.insertMedia(true) })
 	importBtn := widget.NewButtonWithIcon("Medien importieren", theme.FolderOpenIcon(), func() {
 		if pg.ctx.Navigate != nil {
 			pg.ctx.Navigate(page.Media)
@@ -95,9 +103,99 @@ func (l *library) selectGenerator(i int) {
 }
 
 func (l *library) insertMedia(atEnd bool) {
-	if id := l.pg.ctx.Session.SelectedMedia; id != "" {
-		l.pg.insertMedia(id, atEnd)
+	if ids := l.pickedIDs(); len(ids) > 0 {
+		l.pg.insertMediaList(ids, atEnd)
 	}
+}
+
+// pickedIDs returns the selected media in library order.
+func (l *library) pickedIDs() []string {
+	var out []string
+	for _, m := range l.pg.ctx.Session.Project.Media {
+		if contains(l.picked, m.ID) {
+			out = append(out, m.ID)
+		}
+	}
+	return out
+}
+
+// click selects media id: plain click selects only it, Ctrl toggles it, Shift selects
+// the range from the last plain click.
+func (l *library) click(id string, mod fyne.KeyModifier) {
+	s := l.pg.ctx.Session
+	switch {
+	case mod&(fyne.KeyModifierControl|fyne.KeyModifierSuper) != 0:
+		if contains(l.picked, id) {
+			l.picked = remove(l.picked, id)
+		} else {
+			l.picked = append(l.picked, id)
+		}
+		l.anchor = id
+	case mod&fyne.KeyModifierShift != 0 && l.anchor != "":
+		l.picked = nil
+		in := false
+		for _, m := range s.Project.Media {
+			edge := m.ID == id || m.ID == l.anchor
+			if edge || in {
+				l.picked = append(l.picked, m.ID)
+			}
+			if edge && id != l.anchor {
+				in = !in
+			}
+		}
+		// the clicked item becomes the primary one
+		l.picked = append(remove(l.picked, id), id)
+	default:
+		l.picked = []string{id}
+		l.anchor = id
+	}
+	primary := ""
+	if n := len(l.picked); n > 0 {
+		primary = l.picked[n-1]
+	}
+	s.SelectMedia(primary)
+}
+
+// drag runs an in-app media drag from row id to the timeline.
+func (l *library) drag(id string, ev *fyne.DragEvent) {
+	w := l.pg.ctx.Window
+	if w == nil {
+		return
+	}
+	if !l.dragging {
+		l.dragging = true
+		if !contains(l.picked, id) {
+			l.click(id, 0)
+		}
+		ids := l.pickedIDs()
+		label := plural(len(ids), "Medium", "Medien")
+		if len(ids) == 1 {
+			if m, ok := l.pg.ctx.Session.Project.MediaByID(ids[0]); ok {
+				label = m.Name
+			}
+		}
+		kit.BeginMediaDrag(w, ids, label)
+	}
+	l.dragAt = ev.AbsolutePosition
+	kit.UpdateMediaDrag(ev.AbsolutePosition)
+}
+
+func (l *library) dragEnd() {
+	if !l.dragging {
+		return
+	}
+	l.dragging = false
+	kit.EndMediaDrag(l.dragAt)
+}
+
+func remove(list []string, id string) []string {
+	out := make([]string, 0, len(list))
+	for _, x := range list {
+		if x != id {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func (l *library) update(c session.Change) {
@@ -113,10 +211,24 @@ func (l *library) update(c session.Change) {
 		}
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
-		for id, r := range l.rows {
-			r.SetSelected(id == s.SelectedMedia)
+		// follow selections made elsewhere (media page, removed media)
+		var kept []string
+		for _, id := range l.picked {
+			if _, ok := s.Project.MediaByID(id); ok {
+				kept = append(kept, id)
+			}
 		}
+		l.picked = kept
 		if s.SelectedMedia == "" {
+			l.picked = nil
+		} else if !contains(l.picked, s.SelectedMedia) {
+			l.picked = []string{s.SelectedMedia}
+			l.anchor = s.SelectedMedia
+		}
+		for id, r := range l.rows {
+			r.SetSelected(contains(l.picked, id))
+		}
+		if len(l.picked) == 0 {
 			l.insertBtn.Disable()
 			l.appendBtn.Disable()
 		} else {
@@ -142,8 +254,11 @@ func (l *library) rebuild() {
 	for _, m := range s.Project.Media {
 		id := m.ID
 		r := newRow(itemLayout(l.thumb(m), m.Name, mediaMeta(s.Project, m)),
-			func() { s.SelectMedia(id) },
-			func() { s.SelectMedia(id); l.pg.insertMedia(id, false) })
+			nil, func() { l.click(id, 0); l.pg.insertMedia(id, false) })
+		r.OnTapMod = func(mod fyne.KeyModifier) { l.click(id, mod) }
+		r.OnDrag = func(ev *fyne.DragEvent) { l.drag(id, ev) }
+		r.OnDragEnd = l.dragEnd
+		r.SetSelected(contains(l.picked, id))
 		l.rows[id] = r
 		l.list.Add(r)
 	}
@@ -265,6 +380,23 @@ func (t smallTheme) Size(n fyne.ThemeSizeName) float32 {
 		return 12
 	case theme.SizeNameInnerPadding:
 		return 5
+	}
+	return t.Theme.Size(n)
+}
+
+// compactTheme packs the inspector rows tighter than the library.
+type compactTheme struct{ fyne.Theme }
+
+func (t compactTheme) Size(n fyne.ThemeSizeName) float32 {
+	switch n {
+	case theme.SizeNameText:
+		return 12
+	case theme.SizeNameInnerPadding:
+		return 4
+	case theme.SizeNamePadding:
+		return 3
+	case theme.SizeNameInlineIcon:
+		return 16
 	}
 	return t.Theme.Size(n)
 }
