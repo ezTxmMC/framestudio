@@ -74,16 +74,17 @@ type Scheduler struct {
 	st                   *Stats
 	qc                   *QualityController
 
-	mu        sync.Mutex
-	proj      *model.Project
-	rev       uint64
-	tgt       Target
-	pin       string
-	skip      bool
-	speed     float64
-	period    time.Duration
-	pend      *job
-	cancel    context.CancelFunc
+	mu     sync.Mutex
+	proj   *model.Project
+	rev    uint64
+	tgt    Target
+	pin    string
+	skip   bool
+	speed  float64
+	period time.Duration
+	pend   *job
+	cancel context.CancelFunc
+
 	lastScrub time.Time
 	refine    bool
 	refineGen uint64
