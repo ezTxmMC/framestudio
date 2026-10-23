@@ -44,6 +44,8 @@ type Config struct {
 	// PostProcess runs on the scheduler goroutine for every frame before it is
 	// published (also cache hits); the viewer uses it to prepare the scopes picture.
 	PostProcess func(*Frame)
+	// Warm starts the decoders for frames from pos at w x h, ahead of a quality step up.
+	Warm func(p *model.Project, pos, w, h int)
 }
 
 type job struct {
@@ -64,10 +66,13 @@ type job struct {
 // the result is published to a single ready slot the UI thread empties. It never
 // touches the UI thread and never queues more than one frame.
 type Scheduler struct {
-	cfg Config
-	r   Renderer
-	st  *Stats
-	qc  *QualityController
+	lastPlayW, lastPlayH int // size and time of the previous playback frame (scheduler goroutine)
+	lastPlayAt           time.Time
+	obsJob               *job // the job being observed by the quality controller (guarded by mu)
+	cfg                  Config
+	r                    Renderer
+	st                   *Stats
+	qc                   *QualityController
 
 	mu        sync.Mutex
 	proj      *model.Project
@@ -117,6 +122,14 @@ func New(cfg Config, r Renderer) *Scheduler {
 	s := &Scheduler{cfg: cfg, r: r, st: cfg.Stats, qc: NewQualityController(), pin: "auto", speed: 1,
 		period: time.Second / 30,
 		wake:   make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
+	if cfg.Warm != nil {
+		s.qc.SetWarm(func(to Quality) { // called with s.mu held, from process
+			if j := s.obsJob; j != nil {
+				w, h := planSize(j, to, s.cfg.MaxH)
+				cfg.Warm(j.proj, j.pos+int(qcWarm/s.period)+1, w, h)
+			}
+		})
+	}
 	go s.run()
 	return s
 }
@@ -377,6 +390,11 @@ func (s *Scheduler) process(j *job) {
 		return // last-resort frame-rate halving: the picture holds
 	}
 
+	if j.kind == ReqPlay && j.pin == "auto" {
+		s.mu.Lock()
+		s.qc.Prime(StartLevel(j.proj, j.pos))
+		s.mu.Unlock()
+	}
 	q := s.qualityFor(j)
 	w, h := planSize(j, q, maxH)
 	if w == 0 {
@@ -442,6 +460,12 @@ func (s *Scheduler) process(j *job) {
 	f.Src = Source(rep.Src)
 	s.st.SetKFOnly(rep.KFOnly)
 	late := j.kind == ReqPlay && s.cfg.Now().Sub(j.at) > period
+	cold := false
+	if j.kind == ReqPlay {
+		now := s.cfg.Now()
+		cold = s.lastPlayW != w || s.lastPlayH != h || t0.Sub(s.lastPlayAt) > 10*period
+		s.lastPlayW, s.lastPlayH, s.lastPlayAt = w, h, now
+	}
 	f.Late = late
 	if cache != nil && !rep.Approx {
 		cache.Put(key, f)
@@ -450,7 +474,8 @@ func (s *Scheduler) process(j *job) {
 	if j.kind == ReqPlay {
 		busy := s.cfg.Governor != nil && s.cfg.Governor.Busy()
 		s.mu.Lock()
-		s.qc.Observe(Sample{At: s.cfg.Now(), Period: period, RenderNS: int64(cost), Late: late,
+		s.obsJob = j
+		s.qc.Observe(Sample{Cold: cold, At: s.cfg.Now(), Period: period, RenderNS: int64(cost), Late: late,
 			UIBusy: busy, Playing: true, Speed: j.speed})
 		s.st.underrun.Store(s.qc.UnderRun())
 		s.mu.Unlock()

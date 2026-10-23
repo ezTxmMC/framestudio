@@ -98,10 +98,14 @@ func (v *Viewer) prewarm() {
 	if v.closed || v.r == nil || v.r.Media == nil {
 		return
 	}
-	t := v.target()
+	if v.s.Playing {
+		return // playback has its decoders already
+	}
+	w, h := v.sched.PlanSize(preview.ReqStill, 1)
 	v.warmProj.Store(v.snap)
 	v.warmPos.Store(int64(v.s.Playhead))
-	v.warmH.Store(int64(t.H))
+	v.warmW.Store(int64(w))
+	v.warmH.Store(int64(h))
 	v.prewarmMu.Lock()
 	defer v.prewarmMu.Unlock()
 	if v.prewarmTimer == nil {
@@ -112,13 +116,18 @@ func (v *Viewer) prewarm() {
 }
 
 func (v *Viewer) prewarmNow() {
-	p, f := v.warmProj.Load(), int(v.warmPos.Load())
+	if v.playingA.Load() {
+		return
+	}
+	v.warmMedia(v.warmProj.Load(), int(v.warmPos.Load()), int(v.warmW.Load()), int(v.warmH.Load()))
+}
+
+// warmMedia prepares the decoders of the video clips at frame f for pictures of tw x th.
+func (v *Viewer) warmMedia(p *model.Project, f, tw, th int) {
 	if p == nil || v.r == nil || v.r.Media == nil {
 		return
 	}
 	rate := p.Rate()
-	th := int(v.warmH.Load())
-	tw := th * 16 / 9
 	for i := range p.Tracks {
 		t := &p.Tracks[i]
 		if t.Kind != model.TrackVideo || t.Hidden {

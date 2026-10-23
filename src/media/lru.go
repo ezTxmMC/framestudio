@@ -62,6 +62,16 @@ func (c *lru) getRef(key string) (val any, src SourceKind, release func(), ok bo
 	return en.val, en.src, func() { once.Do(pf.release) }, true
 }
 
+// demote makes key the first candidate for eviction: forward playback is done with a
+// frame once it has been shown, while the frames ahead of the playhead are still needed.
+func (c *lru) demote(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.items[key]; ok {
+		c.ll.MoveToBack(e)
+	}
+}
+
 // peekSrc is peek that also reports how the frame was produced.
 func (c *lru) peekSrc(key string) (any, SourceKind, bool) {
 	c.mu.Lock()

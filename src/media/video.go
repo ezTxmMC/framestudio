@@ -552,7 +552,26 @@ func (c *Cache) prefetcherForJump(m model.MediaItem, s stream, n, jump int) (*pr
 		defer c.wg.Done()
 		p.run(ctx, bin)
 	}()
+	c.retireOtherSizes(p)
 	return p, nil
+}
+
+// retireOtherSizes stops decoders of the same source at another size or proxy once they
+// have not been asked for a moment: after a quality step (or a window resize) the old
+// decoder would otherwise keep decoding up to its ring and compete with the new one for
+// the CPU. A second clip of the same file at another size keeps being asked and stays.
+func (c *Cache) retireOtherSizes(np *prefetcher) {
+	for _, d := range []time.Duration{300 * time.Millisecond, 3 * time.Second} {
+		time.AfterFunc(d, func() {
+			c.pmu.Lock()
+			defer c.pmu.Unlock()
+			for _, p := range c.prefetchers {
+				if p != np && !p.isDone() && p.s.id == np.s.id && p.s != np.s && time.Since(p.lastUsed()) > 250*time.Millisecond {
+					p.stop()
+				}
+			}
+		})
+	}
 }
 
 // evict stops the least recently used of the prefetchers at the given indices.

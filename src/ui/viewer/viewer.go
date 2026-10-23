@@ -79,6 +79,7 @@ type Viewer struct {
 	warmProj     atomic.Pointer[model.Project]
 	warmPos      atomic.Int64
 	warmH        atomic.Int64
+	warmW        atomic.Int64
 	chipOn       atomic.Bool // mirrors the visibility of the overload chip
 	govern       bool
 	overlay      *statsOverlay
@@ -124,7 +125,8 @@ func New(s *session.Session, r *render.Renderer) *Viewer {
 		v.overlay.obj)
 	v.cache = preview.NewFrameCache(min(preview.DefaultCacheBytes()*2/3, 1<<30))
 	v.gov = preview.NewLoadGovernor()
-	v.sched = preview.New(preview.Config{Cache: v.cache, Governor: v.gov, PostProcess: v.prepare}, viewerRender{v})
+	v.sched = preview.New(preview.Config{Cache: v.cache, Governor: v.gov, PostProcess: v.prepare,
+		Warm: func(p *model.Project, pos, w, h int) { go v.warmMedia(p, pos, w, h) }}, viewerRender{v})
 	v.sched.OnReady(v.notify)
 	v.frame = container.New(kit.AspectLayout{Ratio: v.ratio}, v.pic)
 	v.unsub = s.Subscribe(v.changed)

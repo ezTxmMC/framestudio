@@ -45,7 +45,9 @@ package perf
 // docs/perf.md and in the commit message; the same tests are the acceptance gate for it.
 
 import (
+	"context"
 	"fmt"
+	"image"
 	"os"
 	"runtime"
 	"sort"
@@ -307,15 +309,17 @@ func TestBudgetAllocPerFrame(t *testing.T) {
 	cache := media.NewCache()
 	defer cache.Close()
 	r := render.New(cache)
+	dst := image.NewRGBA(image.Rect(0, 0, 1920, 1080)) // the preview's pooled frame buffer
+	ctx := context.Background()
 	for i := 0; i < 5; i++ { // warm the pools
-		r.FrameWith(p, i, 1920, 1080, render.Options{})
+		_, _ = r.RenderInto(ctx, dst, p, i, render.Options{})
 	}
 	runtime.GC()
 	var a, b runtime.MemStats
 	runtime.ReadMemStats(&a)
 	const n = 30
 	for i := 0; i < n; i++ {
-		r.FrameWith(p, 5+i, 1920, 1080, render.Options{})
+		_, _ = r.RenderInto(ctx, dst, p, 5+i, render.Options{})
 	}
 	runtime.ReadMemStats(&b)
 	perFrame := float64(b.TotalAlloc-a.TotalAlloc) / n / (1 << 20)

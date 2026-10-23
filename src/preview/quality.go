@@ -1,6 +1,7 @@
 package preview
 
 import (
+	"framestudio-proto/src/model"
 	"slices"
 	"time"
 )
@@ -14,6 +15,9 @@ type Sample struct {
 	UIBusy   bool          // the LoadGovernor reports a congested UI thread
 	Playing  bool
 	Speed    float64
+	// Cold marks the first frame of a run or at a new size: it pays for starting
+	// decoders, which says nothing about the steady-state cost, so it is not sampled.
+	Cold bool
 }
 
 const (
@@ -30,6 +34,11 @@ const (
 	qcMaxDwell    = 8 * time.Second
 	qcFlapWindow  = 5 * time.Second
 	qcResetStable = 30 * time.Second
+	// qcWarm is how long the decoders of the next higher step are warmed up before the
+	// step is taken (a cold 4K decoder needs several hundred milliseconds).
+	qcWarm = 600 * time.Millisecond
+	// qcSettle is how long after a cold frame (run start, new size) samples are ignored.
+	qcSettle = time.Second
 )
 
 // QualityController steps the preview resolution down when the render budget (one
@@ -54,7 +63,17 @@ type QualityController struct {
 	halfRate   bool
 
 	changes int
+
+	settleUntil time.Time
+
+	// warm is called when a step up is due, then the step waits qcWarm so the media
+	// layer can start its decoders at the new size.
+	warm   func(Quality)
+	warmAt time.Time
 }
+
+// SetWarm installs the callback that prepares the decoders for a coming step up.
+func (q *QualityController) SetWarm(f func(Quality)) { q.warm = f }
 
 // NewQualityController starts at full quality.
 func NewQualityController() *QualityController {
@@ -113,6 +132,7 @@ func (q *QualityController) step(at time.Time, to Quality) {
 		q.dwell = min(q.dwell*2, qcMaxDwell) // the step up was undone: wait longer next time
 	}
 	q.level = to
+	q.warmAt = time.Time{}
 	q.lastChange = at
 	q.changes++
 	q.reset()
@@ -126,6 +146,12 @@ func (q *QualityController) Observe(s Sample) Quality {
 	period := float64(s.Period)
 	if q.lastChange.IsZero() {
 		q.lastChange = s.At
+	}
+	if s.Cold {
+		q.settleUntil = s.At.Add(qcSettle)
+	}
+	if s.At.Before(q.settleUntil) {
+		return q.effective(s) // decoders are starting: costs now are not steady-state costs
 	}
 	q.costs[q.head] = s.RenderNS
 	q.lates[q.head] = s.Late
@@ -157,7 +183,17 @@ func (q *QualityController) Observe(s Sample) Quality {
 	case q.level > QFull && !s.UIBusy && q.n >= qcWindow && s.At.Sub(q.lastChange) >= q.dwell:
 		p := q.p90()
 		if p < qcUpP90*period && q.lateRate() == 0 && p*qcUpPredictK < qcUpPredictLT*period {
-			q.step(s.At, q.level-1)
+			switch {
+			case q.warm == nil:
+				q.step(s.At, q.level-1)
+			case q.warmAt.IsZero():
+				q.warmAt = s.At
+				q.warm(q.level - 1)
+			case s.At.Sub(q.warmAt) >= qcWarm:
+				q.step(s.At, q.level-1)
+			}
+		} else {
+			q.warmAt = time.Time{}
 		}
 	}
 	q.trackUnderRun(s)
@@ -202,4 +238,42 @@ func (q *QualityController) Reset() {
 	q.reset()
 	q.consecLate = 0
 	q.underSince, q.okSince = time.Time{}, time.Time{}
+}
+
+// Prime sets the first step from a guess of the load before any frame has been timed:
+// only while the controller has no history and sits at full quality.
+func (q *QualityController) Prime(to Quality) {
+	if q.changes == 0 && q.n == 0 && q.level == QFull && to > QFull {
+		q.level = to
+	}
+}
+
+// StartLevel guesses the first ladder step of playback from the video that has to be
+// decoded per frame at pos: the sum of the source pictures of all visible layers. One
+// 4K clip is fine at full size (measured), several of them are not.
+func StartLevel(p *model.Project, pos int) Quality {
+	if p == nil {
+		return QFull
+	}
+	var mp float64
+	for i := range p.Tracks {
+		t := &p.Tracks[i]
+		if t.Kind != model.TrackVideo || t.Hidden {
+			continue
+		}
+		ci := t.ClipAt(pos)
+		if ci < 0 || t.Clips[ci].Kind != model.KindVideo {
+			continue
+		}
+		if m, ok := p.MediaByID(t.Clips[ci].MediaID); ok {
+			mp += float64(m.Width*m.Height) / 1e6
+		}
+	}
+	switch {
+	case mp > 40:
+		return QQuarter
+	case mp > 16:
+		return QHalf
+	}
+	return QFull
 }

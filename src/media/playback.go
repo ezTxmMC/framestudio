@@ -214,6 +214,10 @@ func (c *Cache) frameX(ctx context.Context, m model.MediaItem, n int, fps model.
 	prev, had := c.rev.note(s, n)
 	if r, ok := c.cached(s, n); ok {
 		c.hits.Add(1)
+		c.touchPrefetch(s, n)
+		if rate > 0 {
+			c.frames.demote(s.frameKey(n))
+		}
 		if rate < 0 {
 			c.readBack(m, s, n, rate)
 		}
@@ -619,4 +623,21 @@ func keyframeArgs(path string, n int, fps model.Rate, w, h int) []string {
 	}
 	args = append(args, "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1")
 	return append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=bicubic", w, h), "-f", "rawvideo", "-pix_fmt", "rgba", "-")
+}
+
+// touchPrefetch tells the decoders of s that frame n is being played from the cache:
+// they stay alive (idle teardown counts from the last request, not the last decode) and
+// keep decoding ahead of the playhead.
+func (c *Cache) touchPrefetch(s stream, n int) {
+	c.pmu.Lock()
+	var ps []*prefetcher
+	for _, p := range c.prefetchers {
+		if p.s == s {
+			ps = append(ps, p)
+		}
+	}
+	c.pmu.Unlock()
+	for _, p := range ps {
+		p.demand(n)
+	}
 }
