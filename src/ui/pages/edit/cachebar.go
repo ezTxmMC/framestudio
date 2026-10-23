@@ -2,6 +2,7 @@ package edit
 
 import (
 	"slices"
+	"testing"
 	"time"
 
 	"framestudio-proto/src/ui/timeline"
@@ -20,31 +21,36 @@ func (p *Page) wireCacheBar() {
 		}
 		return nil
 	})
+	if testing.Testing() {
+		return // the test driver runs UI callbacks on the calling goroutine
+	}
 	p.cacheStop = make(chan struct{})
 	stop := p.cacheStop
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
-		var last []timeline.CacheRange
 		for {
 			select {
 			case <-stop:
 				return
 			case <-t.C:
 			}
-			if p.viewer.Playing() {
-				continue
+			if !p.viewer.Playing() && p.updateCacheBar() {
+				p.post(p.tl.RefreshCacheBar)
 			}
-			var rs []timeline.CacheRange
-			for _, r := range p.viewer.CacheRanges() {
-				rs = append(rs, timeline.CacheRange{Start: r.From, End: r.To})
-			}
-			if slices.Equal(rs, last) {
-				continue
-			}
-			last = rs
-			p.cacheBar.Store(&rs)
-			p.post(p.tl.RefreshCacheBar)
 		}
 	}()
+}
+
+// updateCacheBar recomputes the cached spans and reports whether they changed.
+func (p *Page) updateCacheBar() bool {
+	var rs []timeline.CacheRange
+	for _, r := range p.viewer.CacheRanges() {
+		rs = append(rs, timeline.CacheRange{Start: r.From, End: r.To})
+	}
+	if old := p.cacheBar.Load(); (old == nil && len(rs) == 0) || (old != nil && slices.Equal(*old, rs)) {
+		return false
+	}
+	p.cacheBar.Store(&rs)
+	return true
 }
