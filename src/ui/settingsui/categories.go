@@ -154,6 +154,17 @@ func (w *window) buildCategories() []*category {
 		func(s *settings.Settings) *bool { return &s.Display.PageBar })
 	w.check(display, "Statusleiste anzeigen", "Die Leiste am unteren Fensterrand.",
 		func(s *settings.Settings) *bool { return &s.Display.StatusBar })
+	w.check(display, "Eigene Titelleiste", "Ersetzt die Titelleiste des Systems durch die von Frame Studio. Aus: Fenster zeigen die Titelleiste des Systems.",
+		func(s *settings.Settings) *bool { return &s.Display.CustomChrome })
+	choice(w, display, "Fensterknöpfe", "Schließen, Minimieren und Vollbild wie unter macOS (links, farbige Kreise) oder wie unter Windows (rechts).", []option[string]{
+		{"mac", "Wie macOS (links)"}, {"win", "Wie Windows (rechts)"},
+	}, func(s *settings.Settings) *string { return &s.Display.WindowButtons })
+	display.extra = w.windowInfo
+	display.onShow = func() {
+		if w.infoRefresh != nil {
+			w.infoRefresh()
+		}
+	}
 	// Fyne multiplies FYNE_SCALE with the scale it detects and rounds to tenths: offer
 	// only factors that survive the rounding, labelled as what they are.
 	choice(w, display, "Skalierung", "Größe der Bedienoberfläche als Faktor auf die Größe, die das System vorgibt. „System“ übernimmt sie unverändert.", []option[float64]{

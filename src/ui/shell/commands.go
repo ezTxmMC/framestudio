@@ -14,13 +14,13 @@ import (
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/command"
-	"framestudio-proto/src/ui/display"
 	"framestudio-proto/src/ui/keymapui"
 	"framestudio-proto/src/ui/menubar"
 	"framestudio-proto/src/ui/page"
 	deliverpage "framestudio-proto/src/ui/pages/deliver"
 	mediapage "framestudio-proto/src/ui/pages/media"
 	"framestudio-proto/src/ui/settingsui"
+	"framestudio-proto/src/ui/winchrome"
 )
 
 // Page scopes. The registry holds one binding set per page ID (command.PageScope); the
@@ -131,6 +131,18 @@ func (sh *Shell) bindGlobal() {
 	}
 	reg.Bind(command.Global,
 		command.Binding{ID: "view.fullscreen", Run: sh.toggleFullscreen, Checked: func() bool { return sh.win.FullScreen() }},
+		b("window.minimize", func() { winchrome.Sys.Minimize(sh.win) }, nil),
+		command.Binding{ID: "window.zoom", Run: func() { winchrome.Sys.ToggleMaximize(sh.win) },
+			MenuLabel: func() string {
+				if winchrome.Sys.State(sh.win).Maximized || sh.win.FullScreen() {
+					return "Wiederherstellen"
+				}
+				return "Maximieren"
+			}},
+		b("window.close", sh.closeFocusedWindow, nil),
+		sh.toggle("window.customChrome", func(s *settings.Settings) *bool { return &s.Display.CustomChrome }),
+		sh.radio("window.buttons.mac", func(s *settings.Settings) *string { return &s.Display.WindowButtons }, "mac"),
+		sh.radio("window.buttons.win", func(s *settings.Settings) *string { return &s.Display.WindowButtons }, "win"),
 		b("window.nextProject", func() { sh.cycleProject(+1) }, func() bool { return len(sh.projects) > 1 }),
 		b("window.prevProject", func() { sh.cycleProject(-1) }, func() bool { return len(sh.projects) > 1 }),
 		command.Binding{ID: "help.shortcuts", Run: sh.showShortcuts, Icon: theme.HelpIcon()},
@@ -419,12 +431,7 @@ func (sh *Shell) cycleProject(dir int) {
 // toggleFullscreen puts the main window fullscreen on the monitor it is on, or back. The
 // state comes from the window itself: a restored layout or the monitor dialog may have
 // made it fullscreen.
-func (sh *Shell) toggleFullscreen() {
-	on := !sh.win.FullScreen()
-	if err := display.Fullscreen(sh.win, "", on); err != nil || sh.win.FullScreen() != on {
-		sh.win.SetFullScreen(on)
-	}
-}
+func (sh *Shell) toggleFullscreen() { sh.setFullscreen(!sh.win.FullScreen()) }
 
 func (sh *Shell) openConfigFolder() {
 	dir, err := settings.Dir()

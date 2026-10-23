@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/display"
 )
 
 // Environment variables Fyne reads at start-up.
@@ -20,6 +21,9 @@ const (
 // Display.Scale (> 0) take effect. Variables the user already set (getenv returns
 // non-empty) win and are not touched.
 //
+// With Display.CustomChrome on and the window system left on "auto", a Wayland session
+// with XWayland available runs through XWayland (display.ChromePlatform).
+//
 // A window system is only forced when its display exists ("wayland" needs
 // WAYLAND_DISPLAY, "x11" needs DISPLAY): forcing a missing one would make GLFW fail and
 // every start crash. StartWarning explains the fallback.
@@ -28,6 +32,10 @@ func StartEnv(s settings.Settings, getenv func(string) string) map[string]string
 	if getenv(envPlatform) == "" {
 		if p := wantedPlatform(s); p != "" && platformAvailable(p, getenv) {
 			env[envPlatform] = p
+		} else if display.ChromePlatform(s.Display.CustomChrome, s.Display.Platform, getenv) == "x11" {
+			// The custom title bar needs a window system where the app can move and
+			// resize its own windows: on a Wayland session that is XWayland.
+			env[envPlatform] = "x11"
 		}
 	}
 	if getenv(envScale) == "" && s.Display.Scale > 0 {

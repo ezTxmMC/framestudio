@@ -140,6 +140,7 @@ func Show(a fyne.App, parent fyne.Window, reg *command.Registry, category string
 	current = w
 	w.showCategory(category)
 	w.win.Show()
+	w.decorate()
 }
 
 // Close closes the settings window if it is open. UI thread only.

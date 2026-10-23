@@ -17,6 +17,7 @@ import (
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/command"
 	studiotheme "framestudio-proto/src/ui/theme"
+	"framestudio-proto/src/ui/winchrome"
 )
 
 // Category IDs.
@@ -91,6 +92,14 @@ type window struct {
 	confirm func(title, message, ok string, yes func())
 	// pickFolder asks for a folder and calls done on the UI thread ("" = cancelled).
 	pickFolder func(title, start string, done func(path string))
+	// Custom title bar (Display.CustomChrome): see chrome.go.
+	custom      bool
+	undecorated bool
+	chrome      *winchrome.Chrome
+	sideObj     fyne.CanvasObject // category sidebar with its separator
+	contentObj  fyne.CanvasObject // banner, category page and status line
+	infoRefresh func()            // refreshes the title bar status text (Darstellung)
+
 	// restartBtn is shown when a restart-only setting changed and Restart is set.
 	restartBtn *widget.Button
 	bannerText *canvas.Text
@@ -106,12 +115,20 @@ func newWindow(a fyne.App, parent fyne.Window, reg *command.Registry) *window {
 	w.pickFolder = w.defaultPickFolder
 	startupSettings()
 
+	w.custom = winchrome.Wanted(settings.Get().Display)
 	w.cats = w.buildCategories()
-	w.win.SetContent(w.layout())
+	w.layout()
+	w.install()
+	winchrome.OnClose(w.win, w.win.Close)
 	w.load(settings.Get())
+	lastChrome := settings.Get().Display
 	w.unsub = settings.Subscribe(func(s settings.Settings) {
 		if !w.closed {
 			w.load(s)
+			if s.Display.CustomChrome != lastChrome.CustomChrome || s.Display.WindowButtons != lastChrome.WindowButtons {
+				w.applyChrome(lastChrome, s.Display)
+			}
+			lastChrome = s.Display
 		}
 	})
 	w.win.SetOnClosed(w.closedByUser)
@@ -132,6 +149,11 @@ func newWindow(a fyne.App, parent fyne.Window, reg *command.Registry) *window {
 
 func (w *window) closedByUser() {
 	w.closed = true
+	if w.chrome != nil {
+		w.chrome.Close()
+		w.chrome = nil
+	}
+	winchrome.Forget(w.win)
 	if w.unsub != nil {
 		w.unsub()
 		w.unsub = nil
@@ -141,20 +163,13 @@ func (w *window) closedByUser() {
 	}
 }
 
-// layout builds the window: title bar with search, category sidebar, content.
-func (w *window) layout() fyne.CanvasObject {
-	// Title bar.
-	title := canvas.NewText("Einstellungen", studiotheme.Text)
-	title.TextSize = 15
-	title.TextStyle = fyne.TextStyle{Bold: true}
+// layout builds the parts of the window that stay while the title bar mode changes: the
+// search box, the category sidebar and the content. install puts them together.
+func (w *window) layout() {
 	w.search = widget.NewEntry()
 	w.search.SetPlaceHolder("Einstellungen durchsuchen  (Strg+F)")
 	w.search.ActionItem = widget.NewIcon(theme.SearchIcon())
 	w.search.OnChanged = w.setQuery
-	searchBox := container.New(&fixedWidth{w: searchW}, w.search)
-	topBG := canvas.NewRectangle(studiotheme.Raised)
-	top := container.NewStack(topBG, container.New(layout.NewCustomPaddedLayout(7, 7, 16, 10),
-		container.NewBorder(nil, nil, container.NewCenter(title), searchBox)))
 
 	// Sidebar.
 	items := make([]fyne.CanvasObject, 0, len(w.cats))
@@ -203,12 +218,10 @@ func (w *window) layout() fyne.CanvasObject {
 	w.content = container.NewBorder(w.banner, footer, nil, nil, w.body)
 	content := container.NewStack(contentBG, w.content)
 
-	topLine := canvas.NewRectangle(studiotheme.Border)
-	topLine.SetMinSize(fyne.NewSize(1, 1))
 	sideLine := canvas.NewRectangle(studiotheme.Border)
 	sideLine.SetMinSize(fyne.NewSize(1, 1))
-	return container.NewBorder(container.New(&vstack{}, top, topLine), nil,
-		container.NewHBox(sideFixed, sideLine), nil, content)
+	w.sideObj = container.NewHBox(sideFixed, sideLine)
+	w.contentObj = content
 }
 
 const statusIdle = "Änderungen wirken sofort und werden automatisch gespeichert."
@@ -389,6 +402,9 @@ func (w *window) load(s settings.Settings) {
 		f.load(s)
 	}
 	w.updateBanner(s)
+	if w.infoRefresh != nil {
+		w.infoRefresh()
+	}
 	for _, c := range w.cats {
 		if c.item != nil {
 			c.item.Refresh() // accent colour may have changed
@@ -405,6 +421,9 @@ func pendingRestart(s settings.Settings) []string {
 	}
 	if s.Display.Scale != st.Display.Scale && envOverride("Skalierung") == "" {
 		out = append(out, "Skalierung")
+	}
+	if pendingChromeRestart(s) {
+		out = append(out, "Eigene Titelleiste")
 	}
 	return out
 }
