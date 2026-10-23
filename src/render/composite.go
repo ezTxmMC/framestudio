@@ -8,15 +8,51 @@ import (
 	"sync"
 )
 
-// layerPool recycles full-frame clip layers between frames.
-var layerPool sync.Pool
+// layerPool recycles full-frame scratch images between frames. It is a small bounded
+// free list rather than a sync.Pool: a sync.Pool is per-P and a render goroutine that
+// migrates between Ps would miss its own buffers, allocating 8 MB frames again.
+var layerPool struct {
+	mu   sync.Mutex
+	free []*image.NRGBA
+}
+
+const (
+	maxFreeLayers = 8
+	maxFreeBytes  = 160 << 20
+)
+
+func takeLayer(n int) *image.NRGBA {
+	layerPool.mu.Lock()
+	defer layerPool.mu.Unlock()
+	best := -1
+	for i, v := range layerPool.free {
+		if cap(v.Pix) >= n && (best < 0 || cap(v.Pix) < cap(layerPool.free[best].Pix)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return nil
+	}
+	v := layerPool.free[best]
+	last := len(layerPool.free) - 1
+	layerPool.free[best] = layerPool.free[last]
+	layerPool.free[last] = nil
+	layerPool.free = layerPool.free[:last]
+	return v
+}
 
 // getLayer returns a cleared, transparent w x h layer.
 func getLayer(w, h int) *image.NRGBA {
+	l := getScratch(w, h)
+	clear(l.Pix)
+	return l
+}
+
+// getScratch returns a w x h image with undefined content (the caller overwrites all of it).
+func getScratch(w, h int) *image.NRGBA {
 	n := w * h * 4
-	if v, ok := layerPool.Get().(*image.NRGBA); ok && cap(v.Pix) >= n {
+	if v := takeLayer(n); v != nil {
 		v.Pix = v.Pix[:n]
-		clear(v.Pix)
 		v.Stride = w * 4
 		v.Rect = image.Rect(0, 0, w, h)
 		return v
@@ -24,7 +60,34 @@ func getLayer(w, h int) *image.NRGBA {
 	return image.NewNRGBA(image.Rect(0, 0, w, h))
 }
 
-func putLayer(l *image.NRGBA) { layerPool.Put(l) }
+func putLayer(l *image.NRGBA) {
+	layerPool.mu.Lock()
+	defer layerPool.mu.Unlock()
+	held, smallest := 0, -1
+	for i, v := range layerPool.free {
+		held += cap(v.Pix)
+		if smallest < 0 || cap(v.Pix) < cap(layerPool.free[smallest].Pix) {
+			smallest = i
+		}
+	}
+	if len(layerPool.free) >= maxFreeLayers {
+		// make room by dropping the smallest buffer if the new one is bigger (the
+		// frame size changed: old sizes are useless)
+		if cap(layerPool.free[smallest].Pix) >= cap(l.Pix) {
+			return
+		}
+		held -= cap(layerPool.free[smallest].Pix)
+		layerPool.free[smallest] = layerPool.free[len(layerPool.free)-1]
+		layerPool.free = layerPool.free[:len(layerPool.free)-1]
+	}
+	if held+cap(l.Pix) <= maxFreeBytes {
+		layerPool.free = append(layerPool.free, l)
+	}
+}
+
+// maxBands bounds the compositor's parallelism: the preview must leave cores to decode,
+// audio and the UI.
+const maxBands = 6
 
 // parallelRows splits [y0,y1) into bands and runs fn on them concurrently.
 func parallelRows(y0, y1 int, fn func(y0, y1 int)) {
@@ -32,7 +95,7 @@ func parallelRows(y0, y1 int, fn func(y0, y1 int)) {
 	if rows <= 0 {
 		return
 	}
-	n := min(runtime.NumCPU(), rows/16)
+	n := min(runtime.GOMAXPROCS(0), maxBands, rows/16)
 	if n <= 1 {
 		fn(y0, y1)
 		return

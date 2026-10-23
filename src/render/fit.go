@@ -44,12 +44,26 @@ func requestSize(fit model.Fit, m model.MediaItem, w, h int) (int, int) {
 
 // toNRGBA converts src to a non-premultiplied image with fast paths for the common types.
 func toNRGBA(src image.Image) *image.NRGBA {
+	d, _ := toNRGBAPooled(src, false)
+	return d
+}
+
+// toNRGBAPooled is toNRGBA drawing the copy from the scratch pool when pool is set;
+// pooled reports that the result must go back with putLayer once drawn.
+func toNRGBAPooled(src image.Image, pool bool) (out *image.NRGBA, pooled bool) {
+	newImg := func(w, h int) *image.NRGBA {
+		if pool {
+			pooled = true
+			return getScratch(w, h)
+		}
+		return image.NewNRGBA(image.Rect(0, 0, w, h))
+	}
 	b := src.Bounds()
 	switch s := src.(type) {
 	case *image.NRGBA:
-		return s
+		return s, false
 	case *image.RGBA:
-		dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+		dst := newImg(b.Dx(), b.Dy())
 		parallelRows(0, b.Dy(), func(y0, y1 int) {
 			for y := y0; y < y1; y++ {
 				si := s.Pix[s.PixOffset(b.Min.X, y+b.Min.Y):s.PixOffset(b.Max.X, y+b.Min.Y)]
@@ -69,9 +83,9 @@ func toNRGBA(src image.Image) *image.NRGBA {
 				}
 			}
 		})
-		return dst
+		return dst, pooled
 	case *image.YCbCr:
-		dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+		dst := newImg(b.Dx(), b.Dy())
 		parallelRows(0, b.Dy(), func(y0, y1 int) {
 			for y := y0; y < y1; y++ {
 				di := dst.Pix[dst.PixOffset(0, y):dst.PixOffset(b.Dx(), y)]
@@ -83,11 +97,11 @@ func toNRGBA(src image.Image) *image.NRGBA {
 				}
 			}
 		})
-		return dst
+		return dst, pooled
 	}
 	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(dst, dst.Rect, src, b.Min, draw.Src)
-	return dst
+	return dst, false
 }
 
 // drawScaled bilinearly scales src into rectangle d of dst, clipped to dst's bounds.

@@ -40,7 +40,13 @@ func runDur() time.Duration {
 // the widget's texture size differs from the image (never upscaling) and an NRGBA->RGBA
 // draw.Draw (internal/painter.PaintImage + gl.imgToTexture in fyne v2.8.2). The GL upload
 // and the compositing of the rest of the window are not included.
-func paintEmu(img *image.NRGBA, ww, wh int) {
+func paintEmu(img image.Image, ww, wh int) {
+	if rgba, ok := img.(*image.RGBA); ok {
+		// the viewer hands over an *image.RGBA with ImageScaleFastest: fyne neither scales
+		// nor converts, the pixels go straight to glTexImage2D
+		_ = rgba
+		return
+	}
 	var im image.Image = img
 	b := img.Bounds()
 	if b.Dx() != ww || b.Dy() != wh {
@@ -154,14 +160,12 @@ func runViewerScript(t *testing.T, name string, p *model.Project, winW, winH flo
 	res.name, res.dur = name, dur
 	res.wtexW, res.wtexH = 0, 0
 	var mu sync.Mutex
-	tags := map[*image.NRGBA]int{}
 	var rendered atomic.Int64
 	v.Source = func(pr *model.Project, f, w, h int, o render.Options) *image.NRGBA {
 		a := time.Now()
 		img := rend.FrameWith(pr, f, w, h, o)
 		d := time.Since(a)
 		mu.Lock()
-		tags[img] = f
 		res.render.add(d)
 		mu.Unlock()
 		rendered.Add(1)
@@ -197,10 +201,7 @@ func runViewerScript(t *testing.T, name string, p *model.Project, winW, winH flo
 			res.gap.add(now.Sub(lastShown))
 		}
 		lastShown = now
-		mu.Lock()
-		f := tags[img]
-		delete(tags, img)
-		mu.Unlock()
+		f := v.ShownPos()
 		shownFrame = f
 		h.mu.Lock()
 		if _, dup := h.shown[f]; !dup {
@@ -213,7 +214,7 @@ func runViewerScript(t *testing.T, name string, p *model.Project, winW, winH flo
 		behind := s.Playhead - f
 		res.stale.add(time.Duration(float64(behind) * float64(time.Second) / s.FPS().Float()))
 		if emu {
-			paintEmu(img, pw, ph)
+			paintEmu(v.ImageRGBA(), pw, ph)
 		}
 		res.rw, res.rh = img.Bounds().Dx(), img.Bounds().Dy()
 	}
