@@ -238,6 +238,9 @@ func (q *QualityController) Reset() {
 	q.reset()
 	q.consecLate = 0
 	q.underSince, q.okSince = time.Time{}, time.Time{}
+	q.under, q.halfRate = false, false
+	q.warmAt = time.Time{}
+	q.settleUntil = time.Time{}
 }
 
 // Prime sets the first step from a guess of the load before any frame has been timed:

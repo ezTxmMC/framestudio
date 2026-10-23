@@ -3,6 +3,7 @@ package application
 import (
 	"bufio"
 	"bytes"
+	"math"
 	"runtime/debug"
 	"runtime/metrics"
 	"strconv"
@@ -218,7 +219,38 @@ func SystemRAM(read func(string) ([]byte, error)) int64 {
 	if err != nil {
 		return 0
 	}
-	return ParseMemTotal(b)
+	total := ParseMemTotal(b)
+	// a container or cgroup may allow far less than the host has
+	for _, f := range []string{"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"} {
+		if cb, err := read(f); err == nil {
+			if lim := ParseCgroupLimit(cb); lim > 0 && (total <= 0 || lim < total) {
+				total = lim
+			}
+		}
+	}
+	return total
+}
+
+// ParseCgroupLimit reads a cgroup memory limit file ("max" or an unlimited-looking
+// value gives 0).
+func ParseCgroupLimit(b []byte) int64 {
+	v, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil || v <= 0 || v >= 1<<60 {
+		return 0
+	}
+	return v
+}
+
+// EffectiveLimit is the soft memory limit in force after TuneGC: its result, or the
+// limit the user's GOMEMLIMIT set (total-derived default if none is in force).
+func EffectiveLimit(tuned, totalRAM int64) int64 {
+	if tuned > 0 {
+		return tuned
+	}
+	if cur := debug.SetMemoryLimit(-1); cur > 0 && cur < math.MaxInt64 {
+		return cur
+	}
+	return MemoryLimit(totalRAM)
 }
 
 // PreviewCacheBytes is the byte budget of the preview frame cache from the settings.

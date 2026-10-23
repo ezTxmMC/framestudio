@@ -17,6 +17,7 @@ type CacheKey struct {
 	Frame    int
 	W, H     uint16
 	Q        Quality
+	Exact    bool // rendered from the original, not a proxy (still / paused picture)
 }
 
 // FrameRange is a half-open run of cached frames.
@@ -104,7 +105,7 @@ func (c *FrameCache) GetNearest(hashAt func(frame int) uint64, frame, maxDist in
 	defer c.mu.Unlock()
 	for d := 1; d <= maxDist; d++ {
 		for _, fr := range [2]int{frame - d, frame + d} {
-			k := CacheKey{hashAt(fr), fr, uint16(w), uint16(h), q}
+			k := CacheKey{hashAt(fr), fr, uint16(w), uint16(h), q, false}
 			if e, ok := c.items[k]; ok {
 				c.lru.MoveToFront(e.elem)
 				return e.f.Retain(), d, true

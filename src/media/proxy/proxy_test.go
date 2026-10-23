@@ -3,11 +3,13 @@
 package proxy
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -250,5 +252,54 @@ func TestClearAndRemove(t *testing.T) {
 	m.Clear()
 	if ents, _ := os.ReadDir(m.dir); len(ents) != 0 {
 		t.Fatal("not cleared")
+	}
+}
+
+func TestAlphaSourcesGetNoProxy(t *testing.T) {
+	for _, pf := range []string{"yuva444p12le", "rgba", "yuva420p", "gbrap10le", "argb"} {
+		for _, mode := range []string{ModeAuto, ModeAlways} {
+			if Candidate(Source{Codec: "prores", PixFmt: pf, W: 3840, H: 2160}, mode) {
+				t.Errorf("%s/%s: a proxy would drop the alpha channel", pf, mode)
+			}
+		}
+	}
+	if !HasAlpha("yuva444p") || HasAlpha("yuv444p") || HasAlpha("yuv420p10le") {
+		t.Fatal("HasAlpha")
+	}
+}
+
+// A proxy over the size cap must not be built, trimmed and built again forever.
+func TestCapDoesNotMakeProxiesRebuildEndlessly(t *testing.T) {
+	needFFmpeg(t)
+	src := genSource(t, t.TempDir(), 1920, 1080, "1")
+	probes := 0
+	var mu sync.Mutex
+	m := New(Config{Dir: filepath.Join(t.TempDir(), "proxies"), Gate: workgate.NopGate{}, IdleDelay: time.Millisecond})
+	inner := m.cfg.Probe
+	m.cfg.Probe = func(ctx context.Context, p string) (Source, error) {
+		mu.Lock()
+		probes++
+		mu.Unlock()
+		return inner(ctx, p)
+	}
+	defer m.Close()
+	m.setCapBytes(1000) // far below one proxy
+	m.Want(src)
+	waitState(t, m, src, StateReady, 60*time.Second)
+	// playback keeps asking for it; the cap is exceeded, but no encode may restart
+	end := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(end) {
+		m.Lookup(src)
+		m.Want(src)
+		time.Sleep(5 * time.Millisecond)
+	}
+	m.Cleanup()
+	mu.Lock()
+	defer mu.Unlock()
+	if probes != 1 {
+		t.Fatalf("source probed/encoded %d times", probes)
+	}
+	if _, ok := m.Lookup(src); !ok {
+		t.Fatal("the proxy in use was trimmed")
 	}
 }

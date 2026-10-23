@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"framestudio-proto/src/ui/timeline"
+	"framestudio-proto/src/workgate"
 )
 
 // wireCacheBar draws the cached spans of the preview as a thin line under the ruler.
@@ -35,11 +36,17 @@ func (p *Page) wireCacheBar() {
 				return
 			case <-t.C:
 			}
-			if !p.viewer.Playing() && p.updateCacheBar() {
+			if p.cacheBarDue() && p.updateCacheBar() {
 				p.post(p.tl.RefreshCacheBar)
 			}
 		}
 	}()
+}
+
+// cacheBarDue is true only while nothing else matters more: not playing, and the work
+// gate idle (no playhead drag, which would compete with the scrub renders).
+func (p *Page) cacheBarDue() bool {
+	return !p.viewer.Playing() && workgate.Default().State() == workgate.Idle
 }
 
 // updateCacheBar recomputes the cached spans and reports whether they changed.

@@ -37,13 +37,10 @@ func TestPerformanceCategoryControls(t *testing.T) {
 	if settings.Get().Playback.HwDecode != "off" {
 		t.Fatal("hw decode")
 	}
-	idle := f.field("Im Leerlauf vorrendern").input.(*widget.Check)
-	if !idle.Checked {
-		t.Fatal("background rendering is on by default")
-	}
-	test.Tap(idle)
-	if settings.Get().Playback.BackgroundCache {
-		t.Fatal("background cache switch")
+	for _, fd := range f.w.fields {
+		if fd.label == "Im Leerlauf vorrendern" {
+			t.Fatal("a setting for a feature that does not exist must not be offered")
+		}
 	}
 	stats := f.field("Wiedergabe-Statistik anzeigen").input.(*widget.Check)
 	if stats.Checked {

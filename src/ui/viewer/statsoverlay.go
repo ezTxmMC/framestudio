@@ -125,6 +125,18 @@ func (v *Viewer) ShowSnapshot(sn preview.StatsSnapshot, now time.Time) {
 	setVisible(v.overlay.kf, sn.KFOnly)
 }
 
+// clearWarnings hides the chips when playback stops and shows the final numbers. UI thread.
+func (v *Viewer) clearWarnings(sn preview.StatsSnapshot) {
+	if v.playingA.Load() {
+		return // playback resumed meanwhile; the new monitor owns the chips
+	}
+	v.chipTill = time.Time{}
+	setVisible(v.overlay.chip, false)
+	setVisible(v.overlay.kf, false)
+	v.overlay.update(sn)
+	v.chipOn.Store(false)
+}
+
 // startMonitor runs while playing: it probes the UI thread's queue latency every
 // 100 ms (feeding the LoadGovernor), and refreshes the readout and chips twice a second
 // when the readout is on or the playback is struggling. It ends when playback stops.
@@ -149,6 +161,10 @@ func (v *Viewer) startMonitor() {
 			if !v.playingA.Load() {
 				v.gov.Reset()
 				workgate.SetUIBusy(false)
+				workgate.AllowVisibleWhilePlaying(false)
+				// the paused picture must not keep a stale warning or stale numbers
+				sn := v.sched.Stats().Snapshot(time.Now())
+				kit.Do(func() { v.clearWarnings(sn) })
 				return
 			}
 			if v.govern {

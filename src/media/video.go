@@ -318,8 +318,12 @@ func (p *prefetcher) runOnce(ctx context.Context, bin string, hw *hwaccel.Args) 
 	defer acancel()
 	var stderr tailBuffer
 	o := decodeOpts{hw: hw, threads: c.decoderThreads()}
-	o.seek, o.hasSeek = c.keyframeSeek(p.m, p.s.fps, p.start)
-	cmd := c.gateOf().Command(actx, workgate.PrioPlayback, bin, frameArgsOpt(p.s.file(), p.start, p.s.fps, p.s.w, p.s.h, 0, o)...)
+	// a restart (hardware died mid-stream) continues where the decoder stopped
+	p.mu.Lock()
+	from := max(p.next, p.start)
+	p.mu.Unlock()
+	o.seek, o.hasSeek = c.keyframeSeek(p.m, p.s.fps, from)
+	cmd := c.gateOf().Command(actx, workgate.PrioPlayback, bin, frameArgsOpt(p.s.file(), from, p.s.fps, p.s.w, p.s.h, 0, o)...)
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
 	var done func()
@@ -349,11 +353,33 @@ func (p *prefetcher) runOnce(ctx context.Context, bin string, hw *hwaccel.Args) 
 	}
 	defer func() {
 		eof = eof && actx.Err() == nil
-		acancel()
-		werr := cmd.Wait()
+		var werr error
+		if eof {
+			// The pipe closed by itself: let the process report how it ended instead of
+			// killing it first (a kill would look like a crash).
+			t := time.AfterFunc(2*time.Second, acancel)
+			werr = cmd.Wait()
+			t.Stop()
+			acancel()
+		} else {
+			acancel()
+			werr = cmd.Wait()
+		}
 		done()
-		if produced.Load() == 0 && hw != nil && ctx.Err() == nil {
+		var xe *exec.ExitError
+		died := eof && errors.As(werr, &xe) && ctx.Err() == nil // crashed or killed mid-stream
+		if hw != nil && ctx.Err() == nil && (produced.Load() == 0 || died) {
 			retrySoftware = true
+			return
+		}
+		if died {
+			p.mu.Lock()
+			if p.tailPF != nil {
+				p.tailPF.release()
+				p.tailPF, p.tail = nil, nil
+			}
+			p.mu.Unlock()
+			p.finish(decodeError(p.m, stderr.String(), werr)) // not the frozen last picture
 			return
 		}
 		if produced.Load() == 0 && eof {

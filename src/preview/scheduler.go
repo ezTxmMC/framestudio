@@ -68,22 +68,26 @@ type job struct {
 type Scheduler struct {
 	lastPlayW, lastPlayH int // size and time of the previous playback frame (scheduler goroutine)
 	lastPlayAt           time.Time
-	obsJob               *job // the job being observed by the quality controller (guarded by mu)
+	lastPlayPub          time.Time // when the last play frame was published
+	obsJob               *job      // the job being observed by the quality controller (guarded by mu)
 	cfg                  Config
 	r                    Renderer
 	st                   *Stats
 	qc                   *QualityController
 
-	mu     sync.Mutex
-	proj   *model.Project
-	rev    uint64
-	tgt    Target
-	pin    string
-	skip   bool
-	speed  float64
-	period time.Duration
-	pend   *job
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	proj    *model.Project
+	rev     uint64
+	tgt     Target
+	pin     string
+	skip    bool
+	speed   float64
+	period  time.Duration
+	pend    *job
+	cancel  context.CancelFunc
+	lastReq ReqKind // kind of the previous Request
+	curProj *model.Project
+	curKind ReqKind // kind of the job being rendered (valid while cancel != nil)
 
 	lastScrub time.Time
 	refine    bool
@@ -159,7 +163,8 @@ func (s *Scheduler) QualityChanges() int {
 // revision counter. A new revision cancels the render in flight.
 func (s *Scheduler) SetProject(p *model.Project, rev uint64) {
 	s.mu.Lock()
-	changed := s.proj != p || s.rev != rev
+	old := s.proj
+	changed := old != p || s.rev != rev
 	s.proj, s.rev = p, rev
 	if p != nil {
 		if r := p.Rate(); r.Num > 0 && r.Den > 0 {
@@ -167,7 +172,28 @@ func (s *Scheduler) SetProject(p *model.Project, rev uint64) {
 			s.st.SetProjectFPS(float64(r.Num) / float64(r.Den))
 		}
 	}
-	if changed && s.cancel != nil {
+	inflight := s.cancel != nil
+	s.mu.Unlock()
+	if changed && inflight && old != p {
+		// The render in flight is dropped only when the edit changes a picture; a volume,
+		// marker or rename edit keeps it. The signature costs O(clips), so it is
+		// computed off the caller's (UI) thread.
+		go s.cancelIfPictureChanged(old, p)
+	} else if changed && inflight {
+		s.mu.Lock()
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *Scheduler) cancelIfPictureChanged(old, p *model.Project) {
+	if PictureSig(old) == PictureSig(p) {
+		return
+	}
+	s.mu.Lock()
+	if s.proj == p && s.cancel != nil && s.curProj == old {
 		s.cancel()
 	}
 	s.mu.Unlock()
@@ -210,8 +236,18 @@ func (s *Scheduler) SetCompare(skipGrade bool) {
 // SetSpeed sets the playback rate passed on to the decoders (1 = normal, 0 = paused).
 func (s *Scheduler) SetSpeed(v float64) {
 	s.mu.Lock()
+	if v != s.speed {
+		s.resetRunLocked()
+	}
 	s.speed = v
 	s.mu.Unlock()
+}
+
+// resetRunLocked forgets the quality history of the previous playback run (stale
+// under-run and half-rate state must not leak into the next one). The level is kept.
+func (s *Scheduler) resetRunLocked() {
+	s.qc.Reset()
+	s.st.underrun.Store(false)
 }
 
 // SetMaxH caps the render height of full-quality playback frames (0 = no cap).
@@ -247,13 +283,19 @@ func (s *Scheduler) Request(pos int, kind ReqKind) {
 		j.isolated = s.lastScrub.IsZero() || now.Sub(s.lastScrub) > s.cfg.ScrubGap
 		s.lastScrub = now
 	}
+	if (kind == ReqPlay) != (s.lastReq == ReqPlay) {
+		s.resetRunLocked() // playback started or stopped
+	}
+	s.lastReq = kind
 	if s.pend != nil && s.pend.kind == ReqPlay && kind == ReqPlay {
 		s.st.Dropped(1) // a play frame superseded before it started
 	}
 	s.pend = j
 	s.refine = false
 	s.refineGen++
-	if kind != ReqPlay && s.cancel != nil {
+	// A scrub or play press must not wait behind a stale still, refine or scrub render;
+	// only a running play frame survives a newer play request (it is the newest anyway).
+	if s.cancel != nil && (kind != ReqPlay || s.curKind != ReqPlay) {
 		s.cancel()
 	}
 	s.mu.Unlock()
@@ -387,8 +429,8 @@ func (s *Scheduler) process(j *job) {
 	maxH := s.cfg.MaxH
 	period := s.period
 	s.mu.Unlock()
-	if j.kind == ReqPlay && half && j.pos%2 != 0 {
-		return // last-resort frame-rate halving: the picture holds
+	if j.kind == ReqPlay && half && !s.lastPlayPub.IsZero() && s.cfg.Now().Sub(s.lastPlayPub) < 2*period-period/4 {
+		return // last-resort frame-rate halving, decided on the clock: the picture holds
 	}
 
 	if j.kind == ReqPlay && j.pin == "auto" {
@@ -403,14 +445,17 @@ func (s *Scheduler) process(j *job) {
 	}
 
 	hs := s.hasherFor(j)
-	key := CacheKey{hs.FrameHash(j.pos, j.skip), j.pos, uint16(w), uint16(h), q}
+	// still and paused exact pictures come from the original; they are cached apart from
+	// the (possibly proxy-sourced) playback and scrub pictures
+	acc := j.kind == ReqStill || (j.kind == ReqScrub && j.isolated)
+	key := CacheKey{hs.FrameHash(j.pos, j.skip), j.pos, uint16(w), uint16(h), q, acc}
 	cache := s.cfg.Cache
 	if cache != nil {
 		cache.Pin(j.pos-int(time.Second/period), j.pos+int(time.Second/period))
 		if f, ok := cache.Get(key); ok {
 			s.st.CacheLookup(true)
 			s.publish(f, j, period, true)
-			s.scheduleRefine(j, q, w, h, false)
+			s.scheduleRefine(j, q, w, h, !acc && f.Src == SrcProxy)
 			return
 		}
 		s.st.CacheLookup(false)
@@ -430,6 +475,7 @@ func (s *Scheduler) process(j *job) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.cancel = cancel
+	s.curKind, s.curProj = j.kind, j.proj
 	stale := s.closed.Load() || (j.kind != ReqPlay && s.pend != nil)
 	s.mu.Unlock()
 	if stale {
@@ -441,7 +487,7 @@ func (s *Scheduler) process(j *job) {
 		opts.Rate = j.speed
 	}
 	rep := &render.Report{}
-	ph := &render.PreviewHint{Scrub: j.kind == ReqScrub && !j.isolated, Accurate: j.kind == ReqStill,
+	ph := &render.PreviewHint{Scrub: j.kind == ReqScrub && !j.isolated, Accurate: acc,
 		Q: media.Quality(q), RenderH: h, Report: rep}
 	if j.kind == ReqScrub && !j.isolated {
 		ph.Deadline = s.cfg.Now().Add(period)
@@ -482,7 +528,10 @@ func (s *Scheduler) process(j *job) {
 		s.mu.Unlock()
 	}
 	s.publish(f, j, period, false)
-	s.scheduleRefine(j, q, w, h, rep.Approx)
+	if j.kind == ReqPlay {
+		s.lastPlayPub = s.cfg.Now()
+	}
+	s.scheduleRefine(j, q, w, h, rep.Approx || (!acc && f.Src == SrcProxy))
 }
 
 // publish puts f into the ready slot (it takes over the caller's reference), replacing
@@ -518,8 +567,8 @@ func (s *Scheduler) publish(f *Frame, j *job, period time.Duration, hit bool) {
 // scheduleRefine arms the idle timer that re-renders the position at full quality
 // when the picture shown is smaller than what the pins and the widget allow.
 func (s *Scheduler) scheduleRefine(j *job, q Quality, w, h int, approx bool) {
-	if j.kind == ReqStill {
-		return
+	if j.kind == ReqStill || j.kind == ReqPlay {
+		return // a playing clock never starts a full-size exact render; the stop request refines
 	}
 	want := Quality(QFull)
 	switch j.pin {

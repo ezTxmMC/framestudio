@@ -134,7 +134,9 @@ func (c *Controller) Close() {
 // AllowVisibleWhilePlaying lets one P3 job run while playing (the UI is not busy and the
 // preview quality is not stepped down); the viewer's load governor toggles it.
 func (c *Controller) AllowVisibleWhilePlaying(ok bool) {
-	c.allowVis.Store(ok)
+	if c.allowVis.Swap(ok) == ok {
+		return
+	}
 	c.procs.update(c.State(), ok)
 	c.broadcast()
 }

@@ -30,7 +30,6 @@ import (
 	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
-	"framestudio-proto/src/workgate"
 )
 
 // Kind filter choices of the pool header.
@@ -526,7 +525,7 @@ func (p *Page) thumbFor(m model.MediaItem) image.Image {
 			<-p.sem
 			return
 		}
-		img, err := workgate.Call(workgate.PrioVisible, func() (image.Image, error) { return cache.Thumbnail(m, 2*(cardW-2*cardPad), 2*thumbH) })
+		img, err := cache.Thumbnail(m, 2*(cardW-2*cardPad), 2*thumbH)
 		<-p.sem
 		if err != nil {
 			img = nil

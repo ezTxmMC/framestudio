@@ -8,7 +8,6 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
-	"framestudio-proto/src/workgate"
 )
 
 // posterSource is the part of media.Cache that delivers filmstrip frames.
@@ -55,7 +54,6 @@ type posterLoader struct {
 	closed  bool
 	pending bool
 	wg      sync.WaitGroup
-	gate    workgate.Gate // nil = workgate.Default()
 	ctx     context.Context
 	cancel  context.CancelFunc
 }
@@ -129,20 +127,14 @@ func (l *posterLoader) work() {
 		l.queue = l.queue[:len(l.queue)-1]
 		l.mu.Unlock()
 
-		// filmstrip frames are visible work: they wait while playing or scrubbing
-		var g workgate.Gate = workgate.Default()
-		if l.gate != nil {
-			g = l.gate
-		}
-		release, err := g.Acquire(l.ctx, workgate.PrioVisible)
-		if err != nil {
+		// the cache gates the grab itself (visible work, waits while playing/scrubbing)
+		if l.ctx.Err() != nil {
 			l.mu.Lock()
 			l.workers--
 			l.mu.Unlock()
 			return
 		}
 		img, _ := l.src.Poster(req.m, req.sec, thumbW, thumbH)
-		release()
 
 		l.mu.Lock()
 		if e, ok := l.items[req.key]; ok {

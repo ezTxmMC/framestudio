@@ -114,6 +114,7 @@ type Manager struct {
 	done    chan struct{}
 	onState func(path string)
 	touched map[string]time.Time
+	evicted map[string]bool   // abs source path -> proxy trimmed by the size cap: not rebuilt until the cap changes
 	skipped map[string]string // path -> source signature+mode already judged not worth a proxy
 	fsMu    sync.Mutex        // finishing a proxy and Cleanup must not interleave
 }
@@ -184,7 +185,7 @@ func New(cfg Config) *Manager {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{cfg: cfg, dir: cfg.Dir, mode: cfg.Mode, capByte: int64(cfg.CapGB) << 30,
-		jobs: map[string]*job{}, cache: map[string]*lookup{}, touched: map[string]time.Time{}, skipped: map[string]string{},
+		jobs: map[string]*job{}, cache: map[string]*lookup{}, touched: map[string]time.Time{}, skipped: map[string]string{}, evicted: map[string]bool{},
 		ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	if cfg.Probe == nil {
 		m.cfg.Probe = m.ffprobe
@@ -253,6 +254,7 @@ func (m *Manager) SetCapGB(gb int) {
 func (m *Manager) setCapBytes(b int64) {
 	m.mu.Lock()
 	m.capByte = b
+	clear(m.evicted)
 	m.mu.Unlock()
 	go m.Cleanup()
 }
@@ -392,8 +394,15 @@ func (m *Manager) Regenerate(path string) {
 }
 
 func (m *Manager) want(path string, force bool) {
+	abs := path
+	if a, err := filepath.Abs(path); err == nil {
+		abs = a
+	}
 	m.mu.Lock()
-	if m.closed || (m.mode == ModeOff && !force) || m.jobs[path] != nil {
+	if force {
+		delete(m.evicted, abs)
+	}
+	if m.closed || (m.mode == ModeOff && !force) || m.jobs[path] != nil || m.evicted[abs] {
 		m.mu.Unlock()
 		return
 	}
@@ -468,8 +477,8 @@ func (m *Manager) Clear() {
 
 // Candidate decides whether a source is worth a proxy in the given mode.
 func Candidate(s Source, mode string) bool {
-	if mode == ModeOff || s.W <= 0 || s.H <= 0 {
-		return false
+	if mode == ModeOff || s.W <= 0 || s.H <= 0 || HasAlpha(s.PixFmt) {
+		return false // the proxy codec has no alpha: overlays would turn opaque
 	}
 	if mode == ModeAlways {
 		return true
@@ -485,6 +494,16 @@ func Candidate(s Source, mode string) bool {
 		return true
 	}
 	return s.Bitrate > 25_000_000
+}
+
+// HasAlpha reports whether an ffmpeg pixel format carries an alpha channel.
+func HasAlpha(pixFmt string) bool {
+	for _, p := range []string{"yuva", "gbrap", "rgba", "bgra", "argb", "abgr", "ya8", "ya16", "ayuv", "pal8"} {
+		if strings.HasPrefix(pixFmt, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ffmpegArgs builds the generation command (exported for tests through args()).
@@ -616,7 +635,7 @@ func (m *Manager) run(j *job) {
 		}
 		return
 	}
-	if !j.force && !Candidate(src, mode) {
+	if HasAlpha(src.PixFmt) || (!j.force && !Candidate(src, mode)) {
 		m.mu.Lock()
 		m.skipped[abs] = sig + "|" + mode
 		m.mu.Unlock()
@@ -836,12 +855,19 @@ func (m *Manager) Cleanup() {
 	capB := m.capByte
 	now := m.cfg.Now()
 	running := m.cur != nil
+	inUse := map[string]bool{} // proxies looked up in this session: playback reads them
+	for _, l := range m.cache {
+		if l.ok {
+			inUse[l.key] = true
+		}
+	}
 	m.mu.Unlock()
 
 	type entry struct {
-		key  string
-		size int64
-		last time.Time
+		key, src string
+		size     int64
+		last     time.Time
+		fresh    bool
 	}
 	var keep []entry
 	var total int64
@@ -884,7 +910,7 @@ func (m *Manager) Cleanup() {
 			_ = os.Remove(filepath.Join(m.dir, name))
 			continue
 		}
-		keep = append(keep, entry{key, st.Size(), sc.LastUsed})
+		keep = append(keep, entry{key, sc.SrcPath, st.Size(), sc.LastUsed, now.Sub(sc.Created) < 10*time.Minute})
 		total += st.Size()
 	}
 	for key, orphan := range known { // media file without sidecar
@@ -900,13 +926,17 @@ func (m *Manager) Cleanup() {
 		if total <= capB {
 			break
 		}
+		if e.fresh || inUse[e.key] {
+			continue // just made or being read: removing it would only make it rebuild at once
+		}
 		_ = os.Remove(filepath.Join(m.dir, e.key+".mp4"))
 		_ = os.Remove(filepath.Join(m.dir, e.key+".json"))
 		total -= e.size
+		m.mu.Lock()
+		m.evicted[e.src] = true
+		m.cache = map[string]*lookup{} // lookups of the removed proxy are stale
+		m.mu.Unlock()
 	}
-	m.mu.Lock()
-	m.cache = map[string]*lookup{}
-	m.mu.Unlock()
 }
 
 // StartCleanup runs Cleanup once after delay in the background (startup: 30 s).

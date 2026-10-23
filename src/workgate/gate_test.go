@@ -212,3 +212,29 @@ func TestNopGate(t *testing.T) {
 		t.Fatal("nop gate yields")
 	}
 }
+
+// After a UI stall longer than the heartbeat timeout the watchdog idles the gate; the
+// resumed clock must bring it back to Playing while the session still plays.
+func TestWatchdogIdleRecoversOnResumedTicks(t *testing.T) {
+	g := New()
+	old := Default()
+	SetDefault(g)
+	defer func() { SetDefault(old); g.Close() }()
+	key := new(int)
+	SetPlaying(key, true)
+	defer SetPlaying(key, false)
+	ClockTick()
+	eventually(t, 3*time.Second, "watchdog idles after the stall", func() bool { return g.State() == Idle })
+	ClockTick()
+	if g.State() != Playing {
+		t.Fatalf("state after resumed tick = %v", g.State())
+	}
+	// and stays Playing while ticks keep coming
+	for i := 0; i < 20; i++ {
+		time.Sleep(10 * time.Millisecond)
+		ClockTick()
+	}
+	if g.State() != Playing {
+		t.Fatal("gate left Playing during ticks")
+	}
+}

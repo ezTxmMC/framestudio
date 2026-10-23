@@ -86,7 +86,7 @@ var (
 // the user win.
 func startMemory() {
 	total := SystemRAM(os.ReadFile)
-	limit := TuneGC(os.Getenv, total)
+	limit := EffectiveLimit(TuneGC(os.Getenv, total), total) // also with the user's GOMEMLIMIT
 	if limit <= 0 {
 		return
 	}
@@ -107,7 +107,11 @@ func MemoryBudgets(b Budgeter) {
 
 // MediaConfig maps the settings onto the media cache limits.
 func MediaConfig(s settings.Settings) media.Config {
-	return media.Config{FrameCacheMB: s.Media.FrameCacheMB, StillCacheMB: s.Media.StillCacheMB, MaxDecoders: s.Media.MaxDecoders}
+	frames := s.Media.FrameCacheMB
+	if mb := s.Playback.CacheMB; mb > 0 {
+		frames = max(frames, mb/3) // the third of the preview cache not kept as rendered frames
+	}
+	return media.Config{FrameCacheMB: frames, StillCacheMB: s.Media.StillCacheMB, MaxDecoders: s.Media.MaxDecoders}
 }
 
 // showStartupError shows a problem from before the UI existed, unless the shell took

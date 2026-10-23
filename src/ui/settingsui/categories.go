@@ -80,8 +80,6 @@ func (w *window) buildCategories() []*category {
 	choice(w, perf, "Vorschau-Cache", "Speicher für bereits berechnete Bilder der Timeline. Wiederholtes Abspielen derselben Stelle bleibt so auch bei schwerem Material flüssig. Automatisch nutzt etwa 10 % des Arbeitsspeichers.", []option[int]{
 		{0, "Automatisch"}, {-1, "Aus"}, {256, "256 MB"}, {512, "512 MB"}, {1024, "1 GB"}, {2048, "2 GB"}, {4096, "4 GB"},
 	}, func(s *settings.Settings) *int { return &s.Playback.CacheMB })
-	w.check(perf, "Im Leerlauf vorrendern", "Berechnet im Stillstand die Bilder rund um den Abspielkopf im Voraus. Stoppt sofort, sobald Sie abspielen oder bearbeiten.",
-		func(s *settings.Settings) *bool { return &s.Playback.BackgroundCache })
 	choice(w, perf, "Proxys", "Kleine, schnell lesbare Kopien schwerer Videos für die Vorschau. Automatisch erzeugt sie im Leerlauf für hochauflösendes oder stark komprimiertes Material. Export und Farbbeurteilung nutzen immer das Original.", []option[string]{
 		{"auto", "Automatisch"}, {"always", "Für alle Videos"}, {"off", "Aus"},
 	}, func(s *settings.Settings) *string { return &s.Playback.ProxyMode })

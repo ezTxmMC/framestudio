@@ -22,7 +22,32 @@ type Hasher struct {
 }
 
 // BuildHasher hashes p. It stats the media files, so call it off the UI thread.
-func BuildHasher(p *model.Project) *Hasher {
+func BuildHasher(p *model.Project) *Hasher { return buildHasher(p, true) }
+
+// PictureSig is one hash of everything FrameHash covers for all frames (without
+// stat-ing the media files): equal signatures mean the edit left every picture alone.
+func PictureSig(p *model.Project) uint64 {
+	h := buildHasher(p, false)
+	x := h.base
+	if p == nil {
+		return x
+	}
+	for ti, row := range h.clips {
+		x = (x ^ uint64(ti+1)) * 1099511628211
+		if p.Tracks[ti].Hidden {
+			x ^= 0x517cc1b727220a95
+		}
+		if p.Tracks[ti].Kind == model.TrackVideo {
+			x ^= 0x2545f4914f6cdd1d
+		}
+		for _, c := range row {
+			x = (x ^ c) * 1099511628211
+		}
+	}
+	return x
+}
+
+func buildHasher(p *model.Project, stat bool) *Hasher {
 	h := &Hasher{proj: p}
 	if p == nil {
 		return h
@@ -34,7 +59,8 @@ func BuildHasher(p *model.Project) *Hasher {
 	media := make(map[string]uint64, len(p.Media))
 	for _, m := range p.Media {
 		var size, mtime int64
-		if st, err := os.Stat(m.Path); err == nil {
+		if !stat {
+		} else if st, err := os.Stat(m.Path); err == nil {
 			size, mtime = st.Size(), st.ModTime().UnixNano()
 		}
 		mh := fnv.New64a()

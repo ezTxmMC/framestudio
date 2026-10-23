@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 )
@@ -19,16 +20,22 @@ type fakeRender struct {
 	mu    sync.Mutex
 	calls []call
 	delay func(size int, frame int) time.Duration
+	proxy bool // report the pictures as proxy-sourced
 }
 
 type call struct {
 	frame, w, h int
 	rate        float64
+	acc         bool
 }
 
 func (f *fakeRender) RenderInto(ctx context.Context, dst *image.RGBA, p *model.Project, frame int, o render.Options) (render.Info, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, call{frame, dst.Rect.Dx(), dst.Rect.Dy(), o.Rate})
+	acc := o.Preview != nil && o.Preview.Accurate
+	f.calls = append(f.calls, call{frame, dst.Rect.Dx(), dst.Rect.Dy(), o.Rate, acc})
+	if f.proxy && o.Preview != nil && o.Preview.Report != nil && !acc {
+		o.Preview.Report.Src = media.SrcProxy
+	}
 	d := time.Duration(0)
 	if f.delay != nil {
 		d = f.delay(dst.Rect.Dx(), frame)
@@ -190,7 +197,8 @@ func TestSchedulerIdleRefineToFull(t *testing.T) {
 	s.mu.Lock()
 	s.qc.level = QHalf
 	s.mu.Unlock()
-	s.Request(7, ReqPlay)
+	s.Request(6, ReqScrub)
+	s.Request(7, ReqScrub) // part of a drag: half size, then the idle refine
 	waitFor(t, "half frame", func() bool { c := fr.last(); return c.frame == 7 && c.w == 320 })
 	waitFor(t, "full still", func() bool { c := fr.last(); return c.frame == 7 && c.w == 640 })
 	_, _, _, _ = s.Stats().Counters()
@@ -731,5 +739,125 @@ func TestStatsHotPathAllocsFree(t *testing.T) {
 		st.CacheLookup(true)
 	}); n != 0 {
 		t.Fatalf("%v allocs", n)
+	}
+}
+
+// A press on play must not wait behind a slow scrub or refine render.
+func TestSchedulerPlayCancelsInFlightStill(t *testing.T) {
+	for _, kind := range []ReqKind{ReqScrub, ReqStill} {
+		fr := &fakeRender{delay: func(_, frame int) time.Duration {
+			if frame == 10 {
+				return 5 * time.Second
+			}
+			return 0
+		}}
+		s := newSched(t, fr, Config{})
+		s.Request(10, kind)
+		waitFor(t, "start", func() bool { return fr.n() == 1 })
+		t0 := time.Now()
+		s.Request(11, ReqPlay)
+		waitFor(t, "play frame", func() bool { f := s.Ready().Load(); return f != nil && f.Pos == 11 })
+		if time.Since(t0) > time.Second {
+			t.Fatalf("kind %v: first play frame waited %v", kind, time.Since(t0))
+		}
+	}
+}
+
+// Half-rate mode decides on the clock, not on the position parity.
+func TestSchedulerHalfRateIndependentOfParity(t *testing.T) {
+	fr := &fakeRender{}
+	s := newSched(t, fr, Config{})
+	s.mu.Lock()
+	s.qc.halfRate, s.qc.under = true, true
+	s.mu.Unlock()
+	s.Request(11, ReqPlay) // odd position, 2x run
+	for i := 0; i < 8; i++ {
+		time.Sleep(34 * time.Millisecond)
+		s.Request(13+2*i, ReqPlay)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := fr.n(); n < 3 || n > 7 {
+		t.Fatalf("half rate rendered %d of 9 odd-position requests", n)
+	}
+}
+
+func TestSchedulerRunResetClearsUnderRun(t *testing.T) {
+	fr := &fakeRender{}
+	s := newSched(t, fr, Config{})
+	s.Request(1, ReqPlay)
+	waitFor(t, "frame", func() bool { return fr.n() == 1 })
+	s.mu.Lock()
+	s.qc.halfRate, s.qc.under = true, true
+	s.mu.Unlock()
+	s.Request(1, ReqScrub) // playback stopped
+	s.Request(2, ReqPlay)  // and started again
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.qc.HalfRate() || s.qc.UnderRun() {
+		t.Fatal("under-run state survived stop and start")
+	}
+}
+
+// A paused picture shown from a proxy is refined from the original and cached apart.
+func TestSchedulerPausedStillNeverProxyOnly(t *testing.T) {
+	fr := &fakeRender{}
+	s := newSched(t, fr, Config{RefineDelay: 20 * time.Millisecond})
+	s.Request(10, ReqScrub) // isolated
+	waitFor(t, "frame", func() bool { return fr.n() >= 1 })
+	if c := fr.calls[0]; !c.acc {
+		t.Fatal("isolated paused scrub must be an accurate render")
+	}
+	// a drag-scrub frame through a proxy gets an accurate refine
+	fr2 := &fakeRender{proxy: true}
+	s2 := newSched(t, fr2, Config{RefineDelay: 20 * time.Millisecond})
+	s2.Request(1, ReqScrub)
+	s2.Request(2, ReqScrub)
+	waitFor(t, "refine", func() bool {
+		fr2.mu.Lock()
+		defer fr2.mu.Unlock()
+		for _, c := range fr2.calls {
+			if c.frame == 2 && c.acc {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// No full-size exact render starts while play requests keep coming, however slowly.
+func TestSchedulerNoRefineDuringPlay(t *testing.T) {
+	fr := &fakeRender{}
+	s := newSched(t, fr, Config{RefineDelay: 20 * time.Millisecond, MaxH: 180})
+	for i := 0; i < 5; i++ {
+		s.Request(i, ReqPlay)
+		time.Sleep(80 * time.Millisecond)
+	}
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	for _, c := range fr.calls {
+		if c.acc {
+			t.Fatalf("accurate render during play: %+v", c)
+		}
+	}
+}
+
+func TestSchedulerAudioEditKeepsRenderPictureEditCancels(t *testing.T) {
+	for _, pic := range []bool{false, true} {
+		fr := &fakeRender{delay: func(_, frame int) time.Duration { return 250 * time.Millisecond }}
+		s := newSched(t, fr, Config{})
+		s.Request(10, ReqPlay)
+		waitFor(t, "start", func() bool { return fr.n() == 1 })
+		p2 := s.proj.Clone()
+		if pic {
+			p2.Tracks[0].Clips[0].Opacity = 0.5
+		} else {
+			p2.Tracks[0].Clips[0].Volume = 0.5
+		}
+		s.SetProject(p2, 2)
+		time.Sleep(500 * time.Millisecond)
+		got := s.Ready().Load() != nil
+		if got == pic {
+			t.Fatalf("pictureEdit=%v: render survived=%v", pic, got)
+		}
 	}
 }

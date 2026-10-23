@@ -29,7 +29,6 @@ import (
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
-	"framestudio-proto/src/workgate"
 )
 
 // Template is a format preset for new projects (built-in or the user's own).
@@ -574,7 +573,5 @@ func defaultProjectName() string {
 type posterVideo struct{ c *media.Cache }
 
 func (v posterVideo) VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error) {
-	return workgate.Call(workgate.PrioVisible, func() (image.Image, error) {
-		return v.c.Poster(m, fps.Or(model.Rate25).FramesToSeconds(n), w, h)
-	})
+	return v.c.Poster(m, fps.Or(model.Rate25).FramesToSeconds(n), w, h) // gated inside the cache
 }

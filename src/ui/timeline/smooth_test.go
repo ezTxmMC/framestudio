@@ -2,6 +2,10 @@ package timeline
 
 import (
 	"context"
+	"fmt"
+	"image"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -88,33 +92,55 @@ func TestSmoothFollowFallsBackToPagingWhenUIIsBusy(t *testing.T) {
 	}
 }
 
-func TestLoadersWaitWhilePlaying(t *testing.T) {
+// gatedSource behaves like media.Cache: it takes the work-gate slot itself.
+type gatedSource struct {
+	g    workgate.Gate
+	done chan struct{}
+}
+
+func (s gatedSource) job(p workgate.Prio) error {
+	rel, err := s.g.Acquire(context.Background(), p)
+	if err != nil {
+		return err
+	}
+	defer rel()
+	time.Sleep(20 * time.Millisecond)
+	s.done <- struct{}{}
+	return nil
+}
+
+func (s gatedSource) Thumbnail(model.MediaItem, int, int) (image.Image, error) {
+	return image.NewRGBA(image.Rect(0, 0, 1, 1)), s.job(workgate.PrioVisible)
+}
+
+func (s gatedSource) Waveform(model.MediaItem, int) ([]float32, error) {
+	return []float32{1}, s.job(workgate.PrioBackground)
+}
+
+// The loader must not hold a gate slot around the cache's own slot: with more loads
+// than slots the nested acquisition used to deadlock every one of them.
+func TestLoadersDoNotNestGateSlots(t *testing.T) {
 	g := workgate.New()
-	g.SetState(workgate.Playing)
-	ld := newLoader(nil, nil)
-	ld.gate = g
-	done := make(chan struct{})
-	go func() {
-		rel, err := ld.gt().Acquire(ld.ctx, workgate.PrioVisible)
-		if err == nil {
-			rel()
-			close(done)
-		}
-	}()
-	select {
-	case <-done:
-		t.Fatal("thumbnail loading must wait while playing")
-	case <-time.After(40 * time.Millisecond):
-	}
+	defer g.Close()
 	g.SetState(workgate.Idle)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("never resumed")
+	time.Sleep(workgate.BackgroundDelay + 50*time.Millisecond)
+	dir := t.TempDir()
+	src := gatedSource{g, make(chan struct{}, 64)}
+	ld := newLoader(src, func() {})
+	defer ld.close()
+	const n = 12
+	for i := 0; i < n; i++ {
+		path := filepath.Join(dir, fmt.Sprint("x", i))
+		os.WriteFile(path, []byte("x"), 0o644)
+		m := model.MediaItem{ID: path, Path: path, Kind: model.KindVideo}
+		ld.get(m, true, 512)
+		ld.get(m, false, 0)
 	}
-	g.SetState(workgate.Playing)
-	ld.close()
-	if _, err := ld.gt().Acquire(ld.ctx, workgate.PrioBackground); err != context.Canceled {
-		t.Fatalf("closed loader: %v", err)
+	for i := 0; i < 2*n; i++ {
+		select {
+		case <-src.done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("deadlock after %d of %d loads", i, 2*n)
+		}
 	}
 }

@@ -55,7 +55,8 @@ type Playback struct {
 	ProxyCapGB int `json:"proxyCapGb"`
 	// HwDecode is "auto" (hardware decoding where it was verified) or "off".
 	HwDecode string `json:"hwDecode"`
-	// BackgroundCache renders the neighbourhood of the playhead while the app is idle.
+	// BackgroundCache is reserved for idle pre-rendering around the playhead. Not
+	// implemented yet: the setting is not offered and stays off.
 	BackgroundCache bool `json:"backgroundCache"`
 	// Stats shows the playback statistics over the viewer.
 	Stats bool `json:"stats"`
@@ -145,7 +146,7 @@ func Defaults() Settings {
 	return Settings{
 		Version:  Version,
 		General:  General{Startup: "manager", AutosaveSeconds: 90, DefaultTemplate: "1080p25", ConfirmClose: true},
-		Playback: Playback{PreviewQuality: "auto", Follow: "page", ProxyMode: "auto", ProxyCapGB: 10, HwDecode: "auto", BackgroundCache: true},
+		Playback: Playback{PreviewQuality: "auto", Follow: "page", ProxyMode: "auto", ProxyCapGB: 10, HwDecode: "auto"},
 		Audio:    Audio{Player: "auto", ScrubAudio: true, MasterGain: 1},
 		Timeline: Timeline{Snapping: true, StillSeconds: 5, GeneratorSecs: 5, FadeSeconds: 1, VideoTrackH: 58, AudioTrackH: 48,
 			ShowFilmstrip: true, ShowWaveforms: true, RippleSyncLock: true},

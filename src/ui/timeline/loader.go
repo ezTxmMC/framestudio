@@ -9,7 +9,6 @@ import (
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
-	"framestudio-proto/src/workgate"
 )
 
 // mediaSource is the part of media.Cache the timeline draws from.
@@ -51,21 +50,14 @@ type loader struct {
 	closed  bool
 	pending bool            // a refresh is already queued
 	quit    chan struct{}   // closed by close: queued loads give up
-	gate    workgate.Gate   // nil = workgate.Default()
+	sem     chan struct{}   // bounds concurrent loads (the work gate is taken by the media cache)
 	ctx     context.Context // ends when the loader closes
 	cancel  context.CancelFunc
 }
 
-func (l *loader) gt() workgate.Gate {
-	if l.gate != nil {
-		return l.gate
-	}
-	return workgate.Default()
-}
-
 func newLoader(src mediaSource, refresh func()) *loader {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &loader{src: src, refresh: refresh, items: map[assetKey]*asset{}, quit: make(chan struct{}), ctx: ctx, cancel: cancel}
+	return &loader{src: src, refresh: refresh, items: map[assetKey]*asset{}, quit: make(chan struct{}), ctx: ctx, cancel: cancel, sem: make(chan struct{}, 3)}
 }
 
 // isClosed reports whether close was called.
@@ -104,23 +96,21 @@ func (l *loader) get(m model.MediaItem, wave bool, buckets int) *asset {
 		return a
 	}
 	go func() {
-		// Thumbnails of what the timeline draws are visible work, waveforms are
-		// background work; both wait while the user plays or scrubs (playback has
-		// priority, the clip shows its placeholder meanwhile).
-		prio := workgate.PrioVisible
-		if wave {
-			prio = workgate.PrioBackground
-		}
-		release, err := l.gt().Acquire(l.ctx, prio)
-		if err != nil {
+		// The media cache takes the work-gate slot itself (visible for thumbnails,
+		// background for waveforms) and waits while the user plays or scrubs. Taking a
+		// slot here as well would nest two slots of one gate and deadlock when all are
+		// held by outer jobs.
+		select {
+		case l.sem <- struct{}{}:
+		case <-l.ctx.Done():
 			return // closed while queued: start no decode for a closed timeline
 		}
 		if l.isClosed() {
-			release()
+			<-l.sem
 			return
 		}
 		res := l.load(m, wave, buckets)
-		release()
+		<-l.sem
 		l.mu.Lock()
 		if l.closed {
 			l.mu.Unlock()

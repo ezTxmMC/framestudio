@@ -42,11 +42,11 @@ func TestPlaybackDefaultsFillMissingFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := s.Playback
-	if p.PreviewQuality != "auto" || p.ProxyMode != "auto" || p.HwDecode != "auto" || p.ProxyCapGB != 10 || !p.BackgroundCache || p.Stats || p.CacheMB != 0 {
+	if p.PreviewQuality != "auto" || p.ProxyMode != "auto" || p.HwDecode != "auto" || p.ProxyCapGB != 10 || p.BackgroundCache || p.Stats || p.CacheMB != 0 {
 		t.Fatalf("%+v", p)
 	}
 	d := Defaults().Playback
-	if d.MaxPreviewH != 0 || d.ProxyCapGB != 10 || !d.BackgroundCache {
+	if d.MaxPreviewH != 0 || d.ProxyCapGB != 10 || d.BackgroundCache {
 		t.Fatalf("defaults %+v", d)
 	}
 }

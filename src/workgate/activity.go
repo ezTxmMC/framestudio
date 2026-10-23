@@ -52,7 +52,17 @@ func SetScrubbing(on bool) {
 
 // ClockTick tells the gate that the playback clock is alive (see Impl.Tick).
 func ClockTick() {
-	if t, ok := Default().(interface{ Heartbeat() }); ok {
+	g := Default()
+	if t, ok := g.(interface{ Heartbeat() }); ok {
 		t.Heartbeat()
+	}
+	// The watchdog drops to Idle after a UI stall; a resumed clock while a session still
+	// plays puts the gate back to Playing.
+	if g.State() == Idle {
+		activity.mu.Lock()
+		if len(activity.playing) > 0 {
+			publish()
+		}
+		activity.mu.Unlock()
 	}
 }

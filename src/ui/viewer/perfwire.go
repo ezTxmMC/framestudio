@@ -76,7 +76,10 @@ func cacheBytes(s settings.Settings) int64 {
 	default:
 		total = int64(mb) << 20
 	}
-	b := min(total*2/3, 1<<30)
+	b := total * 2 / 3
+	if s.Playback.CacheMB == 0 {
+		b = min(b, 1<<30) // automatic stays modest; an explicit choice is honoured
+	}
 	live.mu.Lock()
 	share := live.share
 	live.mu.Unlock()
@@ -144,7 +147,12 @@ func (v *Viewer) warmMedia(p *model.Project, f, tw, th int) {
 }
 
 // setBusy mirrors the governor's verdict to the rest of the UI (timeline paging, scope rate).
-func (v *Viewer) setBusy() { workgate.SetUIBusy(v.gov.Busy()) }
+func (v *Viewer) setBusy() {
+	busy := v.gov.Busy()
+	workgate.SetUIBusy(busy)
+	// one visible job may run while playing when there is headroom everywhere
+	workgate.AllowVisibleWhilePlaying(!busy && v.sched.Quality() == preview.QFull)
+}
 
 // CacheRanges lists the timeline spans [From, To) whose rendered pictures are cached and
 // still match the project (entries of edited clips do not count). Safe from any

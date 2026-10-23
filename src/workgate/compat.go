@@ -67,3 +67,12 @@ func WaitIdle(ctx context.Context, g Gate, d time.Duration) error {
 		}
 	}
 }
+
+// AllowVisibleWhilePlaying lets one visible job (thumbnail, filmstrip tile) run while the
+// user plays; the viewer's load governor sets it when the UI is not busy and the preview
+// runs at full quality. A no-op for gates that do not distinguish.
+func AllowVisibleWhilePlaying(ok bool) {
+	if g, is := Default().(interface{ AllowVisibleWhilePlaying(bool) }); is {
+		g.AllowVisibleWhilePlaying(ok)
+	}
+}

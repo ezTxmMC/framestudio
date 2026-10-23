@@ -568,3 +568,72 @@ func TestNoProcessLeaksAfterMixedUse(t *testing.T) {
 }
 
 func pixOf(img image.Image) []byte { return img.(*image.RGBA).Pix }
+
+// shimFFmpeg replaces the ffmpeg binary by a script for the duration of the test. The
+// script body runs with the real ffmpeg in $REAL.
+func shimFFmpeg(t *testing.T, body string) {
+	t.Helper()
+	lookTools()
+	real := tools.ffmpeg
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	script := "#!/bin/sh\nREAL=" + real + "\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tools.ffmpeg = path
+	t.Cleanup(func() { tools.ffmpeg = real })
+}
+
+// A decoder that dies after a few pictures is an error, not a frozen last frame.
+func TestDecoderCrashMidStreamIsAnError(t *testing.T) {
+	m := rateVideo(t, 25, 4)
+	shimFFmpeg(t, `head -c 46080 /dev/zero; exit 1`) // 5 frames of 64x36, then status 1
+	c := NewCache()
+	defer c.Close()
+	d, err := c.VideoFrameInto(context.Background(), m, model.Rate25.FramesToDuration(60), model.Rate25, 64, 36, MediaHint{Speed: 1})
+	if err != nil {
+		t.Fatal(err) // frame 60 was decoded before the crash
+	}
+	d.Release()
+	_, err = c.VideoFrameInto(context.Background(), m, model.Rate25.FramesToDuration(75), model.Rate25, 64, 36, MediaHint{Speed: 1})
+	if err == nil {
+		t.Fatal("a crashed decoder must not return the repeated tail frame")
+	}
+}
+
+// A hardware decoder that fails after its first pictures falls back to software from
+// where it stopped, and is reported to the planner.
+func TestHardwareDiesMidStreamFallsBackToSoftware(t *testing.T) {
+	m := rateVideo(t, 25, 4)
+	shimFFmpeg(t, `case "$*" in *-hwaccel*) head -c 46080 /dev/zero; exit 1;; esac
+exec "$REAL" "$@"`)
+	f := &fakeHW{args: hwaccel.Args{
+		Input:  []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/none", "-hwaccel_output_format", "vaapi"},
+		Filter: "hwdownload,format=nv12"}}
+	c := NewCache()
+	defer c.Close()
+	c.SetHW(f)
+	d, err := c.VideoFrameInto(context.Background(), m, model.Rate25.FramesToDuration(60), model.Rate25, 64, 36, MediaHint{Speed: 1})
+	if err != nil {
+		t.Fatalf("hardware failure must be invisible: %v", err)
+	}
+	d.Release()
+	d, err = c.VideoFrameInto(context.Background(), m, model.Rate25.FramesToDuration(75), model.Rate25, 64, 36, MediaHint{Speed: 1})
+	if err != nil {
+		t.Fatalf("hardware failure must be invisible: %v", err)
+	}
+	d.Release()
+	f.mu.Lock()
+	fails := f.fails
+	f.mu.Unlock()
+	if fails != 1 {
+		t.Fatalf("failure reported %d times", fails)
+	}
+	ref := NewCache()
+	defer ref.Close()
+	want, _ := ref.VideoFrame(m, 76, model.Rate25, 64, 36)
+	got, err := c.VideoFrame(m, 76, model.Rate25, 64, 36)
+	if err != nil || !sameImage(got, want) {
+		t.Fatal("pictures after the fallback differ from software decoding")
+	}
+}

@@ -145,3 +145,21 @@ func TestViewerCloseLeavesNoGoroutinesOrFrames(t *testing.T) {
 }
 
 var _ = render.Options{}
+
+// The warning chips must not outlive playback: the monitor hides them when it ends.
+func TestChipsClearedWhenPlaybackStops(t *testing.T) {
+	_, v, _, q, _ := setup(t)
+	q.until(t, "frame", func() bool { return v.ImageRGBA() != nil })
+	v.playingA.Store(true)
+	v.startMonitor()
+	v.ShowSnapshot(preview.StatsSnapshot{UnderRun: true, KFOnly: true}, time.Now())
+	if !v.ChipShown() || !v.overlay.kf.Visible() {
+		t.Fatal("chips not shown during playback")
+	}
+	v.playingA.Store(false)
+	// chipOn is cleared last, after both chips were hidden
+	q.until(t, "chips hidden after stop", func() bool { return !v.chipOn.Load() })
+	if v.ChipShown() || v.overlay.kf.Visible() {
+		t.Fatal("chip still visible after playback stopped")
+	}
+}

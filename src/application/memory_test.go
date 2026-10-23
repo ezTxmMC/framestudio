@@ -1,6 +1,7 @@
 package application
 
 import (
+	"os"
 	"runtime/debug"
 	"testing"
 )
@@ -91,5 +92,40 @@ func TestMemoryWatcherHysteresis(t *testing.T) {
 	}
 	if b.shares[0] != 0.5 || b.shares[1] != 1 {
 		t.Fatalf("%v", b.shares)
+	}
+}
+
+func TestSystemRAMHonoursCgroupLimit(t *testing.T) {
+	read := func(name string) ([]byte, error) {
+		switch name {
+		case "/proc/meminfo":
+			return []byte("MemTotal:       65536000 kB\n"), nil
+		case "/sys/fs/cgroup/memory.max":
+			return []byte("2147483648\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	if got := SystemRAM(read); got != 2<<30 {
+		t.Fatalf("SystemRAM = %d, want the 2 GiB cgroup limit", got)
+	}
+	read2 := func(name string) ([]byte, error) {
+		if name == "/sys/fs/cgroup/memory.max" {
+			return []byte("max\n"), nil
+		}
+		return read(name)
+	}
+	if got := SystemRAM(read2); got != 65536000<<10 {
+		t.Fatalf("unlimited cgroup: %d", got)
+	}
+}
+
+func TestEffectiveLimitWithUserGOMEMLIMIT(t *testing.T) {
+	old := debug.SetMemoryLimit(5 << 30)
+	defer debug.SetMemoryLimit(old)
+	if got := EffectiveLimit(-1, 16<<30); got != 5<<30 {
+		t.Fatalf("EffectiveLimit = %d, want the user's 5 GiB", got)
+	}
+	if got := EffectiveLimit(3<<30, 16<<30); got != 3<<30 {
+		t.Fatalf("tuned limit: %d", got)
 	}
 }
