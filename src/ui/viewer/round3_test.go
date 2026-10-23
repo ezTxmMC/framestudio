@@ -18,35 +18,37 @@ func withSettings(t *testing.T, fn func(s *settings.Settings)) {
 
 func TestPreviewQualityFollowsSettings(t *testing.T) {
 	s, v, src, q, _ := setup(t)
-	q.wait(t)
-	full := src.last()
+	shown := func() int {
+		if img := v.Image(); img != nil {
+			return img.Bounds().Dx()
+		}
+		return 0
+	}
+	q.until(t, "full size", func() bool { return shown() > 0 && shown() == v.target().W })
+	full := shown()
 	if v.Quality() != QualityAuto {
 		t.Fatalf("default quality %q", v.Quality())
 	}
 	withSettings(t, func(st *settings.Settings) { st.Playback.PreviewQuality = QualityHalf })
-	q.wait(t)
-	if c := src.last(); c.w > full.w/2+1 || c.w < full.w/2-1 {
-		t.Fatalf("half quality rendered %d of %d px", c.w, full.w)
+	q.until(t, "half", func() bool { return shown() < full*3/4 })
+	if w := shown(); w > full/2+1 || w < full/2-1 {
+		t.Fatalf("half quality rendered %d of %d px", w, full)
 	}
 	withSettings(t, func(st *settings.Settings) { st.Playback.PreviewQuality = QualityQuarter })
-	q.wait(t)
-	if c := src.last(); c.w > full.w/4+1 {
-		t.Fatalf("quarter quality rendered %d of %d px", c.w, full.w)
+	q.until(t, "quarter", func() bool { return shown() < full*3/8 })
+	if w := shown(); w > full/4+1 {
+		t.Fatalf("quarter quality rendered %d of %d px", w, full)
 	}
 	// a viewer may override the setting
 	v.SetQuality(QualityFull)
-	q.wait(t)
-	if src.last().w != full.w {
-		t.Fatal("full override should render at full size")
-	}
+	q.until(t, "full", func() bool { return shown() == full })
 	v.SetQuality("")
 	withSettings(t, func(st *settings.Settings) {
 		st.Playback.PreviewQuality = QualityAuto
 		st.Playback.MaxPreviewH = 120
 	})
-	q.wait(t)
 	s.SetPlaying(true)
-	q.wait(t)
+	q.until(t, "capped", func() bool { return src.last().h <= 120 })
 	if h := src.last().h; h > 120 {
 		t.Fatalf("playing preview should stop at MaxPreviewH: %d", h)
 	}

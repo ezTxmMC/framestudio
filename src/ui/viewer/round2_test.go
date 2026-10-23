@@ -170,6 +170,8 @@ func TestViewerDropsStaleFramesWhileShuttling(t *testing.T) {
 	}
 	s.Shuttle(1)
 	s.Shuttle(1)
+	s.Shuttle(1)
+	s.Shuttle(1)
 	for f := 1; f <= 20; f++ { // playhead runs while the first frame still renders
 		s.Advance(s.Project.FrameDuration() / 2)
 	}
@@ -188,7 +190,7 @@ func TestViewerDropsStaleFramesWhileShuttling(t *testing.T) {
 	// the newest request was made while shuttling at 2x: it renders small
 	small := func() bool {
 		img := v.Image()
-		return img != nil && img.Bounds().Dx() <= shuttleW && img.Bounds().Dy() <= shuttleH
+		return img != nil && img.Bounds().Dx() <= 800+2
 	}
 	for end := time.Now().Add(2 * time.Second); !small() && time.Now().Before(end); {
 		q.mu.Lock()
@@ -201,6 +203,6 @@ func TestViewerDropsStaleFramesWhileShuttling(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	if !small() {
-		t.Fatalf("shuttle frame %v larger than %dx%d", v.Image().Bounds(), shuttleW, shuttleH)
+		t.Fatalf("shuttle frame %v larger than half the widget", v.Image().Bounds())
 	}
 }

@@ -48,9 +48,12 @@ func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f i
 	if err != nil || src == nil || src.Bounds().Empty() {
 		return drawOffline(l, c.Name), true
 	}
-	s := toNRGBA(src)
+	s, pooled := toNRGBAPooled(src, true)
 	d := fitRect(c.Fit, s.Rect.Dx(), s.Rect.Dy(), w, h)
 	drawScaled(l, s, d)
+	if pooled {
+		putLayer(s)
+	}
 	return d.Intersect(l.Rect), false
 }
 

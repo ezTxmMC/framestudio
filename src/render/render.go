@@ -7,7 +7,10 @@
 package render
 
 import (
+	"context"
 	"image"
+	"sync/atomic"
+	"time"
 
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
@@ -53,12 +56,91 @@ func (r *Renderer) FrameWith(p *model.Project, f, w, h int, o Options) *image.NR
 	if p == nil || w == 0 || h == 0 {
 		return img
 	}
+	r.compose(context.Background(), img, p, f, o)
+	return img
+}
+
+// Info describes what RenderInto did.
+type Info struct {
+	Opaque bool  // every pixel of the result has alpha 255
+	Layers int   // visual clips composited
+	CompNS int64 // total time in RenderInto
+}
+
+// RenderInto renders timeline frame f of p into dst (premultiplied RGBA, size from
+// dst.Rect) for the live preview. Scratch images come from a pool, so steady-state
+// rendering allocates almost nothing. It returns ctx.Err() when cancelled between
+// layers; dst then holds a partial picture and must not be shown.
+func (r *Renderer) RenderInto(ctx context.Context, dst *image.RGBA, p *model.Project, f int, o Options) (Info, error) {
+	t0 := time.Now()
+	w, h := dst.Rect.Dx(), dst.Rect.Dy()
+	var info Info
+	if p == nil || w == 0 || h == 0 {
+		return info, nil
+	}
+	out := getScratch(w, h)
+	defer putLayer(out)
+	info.Layers, _ = r.compose(ctx, out, p, f, o)
+	if err := ctx.Err(); err != nil {
+		return info, err
+	}
+	info.Opaque = nrgbaToRGBA(dst, out)
+	info.CompNS = int64(time.Since(t0))
+	return info, nil
+}
+
+// CopyNRGBA premultiplies src into dst and reports whether src is opaque. Both must
+// have the same size; otherwise the overlapping top-left part is drawn.
+func CopyNRGBA(dst *image.RGBA, src *image.NRGBA) bool {
+	if dst.Rect.Size() != src.Rect.Size() {
+		sub := image.Rect(0, 0, min(dst.Rect.Dx(), src.Rect.Dx()), min(dst.Rect.Dy(), src.Rect.Dy()))
+		return nrgbaToRGBA(dst.SubImage(sub).(*image.RGBA), src.SubImage(sub.Add(src.Rect.Min)).(*image.NRGBA))
+	}
+	return nrgbaToRGBA(dst, src)
+}
+
+// nrgbaToRGBA premultiplies src into dst (same size) and reports whether it is opaque.
+func nrgbaToRGBA(dst *image.RGBA, src *image.NRGBA) bool {
+	var transparent atomic.Bool
+	w := src.Rect.Dx() * 4
+	parallelRows(0, src.Rect.Dy(), func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			s := src.Pix[src.PixOffset(src.Rect.Min.X, src.Rect.Min.Y+y):][:w]
+			d := dst.Pix[dst.PixOffset(dst.Rect.Min.X, dst.Rect.Min.Y+y):][:w]
+			solid := true
+			for i := 0; i+3 < len(s); i += 4 {
+				a := uint32(s[i+3])
+				if a == 255 {
+					copy(d[i:i+4:i+4], s[i:i+4:i+4])
+					continue
+				}
+				solid = false
+				d[i] = uint8((uint32(s[i])*a + 127) / 255)
+				d[i+1] = uint8((uint32(s[i+1])*a + 127) / 255)
+				d[i+2] = uint8((uint32(s[i+2])*a + 127) / 255)
+				d[i+3] = uint8(a)
+			}
+			if !solid {
+				transparent.Store(true)
+			}
+		}
+	})
+	return !transparent.Load()
+}
+
+// compose draws the project frame into img (w x h, any content) and returns the number
+// of layers drawn.
+func (r *Renderer) compose(ctx context.Context, img *image.NRGBA, p *model.Project, f int, o Options) (layers int, err error) {
+	w, h := img.Rect.Dx(), img.Rect.Dy()
 	fillRect(img, img.Rect, p.Settings.Background.NRGBA())
 	src := o.Video
 	if isNil(src) {
 		src = r.Video
 	}
 	for i := range p.Tracks {
+		if err = ctx.Err(); err != nil {
+			return layers, err
+		}
 		t := &p.Tracks[i]
 		if t.Kind != model.TrackVideo || t.Hidden {
 			continue
@@ -72,6 +154,7 @@ func (r *Renderer) FrameWith(p *model.Project, f, w, h int, o Options) *image.NR
 		if alpha <= 0 {
 			continue
 		}
+		layers++
 		grade := !o.SkipGrade && !c.Grade.IsNeutral()
 		if c.Kind == model.KindColor && !grade {
 			blendSolid(img, img.Rect, c.Color.NRGBA(), alpha)
@@ -85,7 +168,7 @@ func (r *Renderer) FrameWith(p *model.Project, f, w, h int, o Options) *image.NR
 		overLayer(img, l, bounds, alpha)
 		putLayer(l)
 	}
-	return img
+	return layers, nil
 }
 
 // ApplyGrade colour-corrects img in place (exported for the colour page's scopes/preview).

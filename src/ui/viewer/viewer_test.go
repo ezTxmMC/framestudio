@@ -16,6 +16,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -52,6 +53,27 @@ func (q *queue) wait(t *testing.T) {
 	t.Fatal("no frame delivered")
 }
 
+// until runs queued callbacks until cond holds (the scheduler may deliver intermediate
+// frames, e.g. the layout render or a refine, before the one a test waits for).
+func (q *queue) until(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		q.mu.Lock()
+		fns := q.fns
+		q.fns = nil
+		q.mu.Unlock()
+		for _, f := range fns {
+			f()
+		}
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %s", what)
+}
+
 type call struct {
 	f, w, h int
 	skip    bool
@@ -73,6 +95,9 @@ func (s *fakeSource) frame(p *model.Project, f, w, h int, o render.Options) *ima
 func (s *fakeSource) last() call {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.calls) == 0 {
+		return call{w: 1 << 20, h: 1 << 20}
+	}
 	return s.calls[len(s.calls)-1]
 }
 
@@ -159,14 +184,17 @@ func TestViewerCapsWhilePlaying(t *testing.T) {
 		return nil
 	})
 	w.Resize(fyne.NewSize(2400, 1500))
-	q.wait(t)
-	if c := src.last(); c.w <= playW {
+	q.until(t, "full size frame", func() bool { return src.last().w > 1000 })
+	if c := src.last(); c.w <= 1000 {
 		t.Fatalf("paused frame should use the full widget size, got %dx%d", c.w, c.h)
 	}
+	set := settings.Get()
+	set.Playback.MaxPreviewH = 720
+	v.applySettings(set)
 	s.SetPlaying(true)
-	q.wait(t)
-	if c := src.last(); c.w > playW || c.h > playH {
-		t.Fatalf("playing frame not capped: %dx%d", c.w, c.h)
+	q.until(t, "capped frame", func() bool { return src.last().h <= 720 })
+	if c := src.last(); c.h > 720 {
+		t.Fatalf("playing frame not capped by MaxPreviewH: %dx%d", c.w, c.h)
 	}
 }
 
