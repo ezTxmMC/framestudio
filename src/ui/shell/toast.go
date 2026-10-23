@@ -27,18 +27,26 @@ const toastTime = 6 * time.Second
 // window above the page bar, on every page and in the manager. It is a plain layer of
 // the window content, not an overlay, so it never blocks clicks elsewhere.
 type toaster struct {
-	layer *fyne.Container
-	card  *toastCard
-	timer *time.Timer
-	gen   int
+	layer  *fyne.Container
+	corner *cornerLayout
+	card   *toastCard
+	timer  *time.Timer
+	gen    int
 }
 
 func newToaster() *toaster {
 	t := &toaster{card: newToastCard()}
 	t.card.Hide()
 	t.card.onTap = t.hide
-	t.layer = container.New(&cornerLayout{bottom: pageBarHeight + 14, right: 14}, t.card)
+	t.corner = &cornerLayout{bottom: pageBarHeight + 14, right: 14}
+	t.layer = container.New(t.corner, t.card)
 	return t
+}
+
+// setBottom keeps the toast above the bottom bar of the given height.
+func (t *toaster) setBottom(inset float32) {
+	t.corner.bottom = inset
+	t.layer.Refresh()
 }
 
 // show displays title and message; failed uses the warning accent. UI thread only.

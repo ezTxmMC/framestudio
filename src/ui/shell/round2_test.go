@@ -23,7 +23,7 @@ func typeShortcut(t *testing.T, sh *Shell, sc fyne.Shortcut) {
 	if fn == nil {
 		t.Fatalf("no window shortcut %s", sc.ShortcutName())
 	}
-	fn()
+	fn(sc)
 }
 
 func TestPageShortcuts(t *testing.T) {
@@ -34,10 +34,9 @@ func TestPageShortcuts(t *testing.T) {
 		key  fyne.KeyName
 		want string
 	}{
-		{fyne.KeyModifierShift, fyne.Key3, page.Color},
 		{fyne.KeyModifierAlt, fyne.Key5, page.Deliver},
 		{fyne.KeyModifierControl, fyne.Key1, page.Media},
-		{fyne.KeyModifierShift, fyne.Key2, page.Edit},
+		{fyne.KeyModifierAlt, fyne.Key2, page.Edit},
 	}
 	for _, c := range cases {
 		typeShortcut(t, sh, &desktop.CustomShortcut{KeyName: c.key, Modifier: c.mod})
@@ -45,6 +44,14 @@ func TestPageShortcuts(t *testing.T) {
 			t.Fatalf("%v+%s opened %s, want %s", c.mod, c.key, sh.active.current, c.want)
 		}
 	}
+	// Umschalt+3 is the registry's view.page.color (arrives as a typed key).
+	sh.modifiers = func() fyne.KeyModifier { return fyne.KeyModifierShift }
+	sh.typedKey(&fyne.KeyEvent{Name: fyne.Key3})
+	sh.modifiers = func() fyne.KeyModifier { return 0 }
+	if sh.active.current != page.Color {
+		t.Fatalf("Umschalt+3 opened %s", sh.active.current)
+	}
+	sh.showPageID(page.Edit)
 	// From the manager a page shortcut returns to that page of the active project.
 	sh.ShowManager()
 	typeShortcut(t, sh, &desktop.CustomShortcut{KeyName: fyne.Key3, Modifier: fyne.KeyModifierAlt})
@@ -116,29 +123,38 @@ func TestSelectAllAndEscape(t *testing.T) {
 }
 
 func TestHelpListsFinalKeyMap(t *testing.T) {
-	all := map[string]string{}
-	for _, col := range shortcutColumns {
-		for _, g := range col {
+	sh, w, _ := newTestShell(t)
+	help := func() map[string]string {
+		all := map[string]string{}
+		for _, g := range shortcutGroups(sh.reg) {
 			for _, k := range g.Keys {
 				all[k.Keys] += k.Action + ";"
 			}
 		}
+		return all
 	}
+	all := help()
 	want := map[string]string{
-		"J": "Rückwärts", "K": "Stopp", "L": "8×", "R": "Ripple", "N": "Roll",
-		"A": "Auswahlwerkzeug", "B": "Klinge", "Strg+A": "Alle Clips", "Esc": "Auswahl aufheben",
-		"Strg+Mausrad": "Zoom", "Strg+Klick": "Auswahl", "Umschalt+Klick": "Auswahl",
-		"Ziehen": "Timeline", "Umschalt+3": "Farbe",
+		"J": "Rückwärts", "K": "Stopp", "L": "Vorwärts", "R": "Ripple", "N": "Rollen",
+		"A": "Auswahlwerkzeug", "B": "Klinge", "Strg+A": "Alles auswählen", "Esc": "Auswahl aufheben",
+		"Strg+Mausrad": "zoomen", "Strg+Klick": "Auswahl", "Umschalt+Klick": "Auswahl",
+		"Ziehen": "Timeline", "Umschalt+3": "Farbe", "Strg+Umschalt+Z": "Wiederholen",
+		"Leertaste": "Abspielen", "Strg+Plus": "", "Plus": "Vergrößern", "Strg+Umschalt+,": "Projekteinstellungen",
 	}
+	delete(want, "Strg+Plus")
 	for k, w := range want {
 		if !strings.Contains(all[k], w) {
 			t.Errorf("help %q = %q, want it to mention %q", k, all[k], w)
 		}
 	}
+	// The help follows the keymap.
+	sh.reg.SetShortcut("marker.add", "Ctrl+Shift+Y")
+	if all := help(); !strings.Contains(all["Strg+Umschalt+Y"], "Marker setzen") || strings.Contains(all["M"], "Marker") {
+		t.Errorf("help ignores the keymap: %q / %q", all["Strg+Umschalt+Y"], all["M"])
+	}
 	if n := len(keyCaps("Strg+Umschalt+Z | Strg+Y")); n != 5+1+3 {
 		t.Errorf("caps and separators = %d", n)
 	}
-	sh, w, _ := newTestShell(t)
 	sh.showShortcuts()
 	if w.Canvas().Overlays().Top() == nil {
 		t.Fatal("help dialog not shown")

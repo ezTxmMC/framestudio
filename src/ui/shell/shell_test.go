@@ -48,12 +48,15 @@ func newTestShell(t *testing.T) (*Shell, fyne.Window, map[string][]*fakePage) {
 	t.Helper()
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	resetSettings(t)
 	a := test.NewTempApp(t)
 	a.Settings().SetTheme(studiotheme.New())
 	w := test.NewTempWindow(t, nil)
 	w.Resize(fyne.NewSize(1440, 860))
 	sh := New(a, w)
+	t.Cleanup(sh.dispose)
 	sh.closeWindow = func() {} // the test cleanup closes the window
+	sh.openPath = func(string) error { return nil }
 	// No playback clock goroutine: the test driver runs fyne.Do on the caller's goroutine.
 	sh.drivePlayback = func(s *session.Session) func() { return func() { s.SetPlaying(false) } }
 	made := map[string][]*fakePage{}
@@ -176,12 +179,12 @@ func TestDirtyTitleAndStatus(t *testing.T) {
 	if sh.bars.status.Text != "Ungespeichert" {
 		t.Errorf("status %q", sh.bars.status.Text)
 	}
-	if !strings.HasPrefix(sh.menu.undo.Label, "Rückgängig: Clip einfügen") || sh.menu.undo.Disabled {
-		t.Errorf("undo menu %q", sh.menu.undo.Label)
+	if c, _ := sh.reg.Get("edit.undo"); c.Label != "Rückgängig: Clip einfügen" || !c.Enabled {
+		t.Errorf("undo command %q enabled %v", c.Label, c.Enabled)
 	}
-	sh.undo()
-	if sh.Active().Project.Duration() != 0 || sh.menu.redo.Disabled {
-		t.Error("undo via shell failed")
+	sh.reg.Run("edit.undo")
+	if c, _ := sh.reg.Get("edit.redo"); sh.Active().Project.Duration() != 0 || !c.Enabled || c.Label != "Wiederholen: Clip einfügen" {
+		t.Errorf("undo via command failed: redo %q", c.Label)
 	}
 }
 
@@ -308,7 +311,7 @@ func TestKeyRoutingToActivePage(t *testing.T) {
 	if !sh.Active().Playing {
 		t.Error("space should start playback")
 	}
-	sh.togglePlay()
+	sh.reg.Run("play.toggle")
 
 	sh.modifiers = func() fyne.KeyModifier { return fyne.KeyModifierShift }
 	sh.typedKey(&fyne.KeyEvent{Name: fyne.Key4})
@@ -322,9 +325,9 @@ func TestKeyRoutingToActivePage(t *testing.T) {
 		t.Error("keys not routed to the new active page")
 	}
 	// Menu commands act on the active project.
-	sh.menu.loop.Action()
-	if !sh.Active().Loop || !sh.menu.loop.Checked {
-		t.Error("loop menu item failed")
+	sh.reg.Run("play.loop")
+	if c, _ := sh.reg.Get("play.loop"); !sh.Active().Loop || !c.Checked {
+		t.Error("loop command failed")
 	}
 }
 

@@ -2,70 +2,151 @@ package shell
 
 import (
 	"fmt"
+	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/settings"
+	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/menubar"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
 const (
-	topBarHeight  = 34
-	pageBarHeight = 52
+	menuBarHeight   = 28
+	topBarHeight    = 32
+	pageBarHeight   = 52
+	statusBarHeight = 24
 )
 
-// bars holds the top bar (tabs, status, undo) and the bottom page bar.
+// menuOpener is the part of the menu bar the key routing uses.
+type menuOpener interface{ Open(i int) }
+
+// bars holds the two top rows (menu bar with wordmark; project tabs with save status and
+// undo/redo) and the bottom bar (page buttons and the status line with format and
+// duration). Display.PageBar and Display.StatusBar switch the parts of the bottom bar.
 type bars struct {
 	sh          *Shell
-	top, bottom fyne.CanvasObject
+	top, bottom *fyne.Container
+	menu        *menubar.MenuBar
+	project     *canvas.Text // active project name at the right of the menu row
 	tabs        *fyne.Container
 	status      *canvas.Text
 	undo, redo  *widget.Button
 	pages       []*pageButton
 	format      *canvas.Text
 	length      *canvas.Text
+
+	pageRow, info, home fyne.CanvasObject
 }
 
 func newBars(sh *Shell) *bars {
 	b := &bars{sh: sh, tabs: container.NewHBox()}
 
-	brand := text("Frame Studio", studiotheme.Text, 13, true)
-	left := container.NewHBox(strut(6, 0), container.NewCenter(brand), strut(6, 0), vline(18))
-	plus := newIconTap(theme.ContentAddIcon(), 14, sh.ShowManager)
-	center := container.NewHBox(b.tabs, container.NewCenter(plus))
+	// Row 1: wordmark and menu bar.
+	b.menu = menubar.New(sh.win, sh.reg, command.MenuBar)
+	sh.menuBar = b.menu
+	b.project = text("", studiotheme.Faint, 11, false)
+	menuRow := bar(menuBarHeight, studiotheme.Gap, false, container.NewBorder(nil, nil,
+		container.NewHBox(strut(10, 0), container.NewCenter(wordmark()), strut(10, 0)),
+		container.NewHBox(container.NewCenter(b.project), strut(12, 0)),
+		b.menu))
 
+	// Row 2: project tabs, save status, undo/redo.
+	plus := newIconTap(theme.ContentAddIcon(), 14, sh.ShowManager)
+	center := container.NewHBox(strut(4, 0), b.tabs, container.NewCenter(plus))
 	b.status = text("", studiotheme.Muted, 11, false)
-	b.undo = kit.ToolButton(theme.ContentUndoIcon(), sh.undo)
-	b.redo = kit.ToolButton(theme.ContentRedoIcon(), sh.redo)
+	b.undo = kit.ToolButton(theme.ContentUndoIcon(), func() { sh.reg.Run("edit.undo") })
+	b.redo = kit.ToolButton(theme.ContentRedoIcon(), func() { sh.reg.Run("edit.redo") })
 	right := container.NewHBox(container.NewCenter(b.status), strut(10, 0), vline(18), strut(4, 0),
 		container.NewCenter(b.undo), container.NewCenter(b.redo), strut(2, 0))
+	tabRow := bar(topBarHeight, studiotheme.Lane, false, container.NewBorder(nil, nil, nil, right, center))
+	b.top = container.New(layout.NewCustomPaddedVBoxLayout(0), menuRow, tabRow)
 
-	b.top = bar(topBarHeight, false, container.NewBorder(nil, nil, left, right, center))
-
+	// Bottom: page buttons, status line, project manager.
 	row := container.NewHBox()
 	for _, d := range sh.pageDefs {
 		id := d.ID
-		pb := newPageButton(id, d.Label, d.Icon, func() { sh.showPageID(id) })
+		pb := newPageButton(id, d.Label, d.Icon, func() { sh.reg.Run("view.page." + id) })
 		b.pages = append(b.pages, pb)
 		row.Add(pb)
 	}
+	b.pageRow = container.NewCenter(row)
 	b.format = kit.MonoText("", studiotheme.Faint, 11)
 	b.length = kit.MonoText("", studiotheme.Faint, 11)
-	info := container.NewHBox(strut(10, 0), container.NewCenter(b.format), strut(14, 0), container.NewCenter(b.length))
-	home := kit.ToolButton(theme.HomeIcon(), sh.ShowManager)
-	ends := container.NewBorder(nil, nil, info, container.NewHBox(container.NewCenter(home), strut(4, 0)))
-	b.bottom = bar(pageBarHeight, true, container.NewStack(ends, container.NewCenter(row)))
+	b.info = container.NewHBox(strut(10, 0), container.NewCenter(b.format), strut(14, 0), container.NewCenter(b.length))
+	b.home = container.NewHBox(container.NewCenter(kit.ToolButton(theme.HomeIcon(), sh.ShowManager)), strut(4, 0))
+	b.bottom = container.NewStack()
+	b.applyDisplay(settings.Get().Display)
 	return b
 }
 
+// wordmark is the app name with a small Steel frame glyph.
+func wordmark() fyne.CanvasObject {
+	glyph := canvas.NewRectangle(color.Transparent)
+	glyph.StrokeColor = studiotheme.Steel
+	glyph.StrokeWidth = 2
+	glyph.CornerRadius = 2
+	dot := canvas.NewRectangle(studiotheme.Steel)
+	dot.CornerRadius = 1
+	mark := container.NewStack(container.NewGridWrap(fyne.NewSize(14, 11), glyph),
+		container.NewCenter(container.NewGridWrap(fyne.NewSize(4, 3), dot)))
+	name := text("Frame Studio", studiotheme.Text, 12, true)
+	return container.NewHBox(container.NewCenter(mark), strut(1, 0), container.NewCenter(name))
+}
+
+// applyDisplay shows the parts of the bottom bar the settings ask for: page buttons
+// (Display.PageBar) and the status line (Display.StatusBar); with neither it is hidden.
+func (b *bars) applyDisplay(d settings.Display) {
+	var content fyne.CanvasObject
+	switch {
+	case d.PageBar:
+		var info fyne.CanvasObject = strut(0, 0)
+		if d.StatusBar {
+			info = b.info
+		}
+		content = bar(pageBarHeight, studiotheme.Lane, true,
+			container.NewStack(container.NewBorder(nil, nil, info, b.home), b.pageRow))
+	case d.StatusBar:
+		content = bar(statusBarHeight, studiotheme.Lane, true, container.NewBorder(nil, nil, b.info, nil))
+	}
+	if content == nil {
+		b.bottom.Objects = nil
+		b.bottom.Hide()
+	} else {
+		b.bottom.Objects = []fyne.CanvasObject{content}
+		b.bottom.Show()
+	}
+	b.bottom.Refresh()
+	if f := b.sh.frame; f != nil {
+		f.Refresh() // the bottom bar changed height: lay the frame out again
+	}
+	if t := b.sh.toast; t != nil {
+		t.setBottom(bottomHeight(d) + 14)
+	}
+}
+
+// bottomHeight is the height of the bottom bar for d.
+func bottomHeight(d settings.Display) float32 {
+	switch {
+	case d.PageBar:
+		return pageBarHeight
+	case d.StatusBar:
+		return statusBarHeight
+	}
+	return 0
+}
+
 // bar is a thin graphite strip with a hairline towards the workspace.
-func bar(height float32, lineOnTop bool, content fyne.CanvasObject) fyne.CanvasObject {
-	bg := canvas.NewRectangle(studiotheme.Lane)
+func bar(height float32, fill color.Color, lineOnTop bool, content fyne.CanvasObject) fyne.CanvasObject {
+	bg := canvas.NewRectangle(fill)
 	line := canvas.NewRectangle(studiotheme.Border)
 	line.SetMinSize(fyne.NewSize(1, 1))
 	body := container.NewStack(strut(0, height), content)
@@ -86,6 +167,10 @@ func (b *bars) refresh() {
 
 	p := sh.active
 	b.status.Text = statusText(p, sh.now())
+	b.project.Text = ""
+	if p != nil && !sh.showManager {
+		b.project.Text = ellipsize(p.sess.Project.Name, 40)
+	}
 	if p == nil {
 		b.undo.Disable()
 		b.redo.Disable()

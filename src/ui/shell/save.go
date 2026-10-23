@@ -245,9 +245,13 @@ func (sh *Shell) quitSaved() {
 	})
 }
 
-// shutdown releases all projects and closes the window.
+// shutdown remembers the open projects for the next start, lets the workspace save its
+// layout and close the detached windows, releases all projects and closes the window.
 func (sh *Shell) shutdown() {
+	sh.saveLastOpen()
+	sh.ws.Shutdown()
 	sh.releaseAll()
+	sh.dispose()
 	sh.closeWindow()
 }
 
@@ -303,6 +307,7 @@ func (sh *Shell) closePages(p *project) []page.Waiter {
 
 // release stops p's playback clock and audio engine and drops the tab.
 func (sh *Shell) release(p *project) {
+	sh.unbindProject(p)
 	p.stopPlay()
 	p.unsub()
 	sh.projects = slices.DeleteFunc(sh.projects, func(q *project) bool { return q == p })
@@ -348,20 +353,31 @@ type autosaveJob struct {
 	err     error
 }
 
-// StartAutosave writes dirty projects that have a file every interval; the returned
-// func stops it.
+// StartAutosave writes dirty projects that have a file every interval (0 = off); the
+// returned func stops it. A changed General.AutosaveSeconds setting applies at once.
 func (sh *Shell) StartAutosave(interval time.Duration) (stop func()) {
 	quit := make(chan struct{})
 	done := make(chan struct{})
+	set := sh.autosaveSet
 	go func() {
 		defer close(done)
-		t := time.NewTicker(interval)
+		t := time.NewTicker(time.Hour)
 		defer t.Stop()
+		tick := func(d time.Duration) <-chan time.Time {
+			if d <= 0 {
+				return nil // off: never fires
+			}
+			t.Reset(d)
+			return t.C
+		}
+		c := tick(interval)
 		for {
 			select {
 			case <-quit:
 				return
-			case <-t.C:
+			case d := <-set:
+				c = tick(d)
+			case <-c:
 				var jobs []*autosaveJob
 				kit.DoAndWait(func() { jobs = sh.autosaveJobs() })
 				if len(jobs) == 0 {
