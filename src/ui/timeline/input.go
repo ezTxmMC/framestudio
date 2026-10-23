@@ -79,6 +79,35 @@ type dragState struct {
 
 func (d *dragState) active() bool { return d.mode >= dragMove }
 
+// stillValid reports whether a clip drag can go on after the project changed in the
+// background (an import finishing, an edit on another page): every clip it works on must
+// still be there, unchanged and on the same track. A ripple or roll preview is rebuilt on
+// the next pointer move.
+func (d *dragState) stillValid(p *model.Project) bool {
+	same := func(c model.Clip, track int) bool {
+		got, ti, _ := p.Clip(c.ID)
+		return got != nil && ti == track && got.Start == c.Start && got.Length == c.Length && got.SourceIn == c.SourceIn
+	}
+	switch d.mode {
+	case dragMove:
+		for _, it := range d.group {
+			if !same(it.clip, it.track) {
+				return false
+			}
+		}
+		return d.from < len(p.Tracks)
+	case dragRoll:
+		if !same(d.right, d.from) {
+			return false
+		}
+	}
+	if !same(d.clip, d.from) {
+		return false
+	}
+	d.preview = nil
+	return true
+}
+
 // grabbed is the clip start (trim right: end) that keeps the grab point under x.
 func (d *dragState) grabbed(g geom, x float32) int {
 	return int(math.Round(g.xFrame(x) - d.grab))
@@ -524,7 +553,7 @@ func (t *Timeline) updateDrag(pos fyne.Position) {
 		return
 	case dragMarquee:
 		ids := append(append([]string{}, d.base...), g.clipsInRect(p, d.press, pos)...)
-		t.s.SelectClips(ids)
+		t.s.SelectGroup(ids) // keeps a picture clip primary when the band reaches audio
 	case dragVScroll:
 		_, sh, _ := g.scrollThumb()
 		span := max(g.bodyH()-sh, 1)

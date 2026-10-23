@@ -201,7 +201,7 @@ func readout() *canvas.Text {
 	return t
 }
 
-func sliderField(label string, s *widget.Slider, value *canvas.Text) fyne.CanvasObject {
+func sliderField(label string, s *kit.Slider, value *canvas.Text) fyne.CanvasObject {
 	v := container.NewStack(fixed(58, 0), vcenter(value))
 	return field(label, container.NewBorder(nil, nil, nil, v, s))
 }

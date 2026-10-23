@@ -104,6 +104,32 @@ func Drive(s *session.Session, onError func(error)) (stop func()) {
 	}
 }
 
+// MediaEvents is the part of media.Cache that tells when files go offline, come back
+// or are replaced.
+type MediaEvents interface {
+	OnOfflineChange(fn func()) (cancel func())
+	OnInvalidate(fn func(mediaID string)) (cancel func())
+}
+
+// Replan prepares s's audio again from its current project, e.g. after a file came back
+// online (its clips were silent) or went away (they must fall silent as in export).
+// UI thread only; a no-op for sessions that are not driven.
+func Replan(s *session.Session) {
+	if d := lookup(s); d != nil && !d.stopped {
+		d.v.SetProject(s.Project.Clone())
+	}
+}
+
+// WatchMedia re-plans s whenever media goes offline, comes back or is replaced, so
+// playback follows the files without waiting for the next edit. The events may arrive on
+// any goroutine; they hop to the UI thread. Call cancel when s is no longer driven.
+func WatchMedia(s *session.Session, m MediaEvents) (cancel func()) {
+	replan := func() { kit.Do(func() { Replan(s) }) }
+	a := m.OnOfflineChange(replan)
+	b := m.OnInvalidate(func(string) { replan() })
+	return func() { a(); b() }
+}
+
 // Active reports whether s is driven, i.e. its playback is sounded by the live engine.
 // UI thread or any goroutine.
 func Active(s *session.Session) bool { return lookup(s) != nil }

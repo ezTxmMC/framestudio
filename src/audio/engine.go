@@ -60,9 +60,10 @@ type Engine struct {
 	closed   bool
 	started  bool
 
-	prep chan *Voice
-	quit chan struct{}
-	wg   sync.WaitGroup
+	prep    chan *Voice
+	removed chan *Voice // voices to release (keys, decodes), handled by the prep loop
+	quit    chan struct{}
+	wg      sync.WaitGroup
 
 	// mixer scratch, loop goroutine only
 	mix  []float32
@@ -73,7 +74,7 @@ type Engine struct {
 // New creates an idle engine.
 func New(cfg Config) *Engine {
 	e := &Engine{clock: cfg.Clock, open: cfg.Open, cache: cfg.Cache, fixedLat: cfg.Latency, onWrite: cfg.OnWrite,
-		prep: make(chan *Voice, 64), quit: make(chan struct{}), keys: map[*Voice]map[string]string{},
+		prep: make(chan *Voice, 64), removed: make(chan *Voice, 16), quit: make(chan struct{}), keys: map[*Voice]map[string]string{},
 		mix: make([]float32, 2*BlockFrames), pcm: make([]byte, BlockFrames*bytesPerFrame)}
 	if e.clock == nil {
 		e.clock = realClock{}
@@ -268,19 +269,30 @@ func (e *Engine) AddVoice(onError func(error)) *Voice {
 	return v
 }
 
-// RemoveVoice takes v out of the mix.
+// RemoveVoice takes v out of the mix and releases its audio: decodes no other voice
+// needs are stopped and their PCM is freed.
 func (e *Engine) RemoveVoice(v *Voice) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	found := false
 	for i, w := range e.voices {
 		if w == v {
 			e.voices = append(e.voices[:i], e.voices[i+1:]...)
+			found = true
 			break
 		}
 	}
+	closed := e.closed
+	e.mu.Unlock()
 	v.pmu.Lock()
 	v.removed = true
 	v.pmu.Unlock()
+	if !found || closed {
+		return
+	}
+	select {
+	case e.removed <- v:
+	case <-e.quit:
+	}
 }
 
 // Voices is the number of voices.
@@ -297,13 +309,15 @@ func (e *Engine) prepLoop() {
 		select {
 		case <-e.quit:
 			return
+		case v := <-e.removed:
+			e.release(v)
 		case v := <-e.prep:
 			v.pmu.Lock()
 			p, removed := v.pending, v.removed
 			v.pending, v.queued = nil, false
 			v.pmu.Unlock()
 			if removed {
-				delete(e.keys, v)
+				e.release(v)
 				continue
 			}
 			if p == nil {
@@ -327,25 +341,51 @@ func (e *Engine) lookup(m model.MediaItem) (Source, error) {
 	return pcm, nil
 }
 
-// relinked drops cached audio that v no longer uses under the same media ID (relink,
-// replaced file) unless another voice still plays it.
+// relinked records the keys v's new plan uses (pinning them in the cache) and drops
+// cached audio that a media ID no longer maps to (relink, replaced file) unless another
+// voice still plays it. Media that merely left the timeline (clip deleted, cut) keeps its
+// PCM, unpinned, so Undo or Paste plays at once; the cache's LRU frees it when needed.
 func (e *Engine) relinked(v *Voice, keys map[string]string) {
 	old := e.keys[v]
 	e.keys[v] = keys
+	e.cache.pin(keys)
+	e.cache.unpin(old)
 	for id, k := range old {
-		if keys[id] == k {
+		if now := keys[id]; now == "" || now == k {
 			continue
 		}
-		used := false
-		for _, other := range e.keys {
-			for _, ok := range other {
-				used = used || ok == k
-			}
-		}
-		if !used {
+		if !e.keyUsed(k) {
 			e.cache.Drop(k)
 		}
 	}
+}
+
+// release forgets a removed voice: its keys are unpinned and every key no other voice
+// uses is dropped, which stops its decode and frees its PCM. Prep goroutine only.
+func (e *Engine) release(v *Voice) {
+	old, ok := e.keys[v]
+	if !ok {
+		return
+	}
+	delete(e.keys, v)
+	e.cache.unpin(old)
+	for _, k := range old {
+		if !e.keyUsed(k) {
+			e.cache.Drop(k)
+		}
+	}
+}
+
+// keyUsed reports whether any voice's current plan uses key k. Prep goroutine only.
+func (e *Engine) keyUsed(k string) bool {
+	for _, other := range e.keys {
+		for _, ok := range other {
+			if ok == k {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Transport is a session's play state, published by the UI thread.

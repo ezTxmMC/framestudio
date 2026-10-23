@@ -3,6 +3,7 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -212,7 +213,8 @@ func TestSoftClip(t *testing.T) {
 }
 
 // TestMatchesFFmpegExport mixes the same project with export's ffmpeg filter graph and
-// with the engine and compares the samples.
+// with the engine and compares the samples, at frame rates whose frames are not a whole
+// number of milliseconds (24, 30 fps) too: cuts must line up to the sample.
 func TestMatchesFFmpegExport(t *testing.T) {
 	ff, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -224,37 +226,6 @@ func TestMatchesFFmpegExport(t *testing.T) {
 		"-af", "volume=0.5", "-ac", "2", wav).CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
-	p := model.NewProject("t")
-	m := model.MediaItem{ID: "m", Name: "tone", Path: wav, Kind: model.KindAudio, Duration: 4 * time.Second}
-	p.AddMedia(m)
-	a2 := p.AddTrack(model.TrackAudio)
-	c := p.ClipFromMedia(m, 5, 0)
-	c.Length, c.SourceIn, c.FadeIn, c.FadeOut, c.Volume = 60, 10, 20, 30, 0.7
-	_ = p.PlaceClip(p.Tracks[2].ID, c)
-	right, _ := p.SplitClip(c.ID, 15) // inside the fade-in
-	_, _ = p.SplitClip(right, 50)     // inside the fade-out
-	c2 := p.ClipFromMedia(m, 20, 0)
-	c2.Length, c2.Volume = 40, 0.6
-	_ = p.PlaceClip(a2.ID, c2)
-	a2.Volume = 0.9
-
-	from, to := 3, 80
-	mix, ok := export.BuildAudioMix(p, from, to, 0, nil)
-	if !ok {
-		t.Fatal("no mix")
-	}
-	args := []string{"-nostdin", "-loglevel", "error"}
-	for _, in := range mix.Inputs {
-		args = append(args, "-i", in)
-	}
-	args = append(args, "-filter_complex", mix.Filter, "-map", "[aout]", "-f", "f32le", "-ar", "48000", "-ac", "2", "-")
-	raw, err := exec.Command(ff, args...).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := make([]float32, len(raw)/4)
-	_ = binary.Read(bytes.NewReader(raw), binary.LittleEndian, want)
-
 	cache := NewCache(nil, nil, 0)
 	defer cache.Close()
 	pcm, err := cache.Get(wav)
@@ -265,30 +236,70 @@ func TestMatchesFFmpegExport(t *testing.T) {
 	if pcm.Err() != nil {
 		t.Fatal(pcm.Err())
 	}
-	pl := BuildPlan(p, func(model.MediaItem) (Source, error) { return pcm, nil })
-	n := len(want) / 2
-	got, _ := render(pl, FramesToSamples(from, 25), 1, n)
-	gotR := make([]float32, 0, n)
-	_, rr := render(pl, FramesToSamples(from, 25), 1, n)
-	gotR = append(gotR, rr...)
-	if n != int(FramesToSamples(to-from, 25)) {
-		t.Fatalf("ffmpeg rendered %d frames", n)
-	}
-	worst, at := 0.0, 0
-	for i := range n {
-		for _, d := range []float64{float64(got[i] - want[2*i]), float64(gotR[i] - want[2*i+1])} {
-			if math.Abs(d) > worst {
-				worst, at = math.Abs(d), i
+	for _, fps := range []int{25, 24, 30} {
+		t.Run(fmt.Sprint(fps), func(t *testing.T) {
+			p := model.NewProject("t")
+			p.Settings.FPS = fps
+			m := model.MediaItem{ID: "m", Name: "tone", Path: wav, Kind: model.KindAudio, Duration: 4 * time.Second}
+			p.AddMedia(m)
+			a2 := p.AddTrack(model.TrackAudio)
+			c := p.ClipFromMedia(m, 5, 0)
+			c.Length, c.SourceIn, c.FadeIn, c.FadeOut, c.Volume = 60, 10, 20, 30, 0.7
+			_ = p.PlaceClip(p.Tracks[2].ID, c)
+			right, _ := p.SplitClip(c.ID, 15) // inside the fade-in
+			_, _ = p.SplitClip(right, 50)     // inside the fade-out
+			c2 := p.ClipFromMedia(m, 20, 0)
+			c2.Length, c2.Volume = 40, 0.6
+			_ = p.PlaceClip(a2.ID, c2)
+			a2.Volume = 0.9
+			// a plain cut without fades: the two halves must join without a gap
+			a3 := p.AddTrack(model.TrackAudio)
+			c3 := p.ClipFromMedia(m, 0, 0)
+			c3.Length = 80
+			_ = p.PlaceClip(a3.ID, c3)
+			_, _ = p.SplitClip(c3.ID, 37)
+
+			from, to := 3, 80
+			mix, ok := export.BuildAudioMix(p, from, to, 0, nil)
+			if !ok {
+				t.Fatal("no mix")
 			}
-		}
-	}
-	t.Logf("max deviation from export %.6f at sample %d", worst, at)
-	if worst > 2e-3 {
-		if os.Getenv("FS_DUMP") != "" {
-			for i := max(0, at-5); i < min(n, at+5); i++ {
-				t.Logf("%d: got %.5f want %.5f", i, got[i], want[2*i])
+			args := []string{"-nostdin", "-loglevel", "error"}
+			for _, in := range mix.Inputs {
+				args = append(args, "-i", in)
 			}
-		}
-		t.Fatalf("engine mix deviates from export by %.4f", worst)
+			args = append(args, "-filter_complex", mix.Filter, "-map", "[aout]", "-f", "f32le", "-ar", "48000", "-ac", "2", "-")
+			raw, err := exec.Command(ff, args...).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := make([]float32, len(raw)/4)
+			_ = binary.Read(bytes.NewReader(raw), binary.LittleEndian, want)
+
+			pl := BuildPlan(p, func(model.MediaItem) (Source, error) { return pcm, nil })
+			n := len(want) / 2
+			start := FramesToSamples(from, fps)
+			got, gotR := render(pl, start, 1, n)
+			if want := FramesToSamples(to, fps) - start; int64(n) != want {
+				t.Fatalf("ffmpeg rendered %d frames, want %d", n, want)
+			}
+			worst, at := 0.0, 0
+			for i := range n {
+				for _, d := range []float64{float64(got[i] - want[2*i]), float64(gotR[i] - want[2*i+1])} {
+					if math.Abs(d) > worst {
+						worst, at = math.Abs(d), i
+					}
+				}
+			}
+			t.Logf("max deviation from export %.6f at sample %d", worst, at)
+			if worst > 2e-3 {
+				if os.Getenv("FS_DUMP") != "" {
+					for i := max(0, at-5); i < min(n, at+5); i++ {
+						t.Logf("%d: got %.5f want %.5f", i, got[i], want[2*i])
+					}
+				}
+				t.Fatalf("engine mix deviates from export by %.4f", worst)
+			}
+		})
 	}
 }

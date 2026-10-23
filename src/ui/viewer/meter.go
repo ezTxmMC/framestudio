@@ -72,6 +72,7 @@ type Meter struct {
 
 	unsub  func()
 	closed bool
+	hidden bool // the page showing the meter is not visible: no polling
 
 	mu      sync.Mutex
 	stop    chan struct{} // non-nil while the poll goroutine runs
@@ -112,11 +113,22 @@ func (m *Meter) Close() {
 	m.halt()
 }
 
+// SetActive tells the meter whether its page is visible. A hidden meter does not poll,
+// even while the session plays (playback started on another page); it resumes when
+// shown again. UI thread only.
+func (m *Meter) SetActive(on bool) {
+	if m.hidden == !on {
+		return
+	}
+	m.hidden = !on
+	m.follow()
+}
+
 func (m *Meter) follow() {
 	if m.closed {
 		return
 	}
-	if m.s.Playing {
+	if m.s.Playing && !m.hidden {
 		m.start()
 		return
 	}

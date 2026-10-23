@@ -4,6 +4,7 @@
 package edit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -13,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/ui/kit"
@@ -49,10 +51,17 @@ type Page struct {
 	attached fyne.Window // window the timeline was attached to for media drops
 	unsub    func()
 	closed   bool
+
+	// files dropped from the file manager (see filedrop.go)
+	spawn    func(func()) // runs background work; tests replace it
+	probe    probeFunc
+	life     context.Context // ends on Close: stops probing dropped files
+	stopLife context.CancelFunc
 }
 
 func New(ctx *page.Context) page.Page {
-	return &Page{ctx: ctx, post: kit.Do, snapping: true, zoom: 1}
+	return &Page{ctx: ctx, post: kit.Do, snapping: true, zoom: 1,
+		spawn: func(f func()) { go f() }, probe: media.ProbeContext}
 }
 
 // windowAttacher is implemented by timelines that accept media drags from the library
@@ -135,6 +144,9 @@ func (p *Page) Activate() {
 	if p.viewer != nil {
 		p.viewer.SetActive(true)
 	}
+	if p.transport != nil && p.transport.Meter() != nil {
+		p.transport.Meter().SetActive(true)
+	}
 	if p.lib != nil {
 		p.lib.retryThumbs()
 		p.lib.checkOffline()
@@ -146,9 +158,15 @@ func (p *Page) Deactivate() {
 	if p.viewer != nil {
 		p.viewer.SetActive(false)
 	}
+	if p.transport != nil && p.transport.Meter() != nil {
+		p.transport.Meter().SetActive(false) // no 30 Hz polling for a hidden meter
+	}
 }
 
 func (p *Page) Close() {
+	if p.stopLife != nil {
+		p.stopLife()
+	}
 	if p.closed || p.root == nil {
 		p.closed = true
 		return
@@ -290,14 +308,19 @@ func (p *Page) zoomBy(f float32) { p.setZoom(p.zoom * f) }
 
 // split cuts the clip under the playhead on the selected clip's track. Without a
 // selection, or if that track has nothing to cut at the playhead, it cuts every
-// unlocked track at the playhead.
+// unlocked track at the playhead. A selected clip on a locked track is reported instead
+// of cutting the other tracks.
 func (p *Page) split() {
 	s := p.ctx.Session
 	f := s.Playhead
 	if c, ok := s.Clip(); ok {
 		_, ti, _ := s.Project.Clip(c.ID)
 		t := &s.Project.Tracks[ti]
-		if ci := t.ClipAt(f); ci >= 0 && t.Clips[ci].Start != f && !t.Locked {
+		if t.Locked {
+			p.showErr(explain(model.ErrLocked))
+			return
+		}
+		if ci := t.ClipAt(f); ci >= 0 && t.Clips[ci].Start != f {
 			id := t.Clips[ci].ID
 			p.edit("Clip teilen", func(pr *model.Project) error {
 				_, err := pr.SplitClip(id, f)

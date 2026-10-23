@@ -341,3 +341,51 @@ func TestOfflineWatcher(t *testing.T) {
 	h.p.Close()
 	q.Settle(50*time.Millisecond, time.Second)
 }
+
+// The type filter drops chosen files it hides, so the count, the button and the import
+// match the list; "Auswahl aufheben" clears everything.
+func TestFileBrowserFilterDropsHiddenChoice(t *testing.T) {
+	h := newHarness(t)
+	dir := t.TempDir()
+	writePNG(t, dir, "Bild.png", 8, 8, color.NRGBA{A: 255})
+	if err := os.WriteFile(filepath.Join(dir, "Ton.wav"), []byte("RIFF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.p.pickFiles = func(pickRequest) ([]string, error) { return nil, os.ErrNotExist }
+	h.p.files.open(dir)
+	h.p.importBtn.OnTapped()
+	h.drain()
+	d := h.p.fileDlg
+	for _, e := range d.entries {
+		d.tap(e, 100)
+	}
+	if len(d.order) != 2 {
+		t.Fatalf("chosen %v", d.order)
+	}
+	d.kindSel.SetSelected("Bild")
+	if len(d.entries) != 1 || len(d.order) != 1 || d.okBtn.Text != "Importieren (1)" || d.count.Text != "1 Datei ausgewählt" {
+		t.Fatalf("entries %d, chosen %v, button %q, count %q", len(d.entries), d.order, d.okBtn.Text, d.count.Text)
+	}
+	// a choice in another folder is cleared by "Auswahl aufheben" too
+	d.chosen["/anderswo/x.png"], d.order = true, append(d.order, "/anderswo/x.png")
+	d.toggleAll() // the visible row is chosen: this clears
+	if len(d.order) != 0 || len(d.chosen) != 0 {
+		t.Fatalf("Auswahl aufheben left %v", d.order)
+	}
+}
+
+func TestPoolSelectAllAndEscape(t *testing.T) {
+	h := newHarness(t)
+	dir := t.TempDir()
+	a := writePNG(t, dir, "A.png", 8, 8, color.NRGBA{A: 255})
+	b := writePNG(t, dir, "B.png", 8, 8, color.NRGBA{A: 255})
+	h.p.pickFiles = func(pickRequest) ([]string, error) { return []string{a, b}, nil }
+	h.p.importBtn.OnTapped()
+	h.drain()
+	if !h.p.SelectAll() || len(h.p.selectedItems()) != 2 {
+		t.Fatalf("Ctrl+A on the pool selected %d items", len(h.p.selectedItems()))
+	}
+	if !h.p.TypedKey(&fyne.KeyEvent{Name: fyne.KeyEscape}) || len(h.p.selectedItems()) != 0 || h.s.SelectedMedia != "" {
+		t.Fatal("Esc must clear the pool selection")
+	}
+}

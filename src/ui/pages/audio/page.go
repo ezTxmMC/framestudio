@@ -73,7 +73,7 @@ type Page struct {
 	tracks  *trackView
 	mixer   *mixer
 	clip    *clipPanel
-	zoom    *widget.Slider
+	zoom    *kit.Slider
 	play    *widget.Button
 	stop    *widget.Button
 	status  *canvas.Text
@@ -139,7 +139,7 @@ func (p *Page) Content() fyne.CanvasObject {
 	p.stop = widget.NewButtonWithIcon("Stopp", theme.MediaStopIcon(), p.prev.Stop)
 	p.stop.Importance = widget.LowImportance
 
-	p.zoom = widget.NewSlider(0, 1)
+	p.zoom = kit.NewSlider(0, 1)
 	p.zoom.Step = 0.001
 	p.zoom.OnChanged = func(v float64) { p.setZoom(sliderToZoom(v, maxZoom(p.span(), p.s.FPS())), -1) }
 	zoomOut := kit.ToolButton(theme.ZoomOutIcon(), func() { p.setZoom(p.view.zoom/1.5, -1) })

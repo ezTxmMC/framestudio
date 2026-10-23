@@ -259,26 +259,10 @@ func (p *Project) SplitAll(f int) {
 	}
 }
 
-// DeleteClip removes a clip. With ripple, later clips on the same track close the gap.
+// DeleteClip removes a clip. With ripple, later clips on every unlocked track close the
+// gap (see DeleteClips).
 func (p *Project) DeleteClip(clipID string, ripple bool) error {
-	c, ti, ci := p.Clip(clipID)
-	if c == nil {
-		return ErrNotFound
-	}
-	t := &p.Tracks[ti]
-	if t.Locked {
-		return ErrLocked
-	}
-	removed := *c
-	t.Clips = append(t.Clips[:ci], t.Clips[ci+1:]...)
-	if ripple {
-		for i := range t.Clips {
-			if t.Clips[i].Start >= removed.End() {
-				t.Clips[i].Start -= removed.Length
-			}
-		}
-	}
-	return nil
+	return p.DeleteClips([]string{clipID}, ripple)
 }
 
 // UpdateClip replaces a clip's editable properties. Start, Length and Kind are kept;
@@ -456,13 +440,14 @@ func (p *Project) MoveClips(ids []string, dFrames, dTrack int) error {
 	return nil
 }
 
-// DeleteClips removes several clips; with ripple each track closes its gaps.
+// DeleteClips removes several clips. With ripple the gaps they leave are closed on every
+// unlocked track at once, so picture, sound and the other tracks stay in sync (like a
+// ripple delete in Premiere or Resolve). If another track has a clip in a gap that the
+// later clips would run into, a *RippleBlockedError is returned and nothing changes.
 func (p *Project) DeleteClips(ids []string, ripple bool) error {
-	type ref struct {
-		id    string
-		start int
-	}
-	var refs []ref
+	type span struct{ from, to int }
+	var spans []span
+	del := map[string]bool{}
 	for _, id := range ids {
 		c, ti, _ := p.Clip(id)
 		if c == nil {
@@ -471,13 +456,87 @@ func (p *Project) DeleteClips(ids []string, ripple bool) error {
 		if p.Tracks[ti].Locked {
 			return ErrLocked
 		}
-		refs = append(refs, ref{id, c.Start})
+		del[id] = true
+		spans = append(spans, span{c.Start, c.End()})
 	}
-	// right to left so ripple shifts never move a clip that is still to be deleted
-	sort.Slice(refs, func(i, j int) bool { return refs[i].start > refs[j].start })
-	for _, r := range refs {
-		if err := p.DeleteClip(r.id, ripple); err != nil {
+	for i := range p.Tracks {
+		t := &p.Tracks[i]
+		kept := t.Clips[:0]
+		for _, c := range t.Clips {
+			if !del[c.ID] {
+				kept = append(kept, c)
+			}
+		}
+		t.Clips = kept
+	}
+	if !ripple {
+		return nil
+	}
+	// merge the deleted ranges and close them right to left, so a shift never moves
+	// the range still to be closed
+	sort.Slice(spans, func(i, j int) bool { return spans[i].from < spans[j].from })
+	var merged []span
+	for _, s := range spans {
+		if n := len(merged); n > 0 && s.from <= merged[n-1].to {
+			merged[n-1].to = max(merged[n-1].to, s.to)
+			continue
+		}
+		merged = append(merged, s)
+	}
+	for i := len(merged) - 1; i >= 0; i-- {
+		if err := p.ShiftAfter(merged[i].to, merged[i].from-merged[i].to); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// RippleBlockedError reports that a ripple edit would push clips on track Track into a
+// clip that stays where it is.
+type RippleBlockedError struct {
+	Track string
+}
+
+func (e *RippleBlockedError) Error() string {
+	return "Auf Spur " + e.Track + " liegt ein Clip im Weg. Den Clip mit auswählen, verschieben oder die Spur sperren"
+}
+
+// ShiftAfter moves every clip that starts at or after frame at by shift frames, on every
+// unlocked track, except the clips listed in except. Locked tracks keep their clips. If
+// the shift makes clips overlap (a clip spanning the edit point is in the way) or start
+// before 0, a *RippleBlockedError is returned; the project is then partly changed, so call
+// it inside an edit that is rolled back on error (Session.Edit does).
+func (p *Project) ShiftAfter(at, shift int, except ...string) error {
+	if shift == 0 {
+		return nil
+	}
+	skip := map[string]bool{}
+	for _, id := range except {
+		skip[id] = true
+	}
+	for i := range p.Tracks {
+		t := &p.Tracks[i]
+		if t.Locked {
+			continue
+		}
+		moved := false
+		for j := range t.Clips {
+			c := &t.Clips[j]
+			if c.Start >= at && !skip[c.ID] {
+				c.Start += shift
+				moved = true
+			}
+		}
+		if !moved {
+			continue
+		}
+		t.sortClips()
+		prevEnd := 0
+		for _, c := range t.Clips {
+			if c.Start < prevEnd || c.Start < 0 {
+				return &RippleBlockedError{Track: t.Name}
+			}
+			prevEnd = c.End()
 		}
 	}
 	return nil

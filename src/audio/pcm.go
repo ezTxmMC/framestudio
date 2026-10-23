@@ -126,6 +126,10 @@ type Cache struct {
 	used  int64
 	ll    *list.List // of *PCM, front = most recent
 	items map[string]*list.Element
+	// pins counts the live plans that use a key. Pinned PCM is never evicted: a plan
+	// still plays it, and evicting it would only make the next plan decode the file again
+	// (and play silence meanwhile). Pinned bytes count in Used and may exceed the budget.
+	pins map[string]int
 
 	sem    chan struct{}
 	ctx    context.Context
@@ -148,7 +152,7 @@ func NewCache(decode Decoder, stat Stat, budget int64) *Cache {
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	return &Cache{decode: decode, stat: stat, budget: budget, ll: list.New(), items: map[string]*list.Element{},
-		sem: make(chan struct{}, decoders), ctx: ctx, stop: stop}
+		pins: map[string]int{}, sem: make(chan struct{}, decoders), ctx: ctx, stop: stop}
 }
 
 // Get returns the PCM of the file at path, starting a background decode on first use.
@@ -184,6 +188,34 @@ func (c *Cache) Drop(key string) {
 	if e, ok := c.items[key]; ok {
 		c.remove(e)
 	}
+}
+
+// pin marks keys as used by a live plan; unpin releases them again. Both count, so
+// several voices may pin the same key.
+func (c *Cache) pin(keys map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, k := range keys {
+		c.pins[k]++
+	}
+}
+
+func (c *Cache) unpin(keys map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, k := range keys {
+		if c.pins[k]--; c.pins[k] <= 0 {
+			delete(c.pins, k)
+		}
+	}
+	c.evictLocked(nil)
+}
+
+// Pinned reports whether a live plan uses key.
+func (c *Cache) Pinned(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pins[key] > 0
 }
 
 // Used is the number of bytes held.
@@ -244,17 +276,20 @@ func (c *Cache) grow(p *PCM) []*chunk {
 	next := append(append(make([]*chunk, 0, len(cs)+1), cs...), new(chunk))
 	p.chunks.Store(&next)
 	c.used += n
-	for c.used > c.budget {
-		back := c.ll.Back()
-		if back == e {
-			back = back.Prev()
-		}
-		if back == nil {
-			break
-		}
-		c.remove(back)
-	}
+	c.evictLocked(e)
 	return next
+}
+
+// evictLocked removes least recently used PCM until the cache fits its budget, skipping
+// keep and pinned entries. c.mu must be held.
+func (c *Cache) evictLocked(keep *list.Element) {
+	for back := c.ll.Back(); back != nil && c.used > c.budget; {
+		prev := back.Prev()
+		if back != keep && c.pins[back.Value.(*PCM).key] == 0 {
+			c.remove(back)
+		}
+		back = prev
+	}
 }
 
 // run decodes p, publishing frames as they arrive.
@@ -324,7 +359,12 @@ func FFmpegDecoder(ctx context.Context, path string) (io.ReadCloser, error) {
 		return nil, ErrNoFFmpeg
 	}
 	cmd := exec.CommandContext(ctx, ff, "-nostdin", "-hide_banner", "-loglevel", "error",
-		"-i", path, "-map", "0:a:0", "-vn", "-ac", strconv.Itoa(Channels), "-ar", strconv.Itoa(SampleRate),
+		"-i", path, "-map", "0:a:0", "-vn",
+		// Sample 0 is time 0 of the file, as for export's atrim and the picture: a stream
+		// that starts late (camera, OBS recordings) is padded with silence, and gaps in
+		// its timestamps are filled, so the samples line up with the timestamps.
+		"-af", "aresample=async=1:first_pts=0",
+		"-ac", strconv.Itoa(Channels), "-ar", strconv.Itoa(SampleRate),
 		"-f", "s16le", "-")
 	out, err := cmd.StdoutPipe()
 	if err != nil {

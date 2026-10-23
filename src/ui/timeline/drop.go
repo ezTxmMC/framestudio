@@ -72,26 +72,59 @@ func (t *Timeline) planDrop(ids []string, pos fyne.Position) *dropPlan {
 	at := plan.at
 	for _, m := range items {
 		c := p.ClipFromMedia(m, at, stillLen)
-		ti, kind := t.previewTarget(plan, m.Kind)
+		ti, kind := t.previewTarget(plan, m.Kind, c)
 		plan.ghosts = append(plan.ghosts, dropGhost{clip: c, track: ti, newKind: kind, pictures: true})
 		if m.Kind == model.KindVideo && m.HasAudio {
 			a := c
 			a.Kind = model.KindAudio
 			a.Color = model.RGBA{R: 0x3D, G: 0x9A, B: 0x5B, A: 0xFF}
-			ati, akind := previewTrack(p, model.KindAudio, "")
-			plan.ghosts = append(plan.ghosts, dropGhost{clip: a, track: ati, newKind: akind})
+			ati := -1 // a drop below the tracks creates a new audio track as well
+			if !plan.newTrack || plan.newKind != model.TrackVideo {
+				ati = soundPreview(p, ti, plan.audioPref(p), c)
+			}
+			plan.ghosts = append(plan.ghosts, dropGhost{clip: a, track: ati, newKind: model.TrackAudio})
 		}
 		at = c.End()
 	}
 	return plan
 }
 
-// previewTarget mirrors the track choice of the drop for a clip of kind k.
-func (t *Timeline) previewTarget(plan *dropPlan, k model.ClipKind) (int, model.TrackKind) {
+// audioPref is the audio track under the pointer, which receives the sound of a dropped
+// video ("" when the pointer is not over an audio track).
+func (plan *dropPlan) audioPref(p *model.Project) string {
+	if tr, _ := p.Track(plan.preferred); tr != nil && tr.Kind == model.TrackAudio {
+		return tr.ID
+	}
+	return ""
+}
+
+// soundPreview mirrors model.SoundTrack for the preview: track index, -1 for a new audio
+// track, -2 when every audio track is locked.
+func soundPreview(p *model.Project, picture int, audioPref string, c model.Clip) int {
+	i, err := p.SoundTrack(picture, audioPref, c.Start, c.End())
+	if err != nil {
+		return -2
+	}
+	return i
+}
+
+// previewTarget mirrors the track choice of the drop for clip c of kind k.
+func (t *Timeline) previewTarget(plan *dropPlan, k model.ClipKind, c model.Clip) (int, model.TrackKind) {
 	if plan.newTrack && plan.newKind.Accepts(k) {
 		return -1, plan.newKind
 	}
-	return previewTrack(t.s.Project, k, plan.preferred)
+	p := t.s.Project
+	if !k.IsVisual() { // pure audio: same rule as model.PlaceMediaTo
+		if plan.newTrack && plan.newKind == model.TrackVideo && anySound(p, plan.ids) {
+			return -1, model.TrackAudio // goes to the audio track the drop creates
+		}
+		pic := -1
+		if tr, i := p.Track(plan.preferred); tr != nil && tr.Kind == model.TrackVideo {
+			pic = i
+		}
+		return soundPreview(p, pic, plan.audioPref(p), c), model.TrackAudio
+	}
+	return previewTrack(p, k, plan.preferred)
 }
 
 // previewTrack mirrors model.TargetTrack without changing the project: it returns the
@@ -144,9 +177,12 @@ func (t *Timeline) MediaDrop(ids []string, pos fyne.Position) bool {
 	err := t.s.Edit("Medien einfügen", func(p *model.Project) error {
 		placed = placed[:0]
 		stillLen := stillSeconds * max(p.Settings.FPS, 1)
-		pref := plan.preferred
+		pref, audioPref := plan.preferred, plan.audioPref(p)
 		if plan.newTrack {
 			pref = p.AddTrack(plan.newKind).ID
+			if plan.newKind == model.TrackVideo && anySound(p, plan.ids) {
+				audioPref = p.AddTrack(model.TrackAudio).ID // the sound gets its own new track too
+			}
 		}
 		at := plan.at
 		for _, id := range plan.ids {
@@ -155,7 +191,11 @@ func (t *Timeline) MediaDrop(ids []string, pos fyne.Position) bool {
 				continue
 			}
 			item := *m
-			main, err := p.PlaceMedia(item, at, stillLen, pref)
+			itemPref := pref
+			if plan.newTrack && !plan.newKind.Accepts(item.Kind) {
+				itemPref = "" // the new track is for the other kind
+			}
+			main, err := p.PlaceMediaTo(item, at, stillLen, itemPref, audioPref)
 			if err != nil {
 				return err
 			}
@@ -197,4 +237,14 @@ func linkedAudio(p *model.Project, mediaID, main string, at int) string {
 		}
 	}
 	return ""
+}
+
+// anySound reports whether one of the media items is a video with sound.
+func anySound(p *model.Project, ids []string) bool {
+	for _, id := range ids {
+		if m, ok := p.MediaByID(id); ok && m.Kind == model.KindVideo && m.HasAudio {
+			return true
+		}
+	}
+	return false
 }

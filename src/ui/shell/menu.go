@@ -13,7 +13,9 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/media"
+	"framestudio-proto/src/session"
 	"framestudio-proto/src/store"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -140,7 +142,11 @@ func (sh *Shell) installKeys() {
 	sh.shortcuts = map[string]func(){}
 	add := func(sc fyne.Shortcut, fn func()) {
 		sh.shortcuts[sc.ShortcutName()] = fn
-		c.AddShortcut(sc, func(fyne.Shortcut) { fn() })
+		c.AddShortcut(sc, func(fyne.Shortcut) {
+			if !sh.modal() { // a dialog is open: keys must not edit what is behind it
+				fn()
+			}
+		})
 	}
 	add(key(fyne.KeyN, ctrl), sh.newProjectDialog)
 	add(key(fyne.KeyO, ctrl), sh.openDialog)
@@ -194,10 +200,20 @@ func (sh *Shell) pageForKey(k *fyne.KeyEvent) int {
 	return -1
 }
 
+// modal reports whether a dialog or pop-up covers the window. Keys then belong to it;
+// the media-drag ghost (also a pop-up) does not count.
+func (sh *Shell) modal() bool {
+	return sh.win.Canvas().Overlays().Top() != nil && !kit.MediaDragActive()
+}
+
 // typedKey handles keys while no widget has focus. Esc and every other key go to the
-// active page first; unhandled Space toggles playback and unhandled Esc clears the clip
-// selection.
+// active page first; unhandled transport keys work on every page with a viewer (see
+// transportKey), and unhandled Esc clears the clip selection. While a dialog is open
+// nothing reaches the pages.
 func (sh *Shell) typedKey(k *fyne.KeyEvent) {
+	if sh.modal() {
+		return
+	}
 	if sh.showManager {
 		sh.mgr.typedKey(k)
 		return
@@ -213,18 +229,75 @@ func (sh *Shell) typedKey(k *fyne.KeyEvent) {
 	if pg := p.pages[p.current]; pg != nil && pg.TypedKey(k) {
 		return
 	}
-	switch k.Name {
-	case fyne.KeySpace:
-		p.sess.TogglePlaying()
-	case fyne.KeyEscape:
-		p.sess.SelectClip("")
+	if p.current == page.Media {
+		return // no viewer or timeline here: playback and clip keys would act unseen
 	}
+	if k.Name == fyne.KeyEscape {
+		p.sess.SelectClip("")
+		return
+	}
+	transportKey(p.sess, k)
 }
 
-// selectAll is Ctrl+A: select every clip of the active project. In the manager or while
-// a text field has focus (the field gets the shortcut itself) it does nothing.
+// transportKey applies the playback keys of the help's "Wiedergabe" group to s, for the
+// pages with a viewer that leave them to the shell (Farbe, Ton, Export). It reports
+// whether k was one of them.
+func transportKey(s *session.Session, k *fyne.KeyEvent) bool {
+	switch k.Name {
+	case fyne.KeySpace:
+		s.TogglePlaying()
+	case fyne.KeyJ:
+		s.Shuttle(-1)
+	case fyne.KeyK:
+		s.Shuttle(0)
+	case fyne.KeyL:
+		s.Shuttle(+1)
+	case fyne.KeyLeft:
+		s.Seek(s.Playhead - 1)
+	case fyne.KeyRight:
+		s.Seek(s.Playhead + 1)
+	case fyne.KeyUp:
+		s.Seek(s.PrevEdit())
+	case fyne.KeyDown:
+		s.Seek(s.NextEdit())
+	case fyne.KeyHome:
+		s.Seek(0)
+	case fyne.KeyEnd:
+		s.Seek(s.Project.Duration())
+	case fyne.KeyI:
+		if s.Out <= s.Playhead {
+			s.Out = 0
+		}
+		s.SetIn(s.Playhead)
+	case fyne.KeyO:
+		if s.Playhead <= s.In {
+			s.In = 0
+		}
+		s.SetOut(s.Playhead)
+	default:
+		return false
+	}
+	return true
+}
+
+// selectAller is implemented by pages with their own "select all" (the media pool).
+type selectAller interface {
+	SelectAll() bool
+}
+
+// selectAll is Ctrl+A: the active page selects all of what it shows (the media pool on
+// Medien); on the timeline pages every clip of the project is selected. In the manager
+// or while a text field has focus (the field gets the shortcut itself) it does nothing.
 func (sh *Shell) selectAll() {
-	if p := sh.workspaceProject(); p != nil {
+	p := sh.workspaceProject()
+	if p == nil {
+		return
+	}
+	if sa, ok := p.pages[p.current].(selectAller); ok && sa.SelectAll() {
+		return
+	}
+	switch p.current {
+	case page.Edit, page.Color, page.Audio:
 		p.sess.SelectAll()
 	}
 }
@@ -260,9 +333,18 @@ func (sh *Shell) toggleLoop() {
 	}
 }
 
-// dropped opens dropped project files and hands other files to the active page, or to
-// the media page.
-func (sh *Shell) dropped(uris []fyne.URI) {
+// positionedDrop is implemented by pages that place dropped files where they land (the
+// edit page puts them on the timeline under the pointer).
+type positionedDrop interface {
+	DroppedAt(pos fyne.Position, uris []fyne.URI)
+}
+
+// dropped is droppedAt without a known position.
+func (sh *Shell) dropped(uris []fyne.URI) { sh.droppedAt(fyne.NewPos(-1, -1), uris) }
+
+// droppedAt opens dropped project files and hands other files to the active page (at
+// window position pos), or to the media page when the active page takes no files.
+func (sh *Shell) droppedAt(pos fyne.Position, uris []fyne.URI) {
 	var files []fyne.URI
 	for _, u := range uris {
 		if strings.EqualFold(filepath.Ext(u.Path()), store.Extension) {
@@ -280,6 +362,10 @@ func (sh *Shell) dropped(uris []fyne.URI) {
 		return
 	}
 	if !sh.showManager {
+		if dt, ok := p.pages[p.current].(positionedDrop); ok {
+			dt.DroppedAt(pos, files)
+			return
+		}
 		if dt, ok := p.pages[p.current].(page.DropTarget); ok {
 			dt.Dropped(files)
 			return

@@ -170,3 +170,60 @@ func TestShuttle(t *testing.T) {
 		t.Fatal("K should stop and reset the rate")
 	}
 }
+
+func TestBulkSelectionKeepsPicturePrimary(t *testing.T) {
+	p := model.NewProject("x") // V1, V2, A1
+	v := model.NewClip(model.KindColor, "Bild", 0, 50)
+	a := model.NewClip(model.KindAudio, "Ton", 0, 50)
+	_ = p.PlaceClip(p.Tracks[0].ID, v)
+	_ = p.PlaceClip(p.Tracks[2].ID, a)
+	s := New(p)
+	s.SelectAll()
+	if len(s.Selected) != 2 || s.SelectedClip != v.ID {
+		t.Fatalf("select all: %v primary %s, want the picture clip", s.Selected, s.SelectedClip)
+	}
+	// a primary that is part of the group stays primary
+	s.SelectClip(a.ID)
+	s.SelectAll()
+	if s.SelectedClip != a.ID || len(s.Selected) != 2 {
+		t.Fatalf("current primary must stay: %s", s.SelectedClip)
+	}
+}
+
+func TestLockingDropsClipsFromGroup(t *testing.T) {
+	p := model.NewProject("x")
+	v := model.NewClip(model.KindColor, "Bild", 0, 50)
+	a := model.NewClip(model.KindAudio, "Ton", 0, 50)
+	_ = p.PlaceClip(p.Tracks[0].ID, v)
+	_ = p.PlaceClip(p.Tracks[2].ID, a)
+	s := New(p)
+	s.SelectClips([]string{v.ID, a.ID})
+	_ = s.Edit("lock", func(p *model.Project) error { p.Tracks[2].Locked = true; return nil })
+	if len(s.Selected) != 1 || s.SelectedClip != v.ID {
+		t.Fatalf("locked clip must leave the group: %v primary %s", s.Selected, s.SelectedClip)
+	}
+	s.SelectClips([]string{v.ID, a.ID})
+	if len(s.Selected) != 1 {
+		t.Fatalf("a group skips locked clips: %v", s.Selected)
+	}
+	s.SelectClip(a.ID) // a single locked clip may be inspected
+	if s.SelectedClip != a.ID {
+		t.Fatal("single clip on a locked track must stay selectable")
+	}
+}
+
+func TestSelectedTrackFollowsPrimary(t *testing.T) {
+	p := model.NewProject("x")
+	v := model.NewClip(model.KindColor, "Bild", 0, 50)
+	_ = p.PlaceClip(p.Tracks[0].ID, v)
+	s := New(p)
+	s.SelectClip(v.ID)
+	_ = s.Edit("move", func(p *model.Project) error { return p.MoveClips([]string{v.ID}, 10, 1) })
+	if s.SelectedTrack != p.Tracks[1].ID {
+		t.Fatal("selected track must follow the moved clip to V2")
+	}
+	s.Undo()
+	if s.SelectedTrack != s.Project.Tracks[0].ID {
+		t.Fatal("undo must bring the selected track back to V1")
+	}
+}

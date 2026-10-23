@@ -8,9 +8,9 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/timeline"
 	"framestudio-proto/src/ui/viewer/tip"
@@ -41,7 +41,7 @@ type toolbar struct {
 	split, del, ripple   *tip.Button
 	clearRange, delTrack *tip.Button
 	undo, redo           *tip.Button
-	zoom                 *widget.Slider
+	zoom                 *kit.Slider
 	syncing              bool
 }
 
@@ -120,7 +120,7 @@ func newToolbar(pg *Page) *toolbar {
 	b.redo = btn(theme.ContentRedoIcon(), "Wiederholen", s.Redo)
 	zoomOut := btn(theme.ZoomOutIcon(), "Herauszoomen (−)", func() { pg.zoomBy(1 / 1.5) })
 	zoomIn := btn(theme.ZoomInIcon(), "Hineinzoomen (+)", func() { pg.zoomBy(1.5) })
-	b.zoom = widget.NewSlider(minZoom, maxZoom)
+	b.zoom = kit.NewSlider(minZoom, maxZoom)
 	b.zoom.Step = 0.5
 	b.zoom.OnChanged = func(v float64) {
 		if !b.syncing {

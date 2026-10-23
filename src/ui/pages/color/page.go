@@ -4,6 +4,8 @@
 package color
 
 import (
+	"context"
+	"errors"
 	"image"
 	"image/color"
 	"strconv"
@@ -62,6 +64,11 @@ type Page struct {
 	// relinked or trimmed clip gets a fresh frame.
 	thumbs     map[string]image.Image
 	thumbState map[string]thumbState
+	// posterQ holds strip posters still to load, worked off by at most posterWorkers
+	// background jobs at a time (UI thread only), so a long timeline does not flood the
+	// media cache's poster slots and starve the timeline's filmstrips.
+	posterQ       []posterJob
+	posterWorkers int
 
 	// autoID is the clip the page selected by itself (nothing was selected and the
 	// playhead was on it). While it stays the only selection, playback moves the
@@ -72,6 +79,15 @@ type Page struct {
 
 	primary *primaryPanel
 }
+
+// posterJob is one strip poster to load.
+type posterJob struct {
+	key   string
+	fetch func() (image.Image, error)
+}
+
+// posterWorkers is how many strip posters load at the same time.
+const posterWorkers = 2
 
 type thumbState int
 
@@ -223,6 +239,10 @@ func (p *Page) Activate() {
 // Deactivate stops the hidden viewer from rendering every seek and playback tick.
 func (p *Page) Deactivate() {
 	p.active = false
+	for _, j := range p.posterQ { // queued loads start again when the page shows
+		delete(p.thumbState, j.key)
+	}
+	p.posterQ = nil
 	if p.viewer != nil {
 		p.viewer.SetActive(false)
 	}
@@ -230,6 +250,7 @@ func (p *Page) Deactivate() {
 
 func (p *Page) Close() {
 	p.closed = true
+	p.posterQ = nil
 	if p.unsub != nil {
 		p.unsub()
 		p.unsub = nil
@@ -380,6 +401,19 @@ func (p *Page) autoSelect(replace bool) bool {
 		if sel, ok := p.s.Clip(); ok && (sel.Kind.IsVisual() || !replace) {
 			return false
 		}
+		// a selection of several clips with sound as primary (Ctrl+A, a rubber band down
+		// to the audio tracks): grade its picture clip and keep the whole selection
+		if len(p.s.Selected) > 1 {
+			for i := len(p.s.Selected) - 1; i >= 0; i-- {
+				id := p.s.Selected[i]
+				if c, _, _ := p.s.Project.Clip(id); c != nil && c.Kind.IsVisual() {
+					ids := append(append([]string{}, p.s.Selected[:i]...), p.s.Selected[i+1:]...)
+					p.s.SelectClips(append(ids, id))
+					p.scrollToSelected()
+					return true
+				}
+			}
+		}
 	}
 	c := clipUnder(p.s.Project, p.s.Playhead)
 	if c == nil || c.ID == p.s.SelectedClip {
@@ -402,13 +436,9 @@ func (p *Page) refreshStrip() {
 		p.cards = append(p.cards, newClipCard(func(mods fyne.KeyModifier) { p.clickCard(i, mods) }))
 	}
 	objs := make([]fyne.CanvasObject, len(p.entries))
-	var loads []func()
 	used := map[string]bool{}
 	for i, e := range p.entries {
-		thumb, missing, load := p.thumbFor(e.Clip, used)
-		if load != nil {
-			loads = append(loads, load)
-		}
+		thumb, missing := p.thumbFor(e.Clip, used)
 		p.cards[i].set(i+1, e, pr.Settings.FPS, thumb, missing)
 		p.cards[i].setSelected(p.s.IsSelected(e.Clip.ID), e.Clip.ID == p.s.SelectedClip)
 		objs[i] = p.cards[i]
@@ -436,9 +466,63 @@ func (p *Page) refreshStrip() {
 		p.stripCount.Text = n
 		p.stripPanel.Refresh()
 	}
-	for _, load := range loads {
-		p.async(load)
+	p.pumpPosters()
+}
+
+// pumpPosters starts queued poster loads while fewer than posterWorkers run. Hidden or
+// closed pages load nothing; their queue is rebuilt when the page shows again.
+func (p *Page) pumpPosters() {
+	for p.active && !p.closed && p.posterWorkers < posterWorkers && len(p.posterQ) > 0 {
+		j := p.posterQ[0]
+		p.posterQ = p.posterQ[1:]
+		p.posterWorkers++
+		p.async(func() {
+			img, err := j.fetch()
+			kit.Do(func() { p.posterDone(j.key, img, err) })
+		})
 	}
+}
+
+// posterDone stores a loaded strip poster. A file that cannot be decoded shows the
+// missing look; a load that timed out or was cancelled (busy cache, page closing) is
+// simply tried again on the next refresh.
+func (p *Page) posterDone(key string, img image.Image, err error) {
+	p.posterWorkers--
+	if p.closed {
+		return
+	}
+	switch {
+	case err == nil && img != nil:
+		p.thumbs[key] = img
+		delete(p.thumbState, key)
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		delete(p.thumbState, key)
+	default:
+		p.thumbState[key] = thumbFailed
+	}
+	if err == nil {
+		p.refreshStrip()
+	} else {
+		p.refreshCards()
+		p.pumpPosters()
+	}
+}
+
+// refreshCards updates the strip cards' posters without queueing new loads.
+func (p *Page) refreshCards() {
+	if p.stripBox == nil {
+		return
+	}
+	used := map[string]bool{}
+	active := p.active
+	p.active = false // thumbFor queues nothing while inactive
+	for i, e := range p.entries {
+		if i < len(p.cards) {
+			thumb, missing := p.thumbFor(e.Clip, used)
+			p.cards[i].set(i+1, e, p.s.Project.Settings.FPS, thumb, missing)
+		}
+	}
+	p.active = active
 }
 
 func clipCount(n int) string {
@@ -467,48 +551,39 @@ func thumbKey(m model.MediaItem, sec float64) string {
 }
 
 // thumbFor returns the cached poster of a media clip and marks its key in used. If it
-// still has to be loaded, load is the background job that fetches it and refreshes the
-// strip.
-func (p *Page) thumbFor(c model.Clip, used map[string]bool) (img image.Image, missing bool, load func()) {
+// still has to be loaded and the page is visible, the load is queued (see pumpPosters).
+func (p *Page) thumbFor(c model.Clip, used map[string]bool) (img image.Image, missing bool) {
 	if c.MediaID == "" || c.Kind == model.KindColor || c.Kind == model.KindTitle {
-		return nil, false, nil
+		return nil, false
 	}
 	m, ok := p.s.Project.MediaByID(c.MediaID)
 	if !ok || p.ctx.Media == nil {
-		return nil, true, nil
+		return nil, true
 	}
 	if p.ctx.Media.Offline(*m) {
-		return nil, true, nil
+		return nil, true
 	}
 	sec := posterSec(c, p.s.FPS())
 	key := thumbKey(*m, sec)
 	used[key] = true
 	if img, ok := p.thumbs[key]; ok {
-		return img, false, nil
+		return img, false
 	}
 	switch p.thumbState[key] {
 	case thumbFailed:
-		return nil, true, nil
+		return nil, true
 	case thumbLoading:
-		return nil, false, nil
+		return nil, false
+	}
+	if !p.active || p.closed {
+		return nil, false
 	}
 	p.thumbState[key] = thumbLoading
 	item, cache := *m, p.ctx.Media
-	return nil, false, func() {
-		img, err := cache.Poster(item, sec, thumbW*2, thumbH*2)
-		kit.Do(func() {
-			if p.closed {
-				return
-			}
-			if err != nil || img == nil {
-				p.thumbState[key] = thumbFailed
-			} else {
-				p.thumbs[key] = img
-				delete(p.thumbState, key)
-			}
-			p.refreshStrip()
-		})
-	}
+	p.posterQ = append(p.posterQ, posterJob{key: key, fetch: func() (image.Image, error) {
+		return cache.Poster(item, sec, thumbW*2, thumbH*2)
+	}})
+	return nil, false
 }
 
 // scrollToSelected scrolls the strip so the selected card is visible.

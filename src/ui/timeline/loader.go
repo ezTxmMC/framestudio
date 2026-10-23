@@ -49,10 +49,19 @@ type loader struct {
 	closed  bool
 	pending bool // a refresh is already queued
 	sem     chan struct{}
+	quit    chan struct{} // closed by close: queued loads give up
 }
 
 func newLoader(src mediaSource, refresh func()) *loader {
-	return &loader{src: src, refresh: refresh, items: map[assetKey]*asset{}, sem: make(chan struct{}, 3)}
+	return &loader{src: src, refresh: refresh, items: map[assetKey]*asset{}, sem: make(chan struct{}, 3),
+		quit: make(chan struct{})}
+}
+
+// isClosed reports whether close was called.
+func (l *loader) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
 }
 
 // get returns the asset for m, starting a load if needed. The result may not be done yet.
@@ -84,7 +93,15 @@ func (l *loader) get(m model.MediaItem, wave bool, buckets int) *asset {
 		return a
 	}
 	go func() {
-		l.sem <- struct{}{}
+		select {
+		case l.sem <- struct{}{}:
+		case <-l.quit:
+			return // closed while queued: start no decode for a closed timeline
+		}
+		if l.isClosed() {
+			<-l.sem
+			return
+		}
 		res := l.load(m, wave, buckets)
 		<-l.sem
 		l.mu.Lock()
@@ -165,8 +182,11 @@ func (l *loader) recheckOffline(offline func(path string) bool) bool {
 
 func (l *loader) close() {
 	l.mu.Lock()
-	l.closed = true
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	if !l.closed {
+		l.closed = true
+		close(l.quit)
+	}
 }
 
 // waveBuckets picks a waveform resolution of about four peaks per frame.

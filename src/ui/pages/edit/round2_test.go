@@ -102,7 +102,7 @@ func TestMultiInspectorShowsMixedAndEditsInOneStep(t *testing.T) {
 	if !head {
 		t.Fatalf("no \"4 Clips ausgewählt\" header in %v", texts(f.pg.insp.box))
 	}
-	sliders := find[*widget.Slider](f.pg.insp.box)
+	sliders := find[*kit.Slider](f.pg.insp.box)
 	if len(sliders) != 2 {
 		t.Fatalf("want opacity and volume sliders, got %d", len(sliders))
 	}
@@ -143,7 +143,7 @@ func TestMultiInspectorShowsMixedAndEditsInOneStep(t *testing.T) {
 
 	// volume applies to audio clips only
 	f.s.SelectClips(allClipIDs(f.s.Project))
-	sliders = find[*widget.Slider](f.pg.insp.box)
+	sliders = find[*kit.Slider](f.pg.insp.box)
 	sliders[1].SetValue(-6)
 	if v := clipNamed(t, f.s.Project, "Ton 1").Volume; v != clipNamed(t, f.s.Project, "Ton 2").Volume || v >= 1 {
 		t.Fatal("volume not applied to both audio clips")

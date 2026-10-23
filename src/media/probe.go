@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,8 +64,21 @@ func ffmpegPath() (string, error) {
 	return tools.ffmpeg, nil
 }
 
+// probeTimeout is the longest one ffprobe run may take (a stalled network mount).
+const probeTimeout = 30 * time.Second
+
 // probeFile inspects an image without ffmpeg or a video/audio file with ffprobe.
 func probeFile(path string) (model.MediaItem, error) {
+	return probeFileContext(context.Background(), path)
+}
+
+// ProbeContext is Probe that gives up when ctx ends (an import is cancelled) and after
+// probeTimeout, killing ffprobe.
+func ProbeContext(ctx context.Context, path string) (model.MediaItem, error) {
+	return probeFileContext(ctx, path)
+}
+
+func probeFileContext(ctx context.Context, path string) (model.MediaItem, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
@@ -105,9 +119,14 @@ func probeFile(path string) (model.MediaItem, error) {
 		return m, fmt.Errorf("„%s“: %w", base, ErrNoFFmpeg)
 	}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(tools.ffprobe, "-v", "error", "-print_format", "json", "-show_streams", "-show_format", abs)
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tools.ffprobe, "-v", "error", "-print_format", "json", "-show_streams", "-show_format", abs)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return m, fmt.Errorf("„%s“ antwortet nicht. Laufwerk prüfen und erneut importieren (%w)", base, ctx.Err())
+		}
 		return m, fmt.Errorf("„%s“ kann nicht gelesen werden. Die Datei ist beschädigt oder kein unterstütztes Format (%s)", base, firstLine(stderr.String(), err))
 	}
 	if err := applyProbe(&m, stdout.Bytes()); err != nil {

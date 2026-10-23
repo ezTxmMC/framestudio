@@ -47,7 +47,7 @@ var shortcutColumns = [2][]shortcutGroup{
 			{"Alt+1…5 | Strg+1…5", "Seite wechseln (alternativ)"},
 		}},
 		{"Auswahl", []shortcut{
-			{"Strg+A", "Alle Clips auswählen"},
+			{"Strg+A", "Alle Clips auswählen (Medien: alle Medien)"},
 			{"Strg+Klick", "Clip zur Auswahl hinzufügen oder entfernen"},
 			{"Umschalt+Klick", "Auswahl bis zum Clip erweitern"},
 			{"Esc", "Auswahl aufheben"},
@@ -57,7 +57,7 @@ var shortcutColumns = [2][]shortcutGroup{
 		}},
 	},
 	{
-		{"Wiedergabe", []shortcut{
+		{"Wiedergabe (Schnitt, Farbe, Ton, Export)", []shortcut{
 			{"Leertaste", "Abspielen / Pause"},
 			{"L", "Vorwärts; erneut drücken: 2×, 4×, 8×"},
 			{"J", "Rückwärts; erneut drücken: 2×, 4×, 8×"},
@@ -80,7 +80,7 @@ var shortcutColumns = [2][]shortcutGroup{
 		{"Timeline", []shortcut{
 			{"Strg+Mausrad", "Zoomen"},
 			{"Plus | −", "Vergrößern / verkleinern"},
-			{"Ziehen", "Medien aus dem Pool in die Timeline ziehen"},
+			{"Ziehen", "Medien aus der Bibliothek (Schnitt) in die Timeline ziehen"},
 		}},
 	},
 }

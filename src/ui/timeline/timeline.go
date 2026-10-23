@@ -258,8 +258,11 @@ func (t *Timeline) changed(c session.Change) {
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
 		if c&session.ChangeProject != 0 {
-			if t.drag != nil && t.drag.mode != dragScrub && t.drag.mode != dragMarquee {
-				t.drag = nil // the dragged clip may be gone (undo)
+			if t.drag != nil && t.drag.active() && !t.drag.stillValid(t.s.Project) {
+				// the dragged clips changed (undo, another page): cancel, and swallow the
+				// rest of the gesture so it does not start a rubber band or a new move
+				t.drag = &dragState{mode: dragIgnore}
+				t.snapAt = -1
 			}
 			t.forgetChangedMedia()
 			if t.rename != nil {

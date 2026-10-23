@@ -34,7 +34,7 @@ type clipPanel struct {
 	nameRow                 *fyne.Container
 	source                  *canvas.Text
 	srcRange, place, length *canvas.Text
-	vol, fadeIn, fadeOut    *widget.Slider
+	vol, fadeIn, fadeOut    *kit.Slider
 	volVal, inVal, outVal   *canvas.Text
 	hint                    *canvas.Text
 	form, empty, scroll     fyne.CanvasObject
@@ -113,8 +113,8 @@ func row(label string, control, value fyne.CanvasObject) fyne.CanvasObject {
 }
 
 // slider builds a horizontal control that edits the bound clips with coalesced undo steps.
-func (c *clipPanel) slider(minV, maxV, step float64, key, label string, apply func(*model.Clip, float64)) (*widget.Slider, *canvas.Text) {
-	s := widget.NewSlider(minV, maxV)
+func (c *clipPanel) slider(minV, maxV, step float64, key, label string, apply func(*model.Clip, float64)) (*kit.Slider, *canvas.Text) {
+	s := kit.NewSlider(minV, maxV)
 	s.Step = step
 	val := kit.MonoText("", studiotheme.Text, 11)
 	val.Alignment = fyne.TextAlignTrailing
@@ -315,7 +315,7 @@ func pick(same bool, s string) string {
 }
 
 // setSlider updates range and value without firing OnChanged.
-func setSlider(s *widget.Slider, minV, maxV, v float64) {
+func setSlider(s *kit.Slider, minV, maxV, v float64) {
 	if s.Min == minV && s.Max == maxV && s.Value == v {
 		return
 	}

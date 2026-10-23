@@ -1,10 +1,13 @@
 package color
 
 import (
+	"context"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
@@ -175,6 +178,7 @@ func TestApplyToAll(t *testing.T) {
 
 func TestStripListsVisualClipsInTimeOrder(t *testing.T) {
 	f := newFixture(t)
+	f.p.Activate() // posters load only while the page is visible
 	want := []string{f.video, f.title, f.colr, f.img}
 	if len(f.p.entries) != len(want) || len(f.p.stripBox.Objects) != len(want) {
 		t.Fatalf("strip has %d entries, %d cards; want %d", len(f.p.entries), len(f.p.stripBox.Objects), len(want))
@@ -376,5 +380,76 @@ func TestHiddenPageStopsViewer(t *testing.T) {
 	f.p.Activate()
 	if !f.p.viewer.Active() {
 		t.Fatal("viewer must render again when the page is shown")
+	}
+}
+
+// Strip posters load through a small queue, only while the page is visible, and a load
+// that timed out is not shown as a broken file.
+func TestStripPostersQueued(t *testing.T) {
+	f := newFixture(t)
+	var started []func()
+	f.p.async = func(fn func()) { started = append(started, fn) }
+	err := f.s.Edit("clips", func(pr *model.Project) error {
+		id := pr.AddMedia(model.MediaItem{Name: "B-Roll.mov", Path: "/x/b-roll.mov", Kind: model.KindVideo,
+			Width: 1920, Height: 1080, Duration: 10 * time.Second})
+		m, _ := pr.MediaByID(id)
+		for i := range 12 {
+			c := pr.ClipFromMedia(*m, 200+i*10, 10)
+			c.Length, c.SourceIn = 10, i
+			if err := pr.PlaceClip(pr.Tracks[0].ID, c); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 0 {
+		t.Fatalf("hidden page started %d poster loads", len(started))
+	}
+	f.p.Activate()
+	if len(started) != posterWorkers || len(f.p.posterQ) == 0 {
+		t.Fatalf("%d loads started, %d queued; want %d running", len(started), len(f.p.posterQ), posterWorkers)
+	}
+	key := f.p.posterQ[0].key
+	f.p.Deactivate()
+	if len(f.p.posterQ) != 0 || f.p.thumbState[key] != 0 {
+		t.Fatal("hiding the page must drop the queue")
+	}
+	// a timeout frees the worker and leaves the card without the broken look
+	f.p.Activate()
+	f.p.posterDone(key, nil, fmt.Errorf("Vorschau abgebrochen: %w", context.DeadlineExceeded))
+	if f.p.thumbState[key] == thumbFailed {
+		t.Fatal("a timed out poster must be retried, not marked broken")
+	}
+}
+
+// Select all (or a rubber band reaching the audio tracks) keeps grading available and
+// the colour page keeps the whole selection.
+func TestGroupSelectionWithSoundKeepsGrading(t *testing.T) {
+	f := newFixture(t)
+	f.p.Activate()
+	f.s.SelectAll()
+	if len(f.s.Selected) != 5 {
+		t.Fatalf("select all: %v", f.s.Selected)
+	}
+	if c, ok := f.s.Clip(); !ok || !c.Kind.IsVisual() {
+		t.Fatal("primary must be a picture clip")
+	}
+	// a selection made elsewhere with sound as primary: the page grades its picture
+	// clip and keeps all of it
+	f.p.Deactivate()
+	f.s.SelectClips([]string{f.video, f.colr, f.a})
+	f.p.Activate()
+	if len(f.s.Selected) != 3 {
+		t.Fatalf("activate collapsed the selection to %v", f.s.Selected)
+	}
+	if c, ok := f.s.Clip(); !ok || !c.Kind.IsVisual() {
+		t.Fatal("the graded clip must be a picture clip")
+	}
+	f.s.Seek(120)
+	if len(f.s.Selected) != 3 {
+		t.Fatalf("a playhead move collapsed the selection to %v", f.s.Selected)
 	}
 }

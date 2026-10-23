@@ -97,9 +97,9 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 	s.redo = nil
 	s.Project.Modified = time.Now()
 	s.Dirty = true
-	s.fixSelection()
+	c := ChangeProject | ChangeMeta | s.fixSelection(before)
 	s.clampPlayhead()
-	s.Notify(ChangeProject | ChangeMeta)
+	s.Notify(c)
 	return nil
 }
 
@@ -125,8 +125,7 @@ func (s *Session) EditCoalesced(key, label string, fn func(p *model.Project) err
 	s.redo = nil
 	s.Project.Modified = time.Now()
 	s.Dirty = true
-	s.fixSelection()
-	s.Notify(ChangeProject | ChangeMeta)
+	s.Notify(ChangeProject | ChangeMeta | s.fixSelection(before))
 	return nil
 }
 
@@ -156,10 +155,11 @@ func (s *Session) Undo() {
 	s.undo = s.undo[:len(s.undo)-1]
 	s.redo = append(s.redo, snapshot{label: last.label, project: s.Project})
 	old := s.Project.Settings.FPS
+	prev := s.Project
 	s.Project = last.project
 	s.rescaleTime(old)
 	s.Dirty = true
-	s.fixSelection()
+	s.fixSelection(prev)
 	s.clampPlayhead()
 	s.Notify(ChangeProject | ChangeMeta | ChangeSelection)
 }
@@ -172,10 +172,11 @@ func (s *Session) Redo() {
 	s.redo = s.redo[:len(s.redo)-1]
 	s.undo = append(s.undo, snapshot{label: next.label, project: s.Project})
 	old := s.Project.Settings.FPS
+	prev := s.Project
 	s.Project = next.project
 	s.rescaleTime(old)
 	s.Dirty = true
-	s.fixSelection()
+	s.fixSelection(prev)
 	s.clampPlayhead()
 	s.Notify(ChangeProject | ChangeMeta | ChangeSelection)
 }
@@ -207,19 +208,26 @@ func (s *Session) rescaleTime(old int) {
 	s.Notify(ChangePlayhead)
 }
 
-func (s *Session) fixSelection() {
-	kept := s.Selected[:0]
-	for _, id := range s.Selected {
-		if c, _, _ := s.Project.Clip(id); c != nil {
-			kept = append(kept, id)
+// fixSelection drops selected clips that were deleted and, from a selection of several
+// clips, those whose track is now locked (a locked member would make every group edit
+// fail; a single clip stays selected so the inspector can explain the lock). It lets the selected
+// track follow the primary clip when an edit moved it to another track. before is the
+// project as it was before the change. It returns ChangeSelection when the selection
+// changed, else 0.
+func (s *Session) fixSelection(before *model.Project) Change {
+	n0, clip0, track0, media0 := len(s.Selected), s.SelectedClip, s.SelectedTrack, s.SelectedMedia
+	s.Selected = s.selectable(s.Selected)
+	if s.SelectedClip != "" && !s.IsSelected(s.SelectedClip) {
+		s.SelectedClip = ""
+		if n := len(s.Selected); n > 0 {
+			s.SelectedClip = s.Selected[n-1]
 		}
 	}
-	s.Selected = kept
-	if s.SelectedClip != "" {
-		if c, _, _ := s.Project.Clip(s.SelectedClip); c == nil {
-			s.SelectedClip = ""
-			if n := len(s.Selected); n > 0 {
-				s.SelectedClip = s.Selected[n-1]
+	if c, ti, _ := s.Project.Clip(s.SelectedClip); c != nil && before != nil {
+		now := s.Project.Tracks[ti].ID
+		if _, bti, _ := before.Clip(s.SelectedClip); bti >= 0 && bti < len(before.Tracks) {
+			if was := before.Tracks[bti].ID; was != now && s.SelectedTrack == was {
+				s.SelectedTrack = now
 			}
 		}
 	}
@@ -236,6 +244,10 @@ func (s *Session) fixSelection() {
 			s.SelectedMedia = ""
 		}
 	}
+	if len(s.Selected) != n0 || s.SelectedClip != clip0 || s.SelectedTrack != track0 || s.SelectedMedia != media0 {
+		return ChangeSelection
+	}
+	return 0
 }
 
 func (s *Session) clampPlayhead() {
@@ -270,16 +282,34 @@ func (s *Session) SelectClip(id string) {
 	s.SelectClips([]string{id})
 }
 
-// SelectClips replaces the selection; the last ID becomes the primary clip.
-func (s *Session) SelectClips(ids []string) {
-	var sel []string
+// selectable returns the IDs of ids that exist, without duplicates. When more than one
+// clip remains, clips on locked tracks are left out: group edits (move, delete, the
+// multi-clip inspector) would fail on them. A single clip on a locked track may be
+// selected so the inspector can show it with a lock hint.
+func (s *Session) selectable(ids []string) []string {
+	var out, unlocked []string
 	seen := map[string]bool{}
 	for _, id := range ids {
-		if c, _, _ := s.Project.Clip(id); c != nil && !seen[id] {
-			seen[id] = true
-			sel = append(sel, id)
+		c, ti, _ := s.Project.Clip(id)
+		if c == nil || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		if !s.Project.Tracks[ti].Locked {
+			unlocked = append(unlocked, id)
 		}
 	}
+	if len(out) > 1 {
+		return unlocked
+	}
+	return out
+}
+
+// SelectClips replaces the selection; the last ID becomes the primary clip. In a
+// selection of several clips, clips on locked tracks are left out.
+func (s *Session) SelectClips(ids []string) {
+	sel := s.selectable(ids)
 	primary := ""
 	if len(sel) > 0 {
 		primary = sel[len(sel)-1]
@@ -319,7 +349,7 @@ func (s *Session) IsSelected(id string) bool {
 	return false
 }
 
-// SelectAll selects every clip on unlocked tracks.
+// SelectAll selects every clip on unlocked tracks (see SelectGroup for the primary clip).
 func (s *Session) SelectAll() {
 	var ids []string
 	for _, t := range s.Project.Tracks {
@@ -330,7 +360,44 @@ func (s *Session) SelectAll() {
 			ids = append(ids, c.ID)
 		}
 	}
-	s.SelectClips(ids)
+	s.SelectGroup(ids)
+}
+
+// SelectGroup replaces the selection with clips gathered in bulk (select all, rubber
+// band). Unlike SelectClips the primary clip is not simply the last ID: the current
+// primary stays primary when it is still part of the group, otherwise the first picture
+// clip (video, image, title, colour) becomes primary, so the inspector and the colour page
+// keep showing a gradeable clip. Only when the group holds nothing but sound is the first
+// audio clip primary.
+func (s *Session) SelectGroup(ids []string) {
+	ids = s.selectable(ids)
+	primary := ""
+	for _, id := range ids {
+		if id == s.SelectedClip {
+			primary = id
+		}
+	}
+	if primary == "" {
+		for _, id := range ids {
+			if c, _, _ := s.Project.Clip(id); c.Kind.IsVisual() {
+				primary = id
+				break
+			}
+		}
+	}
+	if primary == "" && len(ids) > 0 {
+		primary = ids[0]
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != primary {
+			out = append(out, id)
+		}
+	}
+	if primary != "" {
+		out = append(out, primary)
+	}
+	s.SelectClips(out)
 }
 
 func equalIDs(a, b []string) bool {

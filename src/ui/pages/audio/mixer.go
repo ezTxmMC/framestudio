@@ -123,7 +123,7 @@ type strip struct {
 	name       *nameLabel
 	bg         *canvas.Rectangle
 	mute, solo *toggle
-	fader      *widget.Slider
+	fader      *kit.Slider
 	meter      *levelMeter
 	readout    *canvas.Text
 	obj        fyne.CanvasObject
@@ -140,7 +140,7 @@ func newStrip(pg *Page, id string) *strip {
 	st.mute = newToggle("M", studiotheme.Steel, func() { pg.toggleMute(id) })
 	st.solo = newToggle("S", amber, func() { pg.toggleSolo(id) })
 
-	st.fader = widget.NewSlider(MinDB, MaxDB)
+	st.fader = kit.NewSlider(MinDB, MaxDB)
 	st.fader.Orientation = widget.Vertical
 	st.fader.Step = 0.5
 	st.fader.Value = 0

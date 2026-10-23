@@ -47,7 +47,7 @@ func formatValue(v float64) string {
 // gradeRow is one slider line: label, slider, readout, reset.
 type gradeRow struct {
 	field   gradeField
-	slider  *widget.Slider
+	slider  *kit.Slider
 	readout *canvas.Text
 	reset   *widget.Button
 }
@@ -130,7 +130,7 @@ func newPrimaryPanel(p *Page) *primaryPanel {
 
 func (pp *primaryPanel) newRow(f gradeField) *gradeRow {
 	row := &gradeRow{field: f}
-	row.slider = widget.NewSlider(f.min, f.max)
+	row.slider = kit.NewSlider(f.min, f.max)
 	row.slider.Step = 0.01
 	row.slider.OnChanged = func(v float64) {
 		if pp.updating {

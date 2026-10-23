@@ -177,7 +177,7 @@ func TestInspectorClipNameAndDuration(t *testing.T) {
 func TestInspectorOpacityCoalesced(t *testing.T) {
 	f := newFixture(t, basicProject())
 	f.s.SelectClip(clipNamed(t, f.s.Project, "Farbe").ID)
-	sliders := find[*widget.Slider](f.pg.insp.box)
+	sliders := find[*kit.Slider](f.pg.insp.box)
 	if len(sliders) != 1 {
 		t.Fatalf("color clip should have one slider, got %d", len(sliders))
 	}
@@ -229,7 +229,7 @@ func TestInspectorAudioVolume(t *testing.T) {
 	_ = p.PlaceClip(p.Tracks[2].ID, model.NewClip(model.KindAudio, "Ton", 0, 50))
 	f := newFixture(t, p)
 	f.s.SelectClip(clipNamed(t, f.s.Project, "Ton").ID)
-	sliders := find[*widget.Slider](f.pg.insp.box)
+	sliders := find[*kit.Slider](f.pg.insp.box)
 	sliders[0].SetValue(-6)
 	if v := clipNamed(t, f.s.Project, "Ton").Volume; v < 0.49 || v > 0.51 {
 		t.Fatalf("-6 dB should be ~0.5 gain, got %v", v)

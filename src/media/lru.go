@@ -34,6 +34,16 @@ func (c *lru) get(key string) (any, bool) {
 	return nil, false
 }
 
+// peek is get without touching the recency order.
+func (c *lru) peek(key string) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.items[key]; ok {
+		return e.Value.(*lruEntry).val, true
+	}
+	return nil, false
+}
+
 // put stores val, evicting the oldest entries to stay within budget. Values larger
 // than the whole budget are not stored.
 func (c *lru) put(key, owner string, val any, size int64) {

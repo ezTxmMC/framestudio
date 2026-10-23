@@ -28,7 +28,7 @@ type inspector struct {
 
 	preview  *canvas.Image
 	noPrev   *canvas.Text
-	scrub    *widget.Slider
+	scrub    *kit.Slider
 	scrubTC  *canvas.Text
 	scrubRow *fyne.Container
 	name     *canvas.Text
@@ -61,7 +61,7 @@ func newInspector(p *Page) *inspector {
 	screen := container.NewStack(sizer, container.New(kit.AspectLayout{Ratio: 16.0 / 9},
 		container.NewStack(well, in.preview, container.NewCenter(in.noPrev))))
 
-	in.scrub = widget.NewSlider(0, 1)
+	in.scrub = kit.NewSlider(0, 1)
 	in.scrub.Step = 1
 	in.scrub.OnChanged = func(v float64) { in.skimTo(int(v)) }
 	in.scrubTC = kit.MonoText("00:00:00:00", studiotheme.Text, 12)

@@ -1,7 +1,9 @@
 package media
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -19,6 +21,7 @@ import (
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -412,4 +415,58 @@ func capture(t *testing.T, w fyne.Window, path string) {
 		t.Fatal(err)
 	}
 	t.Logf("wrote %s", path)
+}
+
+// Closing the page stops a running import and queued thumbnails: no ffprobe or ffmpeg
+// runs for a closed project.
+func TestCloseStopsImportAndThumbnails(t *testing.T) {
+	h := newHarness(t)
+	dir := t.TempDir()
+	var paths []string
+	for i := range 5 {
+		paths = append(paths, writePNG(t, dir, fmt.Sprintf("b%d.png", i), 8, 8, color.NRGBA{A: 255}))
+	}
+	probes := 0
+	h.p.probe = func(ctx context.Context, path string) (model.MediaItem, error) {
+		probes++
+		if probes == 2 {
+			h.p.Close() // the project closes during the import
+		}
+		return media.ProbeContext(ctx, path)
+	}
+	h.p.importPaths(paths)
+	h.drain()
+	if probes != 2 {
+		t.Fatalf("%d files probed, want 2 (the import must stop when the page closes)", probes)
+	}
+	if len(h.s.Project.Media) != 0 {
+		t.Fatal("a closed page must not import")
+	}
+
+	// a thumbnail queued behind the semaphore gives up once the page is closed
+	g := newHarness(t)
+	q := kit.UseUIQueue(t)
+	for range cap(g.p.sem) {
+		g.p.sem <- struct{}{}
+	}
+	m := mustItem(t, writePNG(t, dir, "q.png", 8, 8, color.NRGBA{A: 255}))
+	g.p.spawn = func(f func()) { go f() }
+	g.p.thumbFor(m)
+	g.p.Close()
+	for range cap(g.p.sem) {
+		<-g.p.sem
+	}
+	key := m.ID + "|" + m.Path
+	if q.Until(func() bool { return !g.p.loading[key] }, 300*time.Millisecond) {
+		t.Fatal("a queued thumbnail decode ran after the page closed")
+	}
+}
+
+func mustItem(t *testing.T, path string) model.MediaItem {
+	t.Helper()
+	m, err := media.Probe(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

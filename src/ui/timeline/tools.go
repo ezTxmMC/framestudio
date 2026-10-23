@@ -57,17 +57,18 @@ func rippleLimits(p *model.Project, id string, left bool) (lo, hi int) {
 	return lo, hi
 }
 
-// rippleTrim trims an edge of clip id by delta frames and shifts every later clip on the
-// track by the same amount, so no gap opens and nothing is overwritten. Right edge: the end
-// moves by delta. Left edge: delta frames are cut from the head while the clip keeps its
-// start, and the clips after it move by -delta.
+// rippleTrim trims an edge of clip id by delta frames and shifts every later clip on
+// every unlocked track by the same amount, so no gap opens, nothing is overwritten and the
+// tracks stay in sync. The linked sound (or picture) of the clip on another unlocked track
+// is trimmed the same way. Right edge: the end moves by delta. Left edge: delta frames are
+// cut from the head while the clip keeps its start, and the clips after it move by -delta.
+// A clip on another track that is in the way gives a *model.RippleBlockedError.
 func rippleTrim(p *model.Project, id string, left bool, delta int) error {
-	c, ti, ci := p.Clip(id)
+	c, ti, _ := p.Clip(id)
 	if c == nil {
 		return model.ErrNotFound
 	}
-	t := &p.Tracks[ti]
-	if t.Locked {
+	if p.Tracks[ti].Locked {
 		return model.ErrLocked
 	}
 	if delta == 0 {
@@ -77,25 +78,32 @@ func rippleTrim(p *model.Project, id string, left bool, delta int) error {
 	if delta < lo || delta > hi {
 		return model.ErrInvalidEdit
 	}
-	oldEnd, oldLen := c.End(), c.Length
-	timed := sourceFrames(p, *c) > 0
+	oldEnd := c.End()
+	ids := []string{id}
+	for _, l := range p.LinkedClips(id) {
+		if _, lt, _ := p.Clip(l); !p.Tracks[lt].Locked {
+			ids = append(ids, l)
+		}
+	}
+	for _, x := range ids {
+		c, _, _ := p.Clip(x)
+		oldLen := c.Length
+		timed := sourceFrames(p, *c) > 0
+		if left {
+			c.Length -= delta
+			if timed {
+				c.SourceIn += delta
+			}
+		} else {
+			c.Length += delta
+		}
+		clampFades(c, oldLen)
+	}
 	shift := delta
 	if left {
 		shift = -delta
-		c.Length -= delta
-		if timed {
-			c.SourceIn += delta
-		}
-	} else {
-		c.Length += delta
 	}
-	clampFades(c, oldLen)
-	for i := range t.Clips {
-		if i != ci && t.Clips[i].Start >= oldEnd {
-			t.Clips[i].Start += shift
-		}
-	}
-	return nil
+	return p.ShiftAfter(oldEnd, shift, ids...)
 }
 
 // rollNeighbours returns the clip indices on either side of the cut at an edge of clip ci,

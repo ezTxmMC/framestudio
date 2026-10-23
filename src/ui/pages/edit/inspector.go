@@ -165,8 +165,8 @@ func (in *clipEditor) set(field, label string, coalesce bool, fn func(c *model.C
 	return err
 }
 
-func (in *inspector) slider(min, max, step float64, change func(v float64)) *widget.Slider {
-	s := widget.NewSlider(min, max)
+func (in *inspector) slider(min, max, step float64, change func(v float64)) *kit.Slider {
+	s := kit.NewSlider(min, max)
 	s.Step = step
 	s.OnChanged = func(v float64) {
 		if !in.syncing {

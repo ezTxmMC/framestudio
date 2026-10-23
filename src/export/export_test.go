@@ -285,20 +285,20 @@ func TestBuildAudioMix(t *testing.T) {
 	if !ok || len(mix.Inputs) != 2 {
 		t.Fatalf("mix %+v", mix)
 	}
-	want := "[1:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,atrim=start=0:end=4,asetpts=PTS-STARTPTS,apad=whole_dur=4," +
-		"afade=t=in:st=0:d=1,afade=t=out:st=2:d=2,volume=0.5[a0];" +
-		"[2:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,atrim=start=1:end=2,asetpts=PTS-STARTPTS,apad=whole_dur=1," +
-		"adelay=delays=2000:all=1,asetpts=N/SR/TB[a1];" +
-		"[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,apad=whole_dur=4,atrim=end=4,asetpts=PTS-STARTPTS[aout]"
+	want := "[1:a:0]aresample=async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,atrim=start_sample=0:end_sample=192000,asetpts=PTS-STARTPTS,apad=whole_len=192000," +
+		"afade=t=in:ss=0:ns=48000,afade=t=out:ss=96000:ns=96000,volume=0.5[a0];" +
+		"[2:a:0]aresample=async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,atrim=start_sample=48000:end_sample=96000,asetpts=PTS-STARTPTS,apad=whole_len=48000," +
+		"adelay=delays=96000S:all=1,asetpts=N/SR/TB[a1];" +
+		"[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,apad=whole_len=192000,atrim=end_sample=192000,asetpts=PTS-STARTPTS[aout]"
 	if mix.Filter != want {
 		t.Errorf("filter\n got %s\nwant %s", mix.Filter, want)
 	}
 
 	// Range starting inside the first clip trims after the fades and shifts the delay.
 	mix, _ = BuildAudioMix(p, 40, 60, 0, nil)
-	if !strings.Contains(mix.Filter, "afade=t=out:st=2:d=2,atrim=start=1.6:end=2.4,asetpts=PTS-STARTPTS,volume=0.5[a0]") ||
-		!strings.Contains(mix.Filter, "atrim=start=0:end=0.4,asetpts=PTS-STARTPTS,adelay=delays=400:all=1,asetpts=N/SR/TB[a1]") ||
-		!strings.HasSuffix(mix.Filter, "apad=whole_dur=0.8,atrim=end=0.8,asetpts=PTS-STARTPTS[aout]") {
+	if !strings.Contains(mix.Filter, "afade=t=out:ss=96000:ns=96000,atrim=start_sample=76800:end_sample=115200,asetpts=PTS-STARTPTS,volume=0.5[a0]") ||
+		!strings.Contains(mix.Filter, "atrim=start_sample=0:end_sample=19200,asetpts=PTS-STARTPTS,adelay=delays=19200S:all=1,asetpts=N/SR/TB[a1]") ||
+		!strings.HasSuffix(mix.Filter, "apad=whole_len=38400,atrim=end_sample=38400,asetpts=PTS-STARTPTS[aout]") {
 		t.Errorf("range filter: %s", mix.Filter)
 	}
 

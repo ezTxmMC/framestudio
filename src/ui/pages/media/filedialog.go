@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -165,8 +166,13 @@ func (d *fileDialog) toggleAll() {
 	for _, p := range rows {
 		all = all && d.chosen[p]
 	}
+	if all { // "Auswahl aufheben" clears the whole choice, in other folders too
+		d.chosen, d.order = map[string]bool{}, nil
+		d.update()
+		return
+	}
 	for _, p := range rows {
-		if d.chosen[p] == all {
+		if !d.chosen[p] {
 			d.toggleQuiet(p)
 		}
 	}
@@ -206,7 +212,16 @@ func (d *fileDialog) open(dir string) {
 	}
 }
 
+// filter applies the type filter to the folder. Chosen files the filter hides are
+// dropped from the choice, so the count, the button and the import match what is shown.
 func (d *fileDialog) filter() {
+	if !d.req.folders && d.kind != "" {
+		for _, path := range append([]string(nil), d.order...) {
+			if k, ok := media.KindForPath(path); !ok || k != d.kind {
+				d.toggleQuiet(path)
+			}
+		}
+	}
 	d.entries = d.entries[:0]
 	for _, e := range d.all {
 		if e.dir || d.kind == "" || e.kind == d.kind {

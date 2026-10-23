@@ -117,20 +117,20 @@ func TestMarqueeSelects(t *testing.T) {
 	}
 	f.tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(f.x(30), f.rowMid("A1"))}, Dragged: fyne.NewDelta(-50, 50)})
 	f.tl.DragEnd()
-	if !slices.Equal(f.s.Selected, []string{A, B, audio}) {
-		t.Fatalf("marquee selection %v", f.s.Selected)
+	if !sameSet(f.s.Selected, []string{A, B, audio}) || f.s.SelectedClip != B {
+		t.Fatalf("marquee selection %v, primary %s (the picture clip B stays primary)", f.s.Selected, f.s.SelectedClip)
 	}
 
 	// Ctrl adds to the selection; Esc during the drag restores it
 	f.s.SelectClip(audio)
 	f.press(fyne.KeyModifierControl)
 	f.drag(fyne.NewPos(f.x(160), f.rowMid("V1")), fyne.NewPos(f.x(140), f.rowMid("V1")))
-	if !slices.Equal(f.s.Selected, []string{audio, B}) {
+	if !sameSet(f.s.Selected, []string{audio, B}) || f.s.SelectedClip != audio {
 		t.Fatalf("ctrl marquee %v", f.s.Selected)
 	}
 	f.press(0)
 	f.tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(f.x(10), f.rowMid("V1"))}, Dragged: fyne.NewDelta(f.x(10)-f.x(200), 0)})
-	if len(f.s.Selected) != 2 || f.s.Selected[0] != A {
+	if !sameSet(f.s.Selected, []string{A, B}) {
 		t.Fatalf("plain marquee replaces the selection: %v", f.s.Selected)
 	}
 	if !f.tl.Escape() {
@@ -138,7 +138,7 @@ func TestMarqueeSelects(t *testing.T) {
 	}
 	f.tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(f.x(5), f.rowMid("V1"))}, Dragged: fyne.NewDelta(-5, 0)})
 	f.tl.DragEnd()
-	if !slices.Equal(f.s.Selected, []string{audio, B}) {
+	if !sameSet(f.s.Selected, []string{audio, B}) {
 		t.Fatalf("Esc must restore the selection: %v", f.s.Selected)
 	}
 	// Esc when idle clears the selection
@@ -148,6 +148,14 @@ func TestMarqueeSelects(t *testing.T) {
 	if f.tl.Escape() {
 		t.Fatal("nothing left to cancel")
 	}
+}
+
+// sameSet reports whether a and b hold the same IDs in any order.
+func sameSet(a, b []string) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
 }
 
 func hasBand(tl *Timeline) bool {
@@ -296,18 +304,31 @@ func TestGroupMoveLockedTracks(t *testing.T) {
 	before := f.s.Project.Clone()
 	undo := f.s.UndoLabel()
 
-	// a member on a locked track: rejected with a message, nothing moves
+	// a clip on a locked track does not join a group: the rest moves
 	f.s.SelectClips([]string{A, audio})
+	if len(f.s.Selected) != 1 || f.s.Selected[0] != A {
+		t.Fatalf("locked clip must leave the group: %v", f.s.Selected)
+	}
 	f.press(0)
-	f.drag(fyne.NewPos(f.x(50), f.rowMid("V1")), fyne.NewPos(f.x(80), f.rowMid("V1")))
+	f.drag(fyne.NewPos(f.x(50), f.rowMid("V1")), fyne.NewPos(f.x(70), f.rowMid("V1")))
+	if len(f.errs) != 0 || f.track("V1").Clips[0].Start != 20 {
+		t.Fatalf("group move: errs %v, A at %d", f.errs, f.track("V1").Clips[0].Start)
+	}
+	f.s.Undo()
+	if f.s.UndoLabel() != undo || f.track("V1").Clips[0] != before.Tracks[0].Clips[0] {
+		t.Fatal("undo must restore the project")
+	}
+	// a single clip on a locked track: rejected with a message, nothing moves
+	f.s.SelectClip(audio)
+	f.drag(fyne.NewPos(f.x(50), f.rowMid("A1")), fyne.NewPos(f.x(80), f.rowMid("A1")))
 	if len(f.errs) != 1 || !errors.Is(f.errs[0], model.ErrLocked) {
 		t.Fatalf("want one ErrLocked, got %v", f.errs)
 	}
-	if f.errs[0].Error() != "Clips verschieben nicht möglich: Die Spur ist gesperrt. Schloss im Spurkopf lösen und erneut versuchen." {
+	if f.errs[0].Error() != "Clip verschieben nicht möglich: Die Spur ist gesperrt. Schloss im Spurkopf lösen und erneut versuchen." {
 		t.Fatalf("message %q", f.errs[0])
 	}
-	if f.s.UndoLabel() != undo || f.track("V1").Clips[0] != before.Tracks[0].Clips[0] {
-		t.Fatal("rejected group move changed the project")
+	if f.s.UndoLabel() != undo {
+		t.Fatal("rejected move changed the project")
 	}
 
 	// a locked target track: the group stays on its tracks but still moves in time
@@ -320,6 +341,30 @@ func TestGroupMoveLockedTracks(t *testing.T) {
 	}
 	if len(f.errs) != 1 {
 		t.Fatalf("no error expected for a locked target: %v", f.errs)
+	}
+}
+
+func TestLockingTrackDropsItsClipsFromGroup(t *testing.T) {
+	f := setup(t, 1000, 300)
+	f.tl.SetSnapping(false)
+	audio := f.place("A1", model.NewClip(model.KindAudio, "Ton", 0, 100))
+	A := f.clipID("V1", 0)
+	f.s.SelectClips([]string{A, audio})
+	f.tap(f.buttonPos("A1", btnLock))
+	if len(f.s.Selected) != 1 || f.s.SelectedClip != A {
+		t.Fatalf("locking A1 must drop its clip from the selection: %v (primary %s)", f.s.Selected, f.s.SelectedClip)
+	}
+	f.press(0)
+	f.drag(fyne.NewPos(f.x(50), f.rowMid("V1")), fyne.NewPos(f.x(70), f.rowMid("V1")))
+	if len(f.errs) != 0 || f.track("V1").Clips[0].Start != 20 {
+		t.Fatalf("group move after lock: errs %v", f.errs)
+	}
+	f.s.SelectClips([]string{A, audio})
+	if err := f.s.Edit("del", func(p *model.Project) error { return p.DeleteClips(f.s.Selected, false) }); err != nil {
+		t.Fatalf("group delete after lock: %v", err)
+	}
+	if len(f.track("A1").Clips) != 1 {
+		t.Fatal("the locked clip must stay")
 	}
 }
 
@@ -909,8 +954,11 @@ func TestDropBelowTracksCreatesTrack(t *testing.T) {
 	if v3 == nil || len(v3.Clips) != 1 || v3.Clips[0].Start != 100 {
 		t.Fatalf("new video track: %+v", v3)
 	}
-	if a := f.track("A1").Clips; len(a) != 1 {
-		t.Fatalf("linked audio on A1: %+v", a)
+	if a := f.track("A1").Clips; len(a) != 0 {
+		t.Fatalf("A1 must stay untouched: %+v", a)
+	}
+	if a2 := f.track("A2"); a2 == nil || len(a2.Clips) != 1 || a2.Clips[0].Start != 100 {
+		t.Fatalf("the sound goes to a new audio track: %+v", a2)
 	}
 	f.s.Undo()
 	if f.track("V3") != nil {

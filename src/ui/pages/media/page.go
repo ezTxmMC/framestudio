@@ -4,6 +4,7 @@
 package media
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -44,8 +45,14 @@ type Page struct {
 	ctx    *page.Context
 	unsub  func()
 	closed bool
+	// life ends when the page closes: queued thumbnails and a running import stop
+	// instead of starting more ffmpeg/ffprobe processes for a closed project.
+	life     context.Context
+	stopLife context.CancelFunc
 	// spawn runs background work; tests replace it to stay on one goroutine.
 	spawn func(func())
+	// probe inspects a file for import (media.ProbeContext); tests count calls.
+	probe func(ctx context.Context, path string) (model.MediaItem, error)
 	// pickFiles asks for files or folders (desktop portal); on error the page falls back
 	// to its own browser dialog. Tests replace it.
 	pickFiles pickFunc
@@ -98,12 +105,14 @@ func New(ctx *page.Context) page.Page {
 	p := &Page{
 		ctx:          ctx,
 		spawn:        func(f func()) { go f() },
+		probe:        media.ProbeContext,
 		pickFiles:    portalPick,
 		thumbs:       map[string]image.Image{},
 		loading:      map[string]bool{},
 		sem:          make(chan struct{}, 3),
 		offlineEvery: 5 * time.Second,
 	}
+	p.life, p.stopLife = context.WithCancel(context.Background())
 	p.content = p.build()
 	p.unsub = ctx.Session.Subscribe(p.onChange)
 	if ctx.Media != nil {
@@ -129,6 +138,7 @@ func (p *Page) Deactivate() { p.stopWatch() }
 
 func (p *Page) Close() {
 	p.closed = true
+	p.stopLife()
 	p.stopWatch()
 	if p.unsub != nil {
 		p.unsub()
@@ -219,6 +229,11 @@ func (p *Page) stopWatch() {
 // TypedKey: Delete removes, Enter inserts, arrows move the pool selection.
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	switch k.Name {
+	case fyne.KeyEscape:
+		// clears the pool selection, never the timeline's clips (not visible here)
+		p.sel, p.anchor = nil, ""
+		p.ctx.Session.SelectMedia("")
+		return true
 	case fyne.KeyDelete, fyne.KeyBackspace:
 		if items := p.selectedItems(); len(items) > 0 {
 			p.confirmRemove(items...)
@@ -441,9 +456,17 @@ func (p *Page) thumbFor(m model.MediaItem) image.Image {
 		return nil
 	}
 	p.loading[key] = true
-	cache := p.ctx.Media
+	cache, life := p.ctx.Media, p.life
 	p.spawn(func() {
-		p.sem <- struct{}{}
+		select {
+		case p.sem <- struct{}{}:
+		case <-life.Done():
+			return // closed while queued
+		}
+		if life.Err() != nil {
+			<-p.sem
+			return
+		}
 		img, err := cache.Thumbnail(m, 2*(cardW-2*cardPad), 2*thumbH)
 		<-p.sem
 		if err != nil {
@@ -549,6 +572,13 @@ func (p *Page) pick(id string, mod fyne.KeyModifier) {
 		primary = p.sel[len(p.sel)-1]
 	}
 	p.ctx.Session.SelectMedia(primary)
+}
+
+// SelectAll is Ctrl+A on this page: it selects every item the pool shows instead of the
+// timeline's clips. It reports true: the key is handled even with an empty pool.
+func (p *Page) SelectAll() bool {
+	p.selectAll()
+	return true
 }
 
 // selectAll selects every item the pool shows.
@@ -786,6 +816,7 @@ func (p *Page) importPaths(paths []string) {
 	p.progressMsg.Text = "Dateien werden gesucht …"
 	p.progressMsg.Refresh()
 	p.progress.SetValue(0)
+	life := p.life
 	p.spawn(func() {
 		plan := planImport(paths, existing, recursive)
 		if len(plan.files) == 0 {
@@ -801,7 +832,10 @@ func (p *Page) importPaths(paths []string) {
 		items := make([]model.MediaItem, len(plan.files))
 		errs := make([]error, len(plan.files))
 		for i, f := range plan.files {
-			items[i], errs[i] = media.Probe(f)
+			if life.Err() != nil {
+				return // the page closed: probe nothing more
+			}
+			items[i], errs[i] = p.probe(life, f)
 			done := i + 1
 			kit.Do(func() { p.importProgress(done, len(plan.files)) })
 		}

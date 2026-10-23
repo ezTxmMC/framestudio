@@ -20,7 +20,9 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
@@ -362,7 +364,9 @@ func (m *manager) loadThumbnails() {
 				if h > 216 {
 					h, w = 216, 216*p.Settings.Width/p.Settings.Height
 				}
-				img = r.Frame(p, p.Duration()/3, max(w, 1), max(h, 1))
+				// single-frame grabs (Poster) instead of playback decoders, which would
+				// decode seconds ahead per card and outlive the pass
+				img = r.FrameWith(p, p.Duration()/3, max(w, 1), max(h, 1), render.Options{Video: posterVideo{m.sh.cache}})
 			}
 			if ctx.Err() != nil {
 				return
@@ -594,4 +598,11 @@ func defaultProjectName() string {
 		return strings.TrimSuffix(filepath.Base(store.SuggestPath(dir, name)), store.Extension)
 	}
 	return name
+}
+
+// posterVideo supplies video frames for card thumbnails as single-frame grabs.
+type posterVideo struct{ c *media.Cache }
+
+func (v posterVideo) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
+	return v.c.Poster(m, float64(n)/float64(max(fps, 1)), w, h)
 }

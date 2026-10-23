@@ -369,12 +369,15 @@ func TestBulkClipEditsAreOneUndoStep(t *testing.T) {
 		t.Errorf("undo must restore every clip, music at %v dB", LinearToDB(c.Volume))
 	}
 
-	// clips on locked tracks are skipped
+	// clips on locked tracks leave a selection of several clips
 	h.s.SelectClips(ids)
 	h.p.toggleLock(m.ID)
+	if len(h.s.Selected) != 2 {
+		t.Errorf("locking must drop the music clip from the selection: %v", h.s.Selected)
+	}
 	h.s.SelectClips(ids)
-	if !strings.Contains(cp.hint.Text, "1 von 3") {
-		t.Errorf("hint %q", cp.hint.Text)
+	if len(h.s.Selected) != 2 || !strings.Contains(cp.count.Text, "2 Clips") {
+		t.Errorf("selection %v, count %q", h.s.Selected, cp.count.Text)
 	}
 	cp.fadeIn.SetValue(5)
 	mc, _, _ := h.s.Project.Clip(m.Clips[0].ID)

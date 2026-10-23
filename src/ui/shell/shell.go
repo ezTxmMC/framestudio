@@ -133,7 +133,9 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh.drivePlayback = func(s *session.Session) func() {
 		stopClock := kit.DrivePlayback(s)
 		stopSound := liveaudio.Drive(s, sh.showErr)
+		unwatch := liveaudio.WatchMedia(s, sh.cache) // files coming back online sound at once
 		return func() {
+			unwatch()
 			stopClock()
 			stopSound()
 		}
@@ -148,7 +150,7 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	w.SetContent(sh.root)
 	sh.menu = newMenus(sh)
 	sh.installKeys()
-	w.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) { sh.dropped(uris) })
+	w.SetOnDropped(sh.droppedAt)
 	w.SetCloseIntercept(sh.Quit)
 	sh.refreshChrome()
 	return sh

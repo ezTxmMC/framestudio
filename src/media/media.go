@@ -130,10 +130,28 @@ func (c *Cache) background(mediaID string, timeout time.Duration, fn func(ctx co
 	return c.inSlot(c.bg, mediaID, timeout, fn)
 }
 
-// inSlot runs fn while holding one of the slots of sem (see background).
+// inSlot runs fn while holding one of the slots of sem (see background). The timeout
+// starts once the slot is acquired: time spent queued behind other jobs does not count,
+// so a long queue cannot make healthy files time out. Queued jobs still end with the
+// cache or Cancel(mediaID).
 func (c *Cache) inSlot(sem chan struct{}, mediaID string, timeout time.Duration, fn func(ctx context.Context) (any, error)) (any, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	wait, release := c.jobContext(mediaID)
+	defer release()
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+	case <-wait.Done():
+		return nil, fmt.Errorf("Vorschau abgebrochen: %w", wait.Err())
+	}
+	ctx, cancel := context.WithTimeout(wait, timeout)
 	defer cancel()
+	return fn(ctx)
+}
+
+// jobContext returns a context that ends when the cache closes or Cancel(mediaID) is
+// called; release unregisters it and must be called when the job is done.
+func (c *Cache) jobContext(mediaID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(c.ctx)
 	key := new(int)
 	c.jmu.Lock()
 	if c.jobs[mediaID] == nil {
@@ -141,31 +159,27 @@ func (c *Cache) inSlot(sem chan struct{}, mediaID string, timeout time.Duration,
 	}
 	c.jobs[mediaID][key] = cancel
 	c.jmu.Unlock()
-	defer func() {
+	return ctx, func() {
+		cancel()
 		c.jmu.Lock()
 		delete(c.jobs[mediaID], key)
 		if len(c.jobs[mediaID]) == 0 {
 			delete(c.jobs, mediaID)
 		}
 		c.jmu.Unlock()
-	}()
-	select {
-	case sem <- struct{}{}:
-		defer func() { <-sem }()
-	case <-ctx.Done():
-		return nil, fmt.Errorf("Vorschau abgebrochen: %w", ctx.Err())
 	}
-	return fn(ctx)
 }
 
-// Cancel stops running and queued thumbnail and waveform decodes of a media item, e.g.
-// when its project closes. Callers waiting for them get an error; nothing is cached.
+// Cancel stops running and queued thumbnail, poster and waveform decodes of a media
+// item, its playback prefetchers, backward chunks and shuttle grabs, e.g. when its
+// project closes. Callers waiting for them get an error; nothing is cached.
 func (c *Cache) Cancel(mediaID string) {
 	c.jmu.Lock()
-	defer c.jmu.Unlock()
 	for _, cancel := range c.jobs[mediaID] {
 		cancel()
 	}
+	c.jmu.Unlock()
+	c.stopPrefetch(mediaID)
 }
 
 // Image returns a still image scaled to fit within maxW x maxH (aspect preserved).
@@ -348,7 +362,6 @@ func (c *Cache) peaks(m model.MediaItem) ([]float32, error) {
 // with OnInvalidate are told afterwards (on the calling goroutine).
 func (c *Cache) Invalidate(mediaID string) {
 	c.Cancel(mediaID)
-	c.stopPrefetch(mediaID)
 	c.gmu.Lock()
 	c.gens[mediaID]++
 	for _, l := range []*lru{c.stills, c.frames, c.thumbs, c.waves, c.posters} {

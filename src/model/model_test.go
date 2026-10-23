@@ -310,7 +310,101 @@ func TestGroupMoveAndDelete(t *testing.T) {
 	if err := p.DeleteClips([]string{a, b}, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Tracks[1].Clips) != 0 || p.Tracks[0].Clips[0].Start != 200 {
-		t.Fatal("ripple must be per track only")
+	if len(p.Tracks[1].Clips) != 0 || p.Tracks[0].Clips[0].Start != 100 {
+		t.Fatalf("ripple must close the gap on every track: C at %d, want 100", p.Tracks[0].Clips[0].Start)
+	}
+}
+
+func TestRippleDeleteKeepsTracksInSync(t *testing.T) {
+	p := NewProject("x") // V1, V2, A1
+	v1, a1 := p.Tracks[0].ID, p.Tracks[2].ID
+	m := MediaItem{ID: "m", Kind: KindVideo, HasAudio: true, Duration: 10 * time.Second, Path: "/m.mp4"}
+	p.AddMedia(m)
+	a := NewClip(KindColor, "A", 0, 100)
+	_ = p.PlaceClip(v1, a)
+	b, _ := p.PlaceMedia(m, 100, 125, v1) // B 100..350 with sound on A1
+	sound := p.LinkedClips(b)
+	if len(sound) != 1 {
+		t.Fatalf("linked sound %v", sound)
+	}
+	if err := p.DeleteClips([]string{a.ID}, true); err != nil {
+		t.Fatal(err)
+	}
+	bc, _, _ := p.Clip(b)
+	sc, _, _ := p.Clip(sound[0])
+	if bc.Start != 0 || sc.Start != 0 {
+		t.Fatalf("picture at %d, sound at %d; both must move to 0", bc.Start, sc.Start)
+	}
+	// a clip in the gap on another track blocks the ripple and nothing changes
+	q := p.Clone()
+	_ = q.PlaceClip(a1, NewClip(KindAudio, "Musik", 400, 50))
+	pic := NewClip(KindColor, "P", 300, 100)
+	_ = q.PlaceClip(v1, pic)
+	_ = q.PlaceClip(v1, NewClip(KindColor, "Q", 450, 10))
+	// A1 holds sound 0..250 and Musik 400..450; deleting P (300..400) would push Musik onto
+	// nothing, but V1's Q moves to 350 and A1's Musik (start 400 >= 400) to 300: no clash
+	if err := q.DeleteClips([]string{pic.ID}, true); err != nil {
+		t.Fatal(err)
+	}
+	r := p.Clone()
+	_ = r.PlaceClip(a1, NewClip(KindAudio, "Musik", 260, 200)) // spans 300..400
+	_ = r.PlaceClip(a1, NewClip(KindAudio, "Ton", 500, 10))
+	pic2 := NewClip(KindColor, "P", 300, 100)
+	_ = r.PlaceClip(v1, pic2)
+	var rb *RippleBlockedError
+	if err := r.DeleteClips([]string{pic2.ID}, true); !errors.As(err, &rb) || rb.Track != "A1" {
+		t.Fatalf("got %v, want ripple blocked on A1", err)
+	}
+}
+
+func TestDropSoundGoesToFreeOrPointedTrack(t *testing.T) {
+	p := NewProject("x") // V1, V2, A1
+	a1 := p.Tracks[2].ID
+	a2 := p.AddTrack(TrackAudio).ID
+	musik := NewClip(KindAudio, "Musik", 0, 400)
+	_ = p.PlaceClip(a1, musik)
+	m := MediaItem{ID: "m", Kind: KindVideo, HasAudio: true, Duration: 4 * time.Second, Path: "/m.mp4"}
+	p.AddMedia(m)
+	// on V1 at 200: A1 is busy with music, so the sound goes to the free A2
+	id, err := p.PlaceMedia(m, 200, 125, p.Tracks[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr, _ := p.Track(a1); len(tr.Clips) != 1 || tr.Clips[0].Length != 400 {
+		t.Fatalf("music must stay whole: %+v", tr.Clips)
+	}
+	if s := p.LinkedClips(id); len(s) != 1 {
+		t.Fatal("no sound placed")
+	} else if _, ti, _ := p.Clip(s[0]); p.Tracks[ti].ID != a2 {
+		t.Fatalf("sound on %s, want A2", p.Tracks[ti].Name)
+	}
+	// pointing at A1 explicitly overwrites there
+	q := NewProject("y")
+	_ = q.PlaceClip(q.Tracks[2].ID, NewClip(KindAudio, "Musik", 0, 400))
+	q.AddMedia(m)
+	id, _ = q.PlaceMediaTo(m, 200, 125, "", q.Tracks[2].ID)
+	if s := q.LinkedClips(id); len(s) != 1 {
+		t.Fatal("no sound")
+	} else if _, ti, _ := q.Clip(s[0]); ti != 2 {
+		t.Fatal("sound must go to the pointed track")
+	}
+	// all audio busy: a new audio track is created
+	r := NewProject("z")
+	_ = r.PlaceClip(r.Tracks[2].ID, NewClip(KindAudio, "Musik", 0, 400))
+	r.AddMedia(m)
+	if _, err := r.PlaceMedia(m, 100, 125, ""); err != nil || len(r.TrackIndices(TrackAudio)) != 2 {
+		t.Fatalf("want a new audio track, err %v", err)
+	}
+	if len(r.Tracks[2].Clips) != 1 || r.Tracks[2].Clips[0].Length != 400 {
+		t.Fatal("music must not be cut")
+	}
+	// overwriting a video with sound reuses its sound track
+	id1, _ := r.PlaceMedia(m, 500, 125, r.Tracks[0].ID)
+	_, _ = r.PlaceMedia(m, 500, 125, r.Tracks[0].ID)
+	if c, _, _ := r.Clip(id1); c != nil {
+		t.Fatal("old picture should be overwritten")
+	}
+	if n := len(r.TrackIndices(TrackAudio)); n != 2 {
+		t.Fatalf("%d audio tracks, want 2 (sound overwrites its own pair)", n)
 	}
 }

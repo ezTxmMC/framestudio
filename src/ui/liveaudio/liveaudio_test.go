@@ -369,3 +369,59 @@ func TestRealPlayer(t *testing.T) {
 		t.Fatal("no sound")
 	}
 }
+
+// fakeEvents stands in for media.Cache's offline and relink notifications.
+type fakeEvents struct {
+	mu  sync.Mutex
+	off []func()
+}
+
+func (e *fakeEvents) OnOfflineChange(fn func()) func() {
+	e.mu.Lock()
+	e.off = append(e.off, fn)
+	e.mu.Unlock()
+	return func() {}
+}
+
+func (e *fakeEvents) OnInvalidate(func(string)) func() { return func() {} }
+
+func (e *fakeEvents) fire() {
+	e.mu.Lock()
+	fns := append([]func(){}, e.off...)
+	e.mu.Unlock()
+	for _, fn := range fns {
+		go fn() // like CheckOffline, from a background goroutine
+	}
+}
+
+// hasSource reports whether the A1 clip of the newest plan has decoded audio.
+func hasSource(s *session.Session) bool {
+	pl := lookup(s).v.Plan()
+	return pl != nil && len(pl.Tracks) > 0 && len(pl.Tracks[0].Clips) > 0 && pl.Tracks[0].Clips[0].Source != nil
+}
+
+func TestOfflineChangeReplans(t *testing.T) {
+	f := newFixture(t)
+	ev := &fakeEvents{}
+	stop := WatchMedia(f.s, ev)
+	defer stop()
+	path := f.s.Project.Media[0].Path
+	if !hasSource(f.s) {
+		t.Fatal("online file must have audio")
+	}
+	// the file goes away: without an edit, playback must fall silent like export
+	if err := os.Rename(path, path+".weg"); err != nil {
+		t.Fatal(err)
+	}
+	ev.fire()
+	f.within(t, "offline file still planned", func() bool { return !hasSource(f.s) })
+	// and comes back: it sounds again without an edit
+	if err := os.Rename(path+".weg", path); err != nil {
+		t.Fatal(err)
+	}
+	ev.fire()
+	f.within(t, "file back online stays silent", func() bool { return hasSource(f.s) && ready(f.s) })
+	f.s.SetPlaying(true)
+	f.within(t, "Play must sound", f.sounding)
+	f.s.SetPlaying(false)
+}
