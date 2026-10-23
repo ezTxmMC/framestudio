@@ -2,6 +2,8 @@
 package page
 
 import (
+	"framestudio-proto/src/ui/command"
+	"framestudio-proto/src/ui/layout"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -29,6 +31,8 @@ type Context struct {
 	Media    *media.Cache
 	Navigate func(pageID string)
 	ShowErr  func(err error)
+	// Commands is the app-wide command registry (run commands from buttons, read state).
+	Commands *command.Registry
 }
 
 type Page interface {
@@ -61,4 +65,71 @@ type Waiter interface {
 // The shell routes drops to the active page, or to the media page otherwise.
 type DropTarget interface {
 	Dropped(uris []fyne.URI)
+}
+
+// CommandProvider is implemented by pages that bind commands (see src/ui/command). The
+// shell binds them in the page's scope (command.PageScope(id)) once the page exists and
+// activates the scope while the page is visible.
+type CommandProvider interface {
+	Commands() []command.Binding
+}
+
+// LayoutAware pages save and restore their split positions and hidden areas.
+type LayoutAware interface {
+	LayoutState() layout.Page
+	ApplyLayout(l layout.Page)
+}
+
+// Panel IDs: areas that can be detached into their own window (any monitor).
+const (
+	PanelProgram   = "program"   // program monitor with transport
+	PanelCleanFeed = "cleanfeed" // picture only, black surround, no controls (client/fullscreen output)
+	PanelTimeline  = "timeline"
+	PanelInspector = "inspector"
+	PanelLibrary   = "library"   // edit page media/generator library
+	PanelMediaPool = "mediapool" // media page pool with import
+	PanelScopes    = "scopes"
+	PanelMixer     = "mixer"
+	PanelQueue     = "queue" // render queue
+)
+
+// Panel is a detachable area instantiated for one project's Context.
+type Panel interface {
+	Content() fyne.CanvasObject
+	// TypedKey handles keys while the panel's window has focus and no widget does.
+	TypedKey(k *fyne.KeyEvent) bool
+	Close()
+}
+
+// PanelInfo registers a detachable panel. Owners register in their package init().
+type PanelInfo struct {
+	ID    string
+	Title string
+	Icon  fyne.Resource
+	New   func(ctx *Context) Panel
+}
+
+var panels []PanelInfo
+
+// RegisterPanel adds or replaces a panel factory.
+func RegisterPanel(p PanelInfo) {
+	for i := range panels {
+		if panels[i].ID == p.ID {
+			panels[i] = p
+			return
+		}
+	}
+	panels = append(panels, p)
+}
+
+// Panels lists the registered panels in registration order.
+func Panels() []PanelInfo { return append([]PanelInfo(nil), panels...) }
+
+func PanelByID(id string) (PanelInfo, bool) {
+	for _, p := range panels {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return PanelInfo{}, false
 }
