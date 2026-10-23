@@ -148,6 +148,21 @@ func (l *loader) forget(id string) {
 	}
 }
 
+// recheckOffline drops finished assets whose offline state disagrees with the media
+// cache's offline map, so they load again. It reports whether anything was dropped.
+func (l *loader) recheckOffline(offline func(path string) bool) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	dropped := false
+	for k, a := range l.items {
+		if a.done && a.offline != offline(k.path) {
+			delete(l.items, k)
+			dropped = true
+		}
+	}
+	return dropped
+}
+
 func (l *loader) close() {
 	l.mu.Lock()
 	l.closed = true

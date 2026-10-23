@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"strconv"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -35,6 +36,8 @@ type Page struct {
 	active  bool
 	closed  bool
 	unsub   func()
+	// unsubMedia ends the media cache subscriptions (offline map, relink invalidation).
+	unsubMedia []func()
 
 	viewer       *viewer.Viewer
 	compare      bool
@@ -101,6 +104,34 @@ func (p *Page) Content() fyne.CanvasObject {
 	p.content = container.NewStack(canvas.NewRectangle(studiotheme.Gap), body)
 
 	p.unsub = p.s.Subscribe(p.changed)
+	if cache := p.ctx.Media; cache != nil {
+		// Both run on background goroutines; posters of a relinked item or of files that
+		// came back are loaded again.
+		p.unsubMedia = append(p.unsubMedia,
+			cache.OnOfflineChange(func() {
+				kit.Do(func() {
+					if p.closed {
+						return
+					}
+					clear(p.thumbState)
+					p.refreshStrip()
+				})
+			}),
+			cache.OnInvalidate(func(id string) {
+				kit.Do(func() {
+					if p.closed {
+						return
+					}
+					for k := range p.thumbs {
+						if strings.HasPrefix(k, id+"\x00") {
+							delete(p.thumbs, k)
+						}
+					}
+					clear(p.thumbState)
+					p.refreshStrip()
+				})
+			}))
+	}
 	p.refreshStrip()
 	p.primary.refresh()
 	return p.content
@@ -203,6 +234,10 @@ func (p *Page) Close() {
 		p.unsub()
 		p.unsub = nil
 	}
+	for _, u := range p.unsubMedia {
+		u()
+	}
+	p.unsubMedia = nil
 	if p.scopes != nil {
 		p.scopes.close()
 	}
@@ -440,6 +475,9 @@ func (p *Page) thumbFor(c model.Clip, used map[string]bool) (img image.Image, mi
 	}
 	m, ok := p.s.Project.MediaByID(c.MediaID)
 	if !ok || p.ctx.Media == nil {
+		return nil, true, nil
+	}
+	if p.ctx.Media.Offline(*m) {
 		return nil, true, nil
 	}
 	sec := posterSec(c, p.s.FPS())

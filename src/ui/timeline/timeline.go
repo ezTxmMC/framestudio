@@ -45,12 +45,13 @@ type Timeline struct {
 	offset   float64 // frame at the left edge of the lanes
 	vscroll  float32
 
-	unsub   func()
-	ld      *loader
-	posters *posterLoader
-	known   map[string]model.MediaItem // media as last drawn, to spot relinks
-	r       *tlRenderer
-	closed  bool
+	unsub      func()
+	unsubMedia []func() // media cache subscriptions (offline map, relink invalidation)
+	ld         *loader
+	posters    *posterLoader
+	known      map[string]model.MediaItem // media as last drawn, to spot relinks
+	r          *tlRenderer
+	closed     bool
 
 	// heights holds track heights the user dragged, by track ID (view state, not saved).
 	heights map[string]float32
@@ -93,6 +94,30 @@ func New(s *session.Session, cache *media.Cache) *Timeline {
 	t.heights = map[string]float32{}
 	t.ExtendBaseWidget(t)
 	t.unsub = s.Subscribe(t.changed)
+	if cache != nil {
+		// The cache's offline map and relink invalidations run on background goroutines;
+		// hop to the UI thread before touching the loaders.
+		t.unsubMedia = append(t.unsubMedia,
+			cache.OnOfflineChange(func() {
+				kit.Do(func() {
+					if !t.closed && t.ld.recheckOffline(func(path string) bool {
+						return cache.Offline(model.MediaItem{Path: path})
+					}) {
+						t.Refresh()
+					}
+				})
+			}),
+			cache.OnInvalidate(func(id string) {
+				kit.Do(func() {
+					if t.closed {
+						return
+					}
+					t.ld.forget(id)
+					t.posters.forget(id)
+					t.Refresh()
+				})
+			}))
+	}
 	return t
 }
 
@@ -200,6 +225,10 @@ func (t *Timeline) Close() {
 		t.unregister()
 		t.unregister = nil
 	}
+	for _, u := range t.unsubMedia {
+		u()
+	}
+	t.unsubMedia = nil
 	t.ld.close()
 	t.posters.close()
 }

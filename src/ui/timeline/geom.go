@@ -467,3 +467,27 @@ func abs(n int) int {
 	}
 	return n
 }
+
+// ContentHeight is the height the widget needs to show every track without vertical
+// scrolling: ruler, all lanes at their current heights and the drop strip below them.
+// Pages use it to size the timeline panel.
+func (t *Timeline) ContentHeight() float32 {
+	h := rulerH + tailH
+	for i := range t.s.Project.Tracks {
+		h += trackHeight(&t.s.Project.Tracks[i], t.heights)
+	}
+	return h
+}
+
+// LanePoint is the widget position of frame on the middle of the lane of track trackID
+// at the current zoom, scroll and track heights. ok is false for unknown tracks. Used by
+// integration tests to drive drags and drops.
+func (t *Timeline) LanePoint(frame float64, trackID string) (pos fyne.Position, ok bool) {
+	g := t.geom()
+	for _, r := range g.rows {
+		if t.s.Project.Tracks[r.track].ID == trackID {
+			return fyne.NewPos(g.frameX(frame), r.y+r.h/2), true
+		}
+	}
+	return fyne.Position{}, false
+}

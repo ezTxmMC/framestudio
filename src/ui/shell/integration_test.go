@@ -19,6 +19,7 @@ import (
 	"framestudio-proto/src/export"
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/session"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
@@ -124,6 +125,7 @@ func demoProject(t *testing.T, still, video, tone string) *model.Project {
 // newIntegrationShell builds the real shell with the real pages.
 func newIntegrationShell(t *testing.T) (*Shell, fyne.Window, *kit.UIQueue) {
 	t.Helper()
+	useFakeSound(t) // live audio runs at real pace without opening the sound card
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	a := test.NewTempApp(t)
@@ -183,31 +185,18 @@ func TestIntegrationPages(t *testing.T) {
 		{page.Media, "medien"}, {page.Edit, "schnitt"}, {page.Color, "farbe"},
 		{page.Audio, "ton"}, {page.Deliver, "export"},
 	}
-	for _, pg := range pages {
-		sh.showPageID(pg.id)
-		if sh.active.current != pg.id {
-			t.Fatalf("page %s not shown", pg.id)
-		}
-		if pg.id == page.Media && len(s.Project.Media) > 0 {
-			s.SelectMedia(s.Project.Media[0].ID)
-		}
-		if pg.id == page.Color {
-			if c, ok := firstClip(s.Project, model.KindVideo); ok {
-				s.SelectClip(c)
-			}
-		}
-		if pg.id == page.Audio {
-			if c, ok := firstClip(s.Project, model.KindAudio); ok {
-				s.SelectClip(c)
-			}
-		}
-		q.Settle(400*time.Millisecond, 15*time.Second)
-		img := w.Canvas().Capture()
-		if shots {
-			writePNG(t, img, "/tmp/fs-int-"+pg.name+".png")
+	sizes := []struct {
+		size   fyne.Size
+		suffix string
+	}{{fyne.NewSize(1440, 900), ""}, {fyne.NewSize(1280, 800), "-1280"}}
+	for _, sz := range sizes {
+		w.Resize(sz.size)
+		for _, pg := range pages {
+			shootPage(t, sh, w, q, s, pg.id, pg.name+sz.suffix, shots)
 		}
 	}
 
+	w.Resize(sizes[0].size)
 	sh.ShowManager()
 	q.Settle(400*time.Millisecond, 10*time.Second)
 	if shots {
@@ -215,6 +204,34 @@ func TestIntegrationPages(t *testing.T) {
 	}
 	if !sh.showManager {
 		t.Fatal("manager not shown")
+	}
+}
+
+// shootPage shows page id with a typical selection and captures it as
+// /tmp/fs-int-<name>.png when shots is set.
+func shootPage(t *testing.T, sh *Shell, w fyne.Window, q *kit.UIQueue, s *session.Session, id, name string, shots bool) {
+	t.Helper()
+	sh.showPageID(id)
+	if sh.active.current != id {
+		t.Fatalf("page %s not shown", id)
+	}
+	if id == page.Media && len(s.Project.Media) > 0 {
+		s.SelectMedia(s.Project.Media[0].ID)
+	}
+	if id == page.Color {
+		if c, ok := firstClip(s.Project, model.KindVideo); ok {
+			s.SelectClip(c)
+		}
+	}
+	if id == page.Audio {
+		if c, ok := firstClip(s.Project, model.KindAudio); ok {
+			s.SelectClip(c)
+		}
+	}
+	q.Settle(400*time.Millisecond, 15*time.Second)
+	img := w.Canvas().Capture()
+	if shots {
+		writePNG(t, img, "/tmp/fs-int-"+name+".png")
 	}
 }
 

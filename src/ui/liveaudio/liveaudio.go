@@ -45,6 +45,21 @@ var (
 	newEngine = func() *audio.Engine { return audio.New(audio.Config{}) }
 )
 
+// UseEngine replaces how the shared engine is created, e.g. with a fake output in
+// integration tests that must not open the sound card. Call it while no session is
+// driven; restore puts the default back.
+func UseEngine(create func() *audio.Engine) (restore func()) {
+	mu.Lock()
+	saved := newEngine
+	newEngine = create
+	mu.Unlock()
+	return func() {
+		mu.Lock()
+		newEngine = saved
+		mu.Unlock()
+	}
+}
+
 // Drive plays s's audio whenever s plays and starts decoding its media right away.
 // onError receives problems once per session (missing player or ffmpeg); stop ends the
 // sound. Stopping the last driven session shuts the player down.
@@ -88,6 +103,10 @@ func Drive(s *session.Session, onError func(error)) (stop func()) {
 		}
 	}
 }
+
+// Active reports whether s is driven, i.e. its playback is sounded by the live engine.
+// UI thread or any goroutine.
+func Active(s *session.Session) bool { return lookup(s) != nil }
 
 // Hold mutes the live sound of s while another component plays it (the audio page's
 // "Vorhören"); call release when done. UI thread only.

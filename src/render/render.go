@@ -22,6 +22,16 @@ type VideoSource interface {
 type Options struct {
 	SkipGrade bool        // render without colour correction (before/after compare)
 	Video     VideoSource // overrides Renderer.Video for this call
+	// Rate is the playback rate the frame is rendered for (0 = paused or scrubbing).
+	// When it is not 0 or 1 and the source implements PlaybackSource, frames are fetched
+	// with PlaybackFrame so reverse and fast playback can decode ahead and skip frames.
+	Rate float64
+}
+
+// PlaybackSource is an optional VideoSource extension for shuttle playback.
+// *media.Cache implements it.
+type PlaybackSource interface {
+	PlaybackFrame(m model.MediaItem, n, fps, w, h int, rate float64) (image.Image, error)
 }
 
 type Renderer struct {
@@ -68,7 +78,7 @@ func (r *Renderer) FrameWith(p *model.Project, f, w, h int, o Options) *image.NR
 			continue
 		}
 		l := getLayer(w, h)
-		bounds, offline := r.drawClip(l, p, c, f, src)
+		bounds, offline := r.drawClip(l, p, c, f, src, o.Rate)
 		if grade && !offline {
 			gradeRect(l, bounds, c.Grade)
 		}

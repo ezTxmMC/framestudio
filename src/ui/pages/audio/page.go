@@ -101,7 +101,9 @@ func New(ctx *page.Context) page.Page {
 		onChange: p.updateTransport,
 		onError:  p.showErr,
 	}
-	p.prev.live = p.prev.liveAvailable
+	// Vorhören goes through session playback when the live engine sounds this session and
+	// has its tools; otherwise it mixes a WAV for an external player and holds the engine.
+	p.prev.live = func() bool { return liveaudio.Active(p.ctx.Session) && p.prev.liveAvailable() }
 	return p
 }
 

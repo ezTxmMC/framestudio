@@ -3,7 +3,6 @@ package edit
 import (
 	"fmt"
 	"image"
-	"os"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -47,6 +46,12 @@ type library struct {
 
 	genRows []*row
 	gen     int
+
+	// offline is the media cache's offline state as last drawn (path -> missing);
+	// unsubs end the cache subscriptions on close.
+	offline map[string]bool
+	unsubs  []func()
+	closed  bool
 }
 
 func newLibrary(pg *Page) *library {
@@ -90,7 +95,61 @@ func newLibrary(pg *Page) *library {
 	l.content = container.NewThemeOverride(l.tabs, smallTheme{studiotheme.New()})
 	l.tabs.OnSelected = func(*container.TabItem) { l.content.Refresh() }
 	l.update(session.ChangeProject | session.ChangeSelection)
+	if cache := pg.ctx.Media; cache != nil {
+		// Both callbacks run on background goroutines.
+		l.unsubs = append(l.unsubs,
+			cache.OnOfflineChange(func() { pg.post(l.offlineChanged) }),
+			cache.OnInvalidate(func(id string) {
+				pg.post(func() {
+					if l.closed {
+						return
+					}
+					for k := range l.thumbs {
+						if strings.HasPrefix(k, id+"|") {
+							delete(l.thumbs, k)
+						}
+					}
+					l.rebuild()
+				})
+			}))
+	}
 	return l
+}
+
+// checkOffline refreshes the cache's offline map for the project's media off the UI
+// thread; a change comes back through OnOfflineChange.
+func (l *library) checkOffline() {
+	cache := l.pg.ctx.Media
+	if cache == nil || l.closed {
+		return
+	}
+	items := append([]model.MediaItem(nil), l.pg.ctx.Session.Project.Media...)
+	go cache.CheckOffline(items)
+}
+
+// offlineChanged rebuilds the rows when a file of this project went offline or came back.
+func (l *library) offlineChanged() {
+	if l.closed {
+		return
+	}
+	for _, m := range l.pg.ctx.Session.Project.Media {
+		if l.isOffline(m) != l.offline[m.Path] {
+			l.rebuild()
+			return
+		}
+	}
+}
+
+func (l *library) isOffline(m model.MediaItem) bool {
+	return m.Path != "" && l.pg.ctx.Media != nil && l.pg.ctx.Media.Offline(m)
+}
+
+func (l *library) close() {
+	l.closed = true
+	for _, u := range l.unsubs {
+		u()
+	}
+	l.unsubs = nil
 }
 
 func (l *library) mediaTabActive() bool { return l.tabs.SelectedIndex() == 0 }
@@ -208,6 +267,7 @@ func (l *library) update(c session.Change) {
 		if sig := b.String(); sig != l.sig {
 			l.sig = sig
 			l.rebuild()
+			l.checkOffline()
 		}
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
@@ -251,9 +311,12 @@ func (l *library) rebuild() {
 	s := l.pg.ctx.Session
 	l.rows = map[string]*row{}
 	l.list.Objects = nil
+	l.offline = map[string]bool{}
 	for _, m := range s.Project.Media {
 		id := m.ID
-		r := newRow(itemLayout(l.thumb(m), m.Name, mediaMeta(s.Project, m)),
+		off := l.isOffline(m)
+		l.offline[m.Path] = off
+		r := newRow(itemLayout(l.thumb(m), m.Name, mediaMeta(s.Project, m, off)),
 			nil, func() { l.click(id, 0); l.pg.insertMedia(id, false) })
 		r.OnTapMod = func(mod fyne.KeyModifier) { l.click(id, mod) }
 		r.OnDrag = func(ev *fyne.DragEvent) { l.drag(id, ev) }
@@ -320,8 +383,10 @@ func kindIcon(k model.ClipKind) fyne.Resource {
 	return theme.MediaPhotoIcon()
 }
 
-func mediaMeta(p *model.Project, m model.MediaItem) string {
-	if _, err := os.Stat(m.Path); m.Path != "" && err != nil {
+// mediaMeta is a library row's detail line; offline comes from the media cache's offline
+// map so the UI thread never touches the file system.
+func mediaMeta(p *model.Project, m model.MediaItem, offline bool) string {
+	if offline {
 		return "Datei fehlt"
 	}
 	parts := []string{kindNames[m.Kind]}

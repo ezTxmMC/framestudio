@@ -46,10 +46,9 @@ type Page struct {
 	bladeAll bool
 	zoom     float32
 
-	attached    fyne.Window // window the timeline was attached to for media drops
-	selectAllOn fyne.Canvas // canvas holding our Ctrl+A shortcut while active
-	unsub       func()
-	closed      bool
+	attached fyne.Window // window the timeline was attached to for media drops
+	unsub    func()
+	closed   bool
 }
 
 func New(ctx *page.Context) page.Page {
@@ -138,26 +137,14 @@ func (p *Page) Activate() {
 	}
 	if p.lib != nil {
 		p.lib.retryThumbs()
+		p.lib.checkOffline()
 	}
 	p.attachWindow()
-	if w := p.ctx.Window; w != nil && p.root != nil && p.selectAllOn == nil {
-		c := w.Canvas()
-		c.AddShortcut(&fyne.ShortcutSelectAll{}, func(fyne.Shortcut) { p.SelectAll() })
-		p.selectAllOn = c
-	}
 }
 
 func (p *Page) Deactivate() {
 	if p.viewer != nil {
 		p.viewer.SetActive(false)
-	}
-	p.dropShortcuts()
-}
-
-func (p *Page) dropShortcuts() {
-	if p.selectAllOn != nil {
-		p.selectAllOn.RemoveShortcut(&fyne.ShortcutSelectAll{})
-		p.selectAllOn = nil
 	}
 }
 
@@ -167,14 +154,15 @@ func (p *Page) Close() {
 		return
 	}
 	p.closed = true
-	p.dropShortcuts()
+	p.lib.close()
 	p.unsub()
 	p.tl.Close()
 	p.viewer.Close()
 	p.transport.Close()
 }
 
-// SelectAll selects every clip on unlocked tracks (Ctrl+A).
+// SelectAll selects every clip on unlocked tracks. Ctrl+A is owned by the shell, which
+// calls Session.SelectAll for the active project; this is kept for direct callers.
 func (p *Page) SelectAll() {
 	if p.root != nil {
 		p.ctx.Session.SelectAll()
@@ -229,10 +217,8 @@ func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 			kit.CancelMediaDrag()
 			return true
 		}
-		if len(s.Selected) == 0 && s.SelectedClip == "" {
-			return false
-		}
-		s.SelectClip("")
+		// The timeline cancels a rename, marquee or drag first, else clears the selection.
+		return p.tl.Escape()
 	case fyne.KeyDelete, fyne.KeyBackspace:
 		return p.deleteSelected(false)
 	case fyne.KeyPlus, fyne.KeyEqual, fyne.KeyRightBracket: // "+" sits on "]" in German layouts
@@ -513,14 +499,9 @@ func (p *Page) setFPS(fps int) {
 	p.edit("Bildrate ändern", func(pr *model.Project) error { return rescaleFPS(pr, fps) })
 }
 
-// Timeline metrics (see the timeline package) used to size the timeline panel so every
-// track of a typical project shows without scrolling.
-const (
-	tlRulerH  = 26
-	tlVideoH  = 70
-	tlAudioH  = 56
-	tlMaxPart = 0.55 // the timeline never takes more of the page height than this
-)
+// tlMaxPart caps the timeline panel's share of the page height; below it the panel is
+// sized so every track shows without scrolling (Timeline.ContentHeight).
+const tlMaxPart = 0.55
 
 // Preferred panel widths: the library and inspector keep a usable width, the program
 // monitor takes the rest.
@@ -573,15 +554,7 @@ func splitGap(sp *container.Split, total float32, horizontal bool) float32 {
 }
 
 func (l *fitTimeline) wantHeight() float32 {
-	p := l.pg.ctx.Session.Project
-	h := float32(tlRulerH + 4)
-	for _, t := range p.Tracks {
-		if t.Kind == model.TrackAudio {
-			h += tlAudioH
-		} else {
-			h += tlVideoH
-		}
-	}
+	h := l.pg.tl.ContentHeight() + 4
 	bottom := l.pg.vsplit.Trailing
 	// panel chrome = panel min height minus the timeline's own min height
 	chrome := bottom.MinSize().Height - l.pg.timelineHost.MinSize().Height

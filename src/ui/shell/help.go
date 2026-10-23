@@ -74,7 +74,8 @@ var shortcutColumns = [2][]shortcutGroup{
 			{"N", "Roll-Trim: Schnittpunkt zwischen zwei Clips"},
 			{"S", "Clip am Playhead teilen"},
 			{"M", "Marker setzen"},
-			{"Entf", "Ausgewählte Clips löschen"},
+			{"Entf | Rücktaste", "Ausgewählte Clips löschen"},
+			{"Eingabe", "Ausgewähltes Medium am Playhead einfügen"},
 		}},
 		{"Timeline", []shortcut{
 			{"Strg+Mausrad", "Zoomen"},

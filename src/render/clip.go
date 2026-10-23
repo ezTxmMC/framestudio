@@ -12,7 +12,7 @@ var errNoSource = errors.New("keine Medienquelle")
 
 // drawClip renders clip c at timeline frame f into the transparent layer l and returns
 // the region it touched. offline is true when a placeholder was drawn instead.
-func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f int, vs VideoSource) (bounds image.Rectangle, offline bool) {
+func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f int, vs VideoSource, rate float64) (bounds image.Rectangle, offline bool) {
 	w, h := l.Rect.Dx(), l.Rect.Dy()
 	switch c.Kind {
 	case model.KindColor:
@@ -39,6 +39,11 @@ func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f i
 		src, err = safeFetch(func() (image.Image, error) {
 			if isNil(vs) {
 				return nil, errNoSource
+			}
+			if rate != 0 && rate != 1 {
+				if ps, ok := vs.(PlaybackSource); ok {
+					return ps.PlaybackFrame(*m, n, fps, rw, rh, rate)
+				}
 			}
 			return vs.VideoFrame(*m, n, fps, rw, rh)
 		})

@@ -218,10 +218,7 @@ func TestDeleteSelectionAndShortcuts(t *testing.T) {
 		t.Fatalf("ripple delete should pull Ton 2 to 10, got %d", c.Start)
 	}
 
-	// Ctrl+A via the window shortcut and SelectAll; Esc clears
-	if f.pg.selectAllOn != f.w.Canvas() {
-		t.Fatal("Ctrl+A not registered while the page is active")
-	}
+	// SelectAll (the shell routes Ctrl+A to the session); Esc clears
 	f.pg.SelectAll()
 	if len(f.s.Selected) != 3 {
 		t.Fatalf("Ctrl+A selected %d clips", len(f.s.Selected))
@@ -231,10 +228,6 @@ func TestDeleteSelectionAndShortcuts(t *testing.T) {
 	}
 	if press(f, fyne.KeyEscape) {
 		t.Fatal("Esc without selection must not be handled")
-	}
-	f.pg.Deactivate()
-	if f.pg.selectAllOn != nil {
-		t.Fatal("Ctrl+A must be released while the page is hidden")
 	}
 }
 

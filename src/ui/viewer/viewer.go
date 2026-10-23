@@ -216,7 +216,13 @@ func (v *Viewer) requestRender() {
 	if src == nil {
 		return
 	}
-	req := request{p: v.snap, f: v.s.Playhead, w: w, h: h, opts: v.opts, src: src, post: v.post}
+	opts := v.opts
+	opts.Rate = 0
+	if v.s.Playing {
+		// Shuttle rates let the media cache decode ahead (reverse) or skip frames (fast).
+		opts.Rate = v.s.Rate
+	}
+	req := request{p: v.snap, f: v.s.Playhead, w: w, h: h, opts: opts, src: src, post: v.post}
 	if req.same(v.last) {
 		return
 	}
