@@ -178,3 +178,44 @@ func (o *nullOutput) Close() error {
 	}
 	return nil
 }
+
+// PlayerNames lists the supported player programs in order of preference.
+func PlayerNames() []string {
+	names := make([]string, len(players))
+	for i, p := range players {
+		names[i] = p.name
+	}
+	return names
+}
+
+// PlayerInstalled reports whether the named player program is on PATH.
+func PlayerInstalled(name string) bool {
+	_, err := lookPath(name)
+	return err == nil
+}
+
+// Opener returns the function that opens the output for a player choice: "" or "auto"
+// tries every player in order of preference (OpenPlayer); a program name uses only that
+// player, so the user's choice is honoured, and reports clearly when it is missing.
+func Opener(name string) func() (Output, error) {
+	if name == "" || name == "auto" {
+		return OpenPlayer
+	}
+	for _, p := range players {
+		if p.name != name {
+			continue
+		}
+		return func() (Output, error) {
+			bin, err := lookPath(p.name)
+			if err != nil {
+				return nil, fmt.Errorf("Wiedergabe ohne Ton: %s ist nicht installiert. In den Einstellungen unter Audio einen anderen Player oder „Automatisch“ wählen.", p.name)
+			}
+			out, err := startPlayer(bin, p)
+			if err != nil {
+				return nil, fmt.Errorf("Wiedergabe ohne Ton: %s lässt sich nicht starten (%v). Audioausgabe des Systems prüfen.", p.name, err)
+			}
+			return out, nil
+		}
+	}
+	return OpenPlayer // unknown name (old settings file): automatic
+}

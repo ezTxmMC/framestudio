@@ -47,11 +47,11 @@ func (c *lru) peek(key string) (any, bool) {
 // put stores val, evicting the oldest entries to stay within budget. Values larger
 // than the whole budget are not stored.
 func (c *lru) put(key, owner string, val any, size int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if size > c.budget {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if e, ok := c.items[key]; ok {
 		c.remove(e)
 	}
@@ -60,6 +60,22 @@ func (c *lru) put(key, owner string, val any, size int64) {
 	for c.used > c.budget {
 		c.remove(c.ll.Back())
 	}
+}
+
+// setBudget changes the byte budget, evicting the oldest entries when it shrinks.
+func (c *lru) setBudget(budget int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.budget = budget
+	for c.used > c.budget && c.ll.Len() > 0 {
+		c.remove(c.ll.Back())
+	}
+}
+
+func (c *lru) getBudget() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.budget
 }
 
 func (c *lru) remove(e *list.Element) {

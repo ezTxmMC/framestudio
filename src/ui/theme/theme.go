@@ -12,14 +12,16 @@ import (
 )
 
 var (
-	Gap        = color.NRGBA{0x16, 0x17, 0x1A, 0xFF} // window background between panels
-	Panel      = color.NRGBA{0x22, 0x23, 0x27, 0xFF}
-	Raised     = color.NRGBA{0x2C, 0x2E, 0x33, 0xFF}
-	Lane       = color.NRGBA{0x1B, 0x1C, 0x20, 0xFF}
-	Border     = color.NRGBA{0x38, 0x3A, 0x41, 0xFF}
-	Text       = color.NRGBA{0xDA, 0xDB, 0xD7, 0xFF}
-	Muted      = color.NRGBA{0x8B, 0x8E, 0x96, 0xFF}
-	Faint      = color.NRGBA{0x55, 0x58, 0x60, 0xFF}
+	Gap    = color.NRGBA{0x16, 0x17, 0x1A, 0xFF} // window background between panels
+	Panel  = color.NRGBA{0x22, 0x23, 0x27, 0xFF}
+	Raised = color.NRGBA{0x2C, 0x2E, 0x33, 0xFF}
+	Lane   = color.NRGBA{0x1B, 0x1C, 0x20, 0xFF}
+	Border = color.NRGBA{0x38, 0x3A, 0x41, 0xFF}
+	Text   = color.NRGBA{0xDA, 0xDB, 0xD7, 0xFF}
+	Muted  = color.NRGBA{0x8B, 0x8E, 0x96, 0xFF}
+	Faint  = color.NRGBA{0x55, 0x58, 0x60, 0xFF}
+	// Steel is the accent colour (selection, focus, active controls). It follows
+	// settings.Display.Accent: Configure updates it in place.
 	Steel      = color.NRGBA{0x5A, 0x8C, 0xEB, 0xFF}
 	Tally      = color.NRGBA{0xE8, 0x38, 0x3D, 0xFF}
 	MonitorOut = color.NRGBA{0x00, 0x00, 0x00, 0xFF}
@@ -89,6 +91,10 @@ func (Theme) Color(n fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 		return color.NRGBA{0, 0, 0, 0x66}
 	case theme.ColorNameError:
 		return Tally
+	case ColorNameMuted:
+		return Muted
+	case ColorNameAccent:
+		return Steel
 	}
 	return theme.DefaultTheme().Color(n, theme.VariantDark)
 }
@@ -112,6 +118,11 @@ func (Theme) Icon(n fyne.ThemeIconName) fyne.Resource {
 }
 
 func (Theme) Size(n fyne.ThemeSizeName) float32 {
+	if compact.Load() {
+		if v, ok := compactSize(n); ok {
+			return v
+		}
+	}
 	switch n {
 	case theme.SizeNameText:
 		return 13

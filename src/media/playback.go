@@ -205,7 +205,7 @@ func (c *Cache) single(m model.MediaItem, s stream, n int) (image.Image, error) 
 // fills at most a quarter of the frame cache.
 func (c *Cache) chunkFrames(s stream) int {
 	n := reverseSeconds * s.fps
-	if limit := int(c.frames.budget / 4 / int64(s.w*s.h*4)); n > limit {
+	if limit := int(c.frames.getBudget() / 4 / int64(s.w*s.h*4)); n > limit {
 		n = max(limit, 1)
 	}
 	return n
