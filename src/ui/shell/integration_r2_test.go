@@ -14,6 +14,7 @@ import (
 	"framestudio-proto/src/audio"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/store"
+	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
@@ -275,16 +276,14 @@ func TestIntegrationRound2(t *testing.T) {
 // page handles.
 func TestHelpCoversEditKeyMap(t *testing.T) {
 	help := map[string]bool{}
-	for _, col := range shortcutColumns {
-		for _, g := range col {
-			for _, sc := range g.Keys {
-				for _, k := range strings.Split(sc.Keys, " | ") {
-					help[k] = true
-				}
+	for _, g := range shortcutGroups(command.NewRegistry()) {
+		for _, sc := range g.Keys {
+			for _, k := range strings.Split(sc.Keys, " | ") {
+				help[k] = true
 			}
 		}
 	}
-	alias := map[string]string{"+": "Plus"}
+	alias := map[string]string{"+": "Plus", "−": "-"}
 	for _, g := range editpage.KeyMap {
 		for _, k := range g.Keys {
 			for _, key := range strings.Split(k[0], " / ") {

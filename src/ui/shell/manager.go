@@ -91,7 +91,7 @@ func newManager(sh *Shell) *manager {
 	title := text("Projektmanager", studiotheme.Muted, 13, false)
 	m.back = widget.NewButtonWithIcon("Zurück zu den Projekten", theme.NavigateBackIcon(), sh.leaveManager)
 	m.back.Importance = widget.LowImportance
-	header := bar(44, false, container.NewBorder(nil, nil,
+	header := bar(44, studiotheme.Lane, false, container.NewBorder(nil, nil,
 		container.NewHBox(strut(8, 0), container.NewCenter(brand), strut(4, 0), vline(18), strut(4, 0), container.NewCenter(title)),
 		container.NewHBox(container.NewCenter(m.back), strut(6, 0))))
 
@@ -150,7 +150,7 @@ func newManager(sh *Shell) *manager {
 	folder.SetMinSize(fyne.NewSquareSize(14))
 	folder.Translucency = 0.5
 	m.dirText = kit.MonoText("", studiotheme.Faint, 11)
-	footer := bar(52, true, container.NewBorder(nil, nil,
+	footer := bar(52, studiotheme.Lane, true, container.NewBorder(nil, nil,
 		container.NewHBox(strut(8, 0), container.NewCenter(folder), container.NewCenter(m.dirText)),
 		container.NewHBox(container.NewCenter(openSel), container.NewCenter(rename), container.NewCenter(dup), container.NewCenter(del),
 			strut(4, 0), vline(22), strut(4, 0),
@@ -542,8 +542,8 @@ func (m *manager) deleteSelected() {
 	}, m.sh.win).Show()
 }
 
-// typedKey handles keys while the manager is shown.
-func (m *manager) typedKey(k *fyne.KeyEvent) {
+// typedKey handles keys while the manager is shown and reports whether it used k.
+func (m *manager) typedKey(k *fyne.KeyEvent) bool {
 	i := slices.IndexFunc(m.cards, func(c *projectCard) bool { return c.d.Path == m.selected })
 	switch k.Name {
 	case fyne.KeyReturn, fyne.KeyEnter:
@@ -556,7 +556,7 @@ func (m *manager) typedKey(k *fyne.KeyEvent) {
 		m.sh.leaveManager()
 	case fyne.KeyLeft, fyne.KeyRight:
 		if len(m.cards) == 0 {
-			return
+			return true
 		}
 		if k.Name == fyne.KeyLeft {
 			i--
@@ -564,7 +564,10 @@ func (m *manager) typedKey(k *fyne.KeyEvent) {
 			i++
 		}
 		m.selectPath(m.cards[max(0, min(i, len(m.cards)-1))].d.Path)
+	default:
+		return false
 	}
+	return true
 }
 
 // newProjectDialog asks for name and preset and opens the new project.

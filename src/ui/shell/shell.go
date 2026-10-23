@@ -1,5 +1,6 @@
 // Package shell is the application frame: project manager, project tabs (multiple open
-// projects), page bar, menus, shortcuts, saving and autosave.
+// projects), the custom menu bar, page bar, the command registry with the shell's own
+// commands, key routing, settings, the workspace host, saving and autosave.
 //
 // OWNER: shell agent. Run is the contract; do not change its signature.
 package shell
@@ -22,8 +23,11 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
+	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/kit"
+	wslayout "framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
 	audiopage "framestudio-proto/src/ui/pages/audio"
@@ -31,25 +35,30 @@ import (
 	deliverpage "framestudio-proto/src/ui/pages/deliver"
 	editpage "framestudio-proto/src/ui/pages/edit"
 	mediapage "framestudio-proto/src/ui/pages/media"
+	"framestudio-proto/src/ui/workspace"
 )
-
-// autosaveInterval is how often dirty projects with a file are written in the background.
-const autosaveInterval = 90 * time.Second
 
 // Run builds the main window for app a, optionally opening the given project files, and blocks.
 func Run(a fyne.App, files []string) {
+	// The settings are normally loaded by main before the theme is chosen; loading again
+	// is harmless (every change is saved at once) and reports a damaged file here.
+	_, loadErr := settings.Load()
 	w := a.NewWindow("Frame Studio")
 	w.Resize(fyne.NewSize(1440, 900))
 	w.CenterOnScreen()
 	sh := New(a, w)
 	sh.thumbnails = true
 	sh.Start(files)
-	stop := sh.StartAutosave(autosaveInterval)
+	if loadErr != nil {
+		sh.showErr(errSettingsLoad(loadErr))
+	}
+	stop := sh.StartAutosave(autosaveInterval(settings.Get()))
 	w.ShowAndRun()
 	stop()
 	// Quit normally released everything already (exports and previews, then audio); if
 	// the run loop ended another way, do it now, then stop the decoders shared by all.
 	sh.releaseAll()
+	sh.dispose()
 	sh.cache.Close()
 }
 
@@ -84,6 +93,9 @@ type project struct {
 	saveErr   string
 	autosaves []*autosaveJob // recent autosaves, to undo them on "Verwerfen"
 
+	// cmds holds the commands of the created pages that provide some (page.CommandProvider).
+	cmds map[string][]command.Binding
+
 	tab      *tabButton
 	stopPlay func()
 	unsub    func()
@@ -102,16 +114,40 @@ type Shell struct {
 	active   *project
 
 	root        *fyne.Container
-	workspace   fyne.CanvasObject
+	frame       *fyne.Container // menu bar, tabs, page content and page bar
 	content     *fyne.Container
 	bars        *bars
 	mgr         *manager
 	toast       *toaster
 	showManager bool
 
-	menu          *menus
+	// Commands, keys and menus (commands.go, keys.go).
+	reg            *command.Registry
+	menuBar        menuOpener
+	menuOpened     []int // menus opened by keys, for tests
+	undoLabel      string
+	redoLabel      string
+	boundFor       *project        // project whose page commands are bound
+	bound          map[string]bool // page IDs bound for boundFor
+	activeScope    string
+	dispatchingKey bool // a key (not the menu) is running a command
+	altArmed       bool // Alt went down alone; releasing it opens the menu
+	keySig         string
+	registered     []fyne.Shortcut
+	fullscreen     bool
+
+	// Workspace host (host.go) and settings (prefs.go).
+	ws           *workspace.Manager
+	activeFns    []func()
+	notified     *project
+	pageLayouts  map[string]wslayout.Page
+	autosaveSet  chan time.Duration
+	disposers    []func()
+	openPath     func(string) error // tests replace xdg-open
+	lastSettings settings.Settings
+
 	modifiers     func() fyne.KeyModifier         // modifiers held with the current key event
-	shortcuts     map[string]func()               // window shortcuts by ShortcutName, for tests
+	shortcuts     map[string]func(fyne.Shortcut)  // window shortcuts by ShortcutName, for tests
 	pendingAnswer func(choice)                    // open save prompt, for tests
 	confirmHook   func(message string, ok func()) // tests answer busy prompts
 
@@ -128,8 +164,12 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh := &Shell{
 		app: a, win: w, cache: cache, renderer: render.New(cache),
 		pageDefs: defaultPages(), now: time.Now, closeWindow: w.Close, modifiers: heldModifiers,
-		saves: newSaveLog(),
+		saves: newSaveLog(), reg: command.NewRegistry(), bound: map[string]bool{},
+		pageLayouts: map[string]wslayout.Page{}, autosaveSet: make(chan time.Duration, 1),
 	}
+	sh.lastSettings = settings.Get()
+	store.SetProjectsDir(sh.lastSettings.General.ProjectsDir)
+	sh.reg.SetKeymap(sh.lastSettings.Keymap)
 	sh.drivePlayback = func(s *session.Session) func() {
 		stopClock := kit.DrivePlayback(s)
 		stopSound := liveaudio.Drive(s, sh.showErr)
@@ -140,31 +180,79 @@ func New(a fyne.App, w fyne.Window) *Shell {
 			stopSound()
 		}
 	}
+	sh.bindGlobal()
+	sh.ws = workspace.New(sh)
+	sh.reg.Bind(command.Global, sh.ws.Bindings()...)
+
+	sh.toast = newToaster()
 	sh.bars = newBars(sh)
 	sh.content = container.NewStack()
-	sh.workspace = container.NewBorder(sh.bars.top, sh.bars.bottom, nil, nil, sh.content)
+	sh.frame = container.NewBorder(sh.bars.top, sh.bars.bottom, nil, nil, sh.content)
 	sh.mgr = newManager(sh)
 	sh.root = container.NewStack()
-	sh.toast = newToaster()
 	w.SetPadded(false)
 	w.SetContent(sh.root)
-	sh.menu = newMenus(sh)
 	sh.installKeys()
+	sh.disposers = append(sh.disposers,
+		sh.reg.Subscribe(sh.registerShortcuts),
+		settings.Subscribe(sh.settingsChanged))
 	w.SetOnDropped(sh.droppedAt)
 	w.SetCloseIntercept(sh.Quit)
 	sh.refreshChrome()
 	return sh
 }
 
-// Start opens files, or shows the project manager when none could be opened.
+// Commands returns the app's command registry.
+func (sh *Shell) Commands() *command.Registry { return sh.reg }
+
+// Workspace returns the workspace manager (detached windows, layouts).
+func (sh *Shell) Workspace() *workspace.Manager { return sh.ws }
+
+// dispose ends the subscriptions of the shell (settings, registry). Safe to call twice.
+func (sh *Shell) dispose() {
+	for _, f := range sh.disposers {
+		f()
+	}
+	sh.disposers = nil
+}
+
+// Start opens files; without files it follows the startup setting ("manager", "last"
+// reopens the projects open at the last quit, "new" creates a project from the default
+// template). It shows the project manager when no project is open, then restores the
+// workspace layout.
 func (sh *Shell) Start(files []string) {
 	for _, f := range files {
 		if err := sh.OpenFile(f); err != nil {
 			sh.showErr(err)
 		}
 	}
+	if len(files) == 0 {
+		g := settings.Get().General
+		switch g.Startup {
+		case "last":
+			sh.reopen(g.LastOpen)
+		case "new":
+			sh.newProject(defaultProjectName(), templateByID(g.DefaultTemplate))
+		}
+	}
 	if len(sh.projects) == 0 {
 		sh.ShowManager()
+	}
+	sh.ws.Restore()
+}
+
+// reopen opens the projects of the last session; missing files are reported once.
+func (sh *Shell) reopen(paths []string) {
+	var missing []string
+	for _, f := range paths {
+		if _, err := os.Stat(f); err != nil {
+			missing = append(missing, filepath.Base(f))
+			continue
+		}
+		sh.showErr(sh.OpenFile(f))
+	}
+	if len(missing) > 0 {
+		sh.showErr(errMissingLast(missing))
 	}
 }
 
@@ -230,7 +318,8 @@ func samePath(a, b string) bool {
 func (sh *Shell) addProject(proj *model.Project, path, firstPage string) *project {
 	s := session.New(proj)
 	s.Path = path
-	p := &project{sess: s, pages: map[string]page.Page{}, contents: map[string]fyne.CanvasObject{}, current: firstPage}
+	p := &project{sess: s, pages: map[string]page.Page{}, contents: map[string]fyne.CanvasObject{}, current: firstPage,
+		cmds: map[string][]command.Binding{}}
 	p.ctx = &page.Context{
 		Window:   sh.win,
 		Session:  s,
@@ -238,6 +327,7 @@ func (sh *Shell) addProject(proj *model.Project, path, firstPage string) *projec
 		Media:    sh.cache,
 		Navigate: func(id string) { sh.showPage(p, id) },
 		ShowErr:  sh.showErr,
+		Commands: sh.reg,
 	}
 	p.tab = newTabButton(func() { sh.activate(p) }, func() { sh.closeProject(p) })
 	p.stopPlay = sh.drivePlayback(s)
@@ -352,9 +442,30 @@ func (sh *Shell) ensurePage(p *project, id string) page.Page {
 	p.pages[id] = pg
 	p.contents[id] = pg.Content()
 	if t, ok := pg.(toastUser); ok {
-		t.SetToast(sh.toast.show)
+		t.SetToast(sh.notify)
+	}
+	if la, ok := pg.(page.LayoutAware); ok {
+		if l, ok := sh.pageLayouts[id]; ok {
+			la.ApplyLayout(l)
+		}
+	}
+	if cp, ok := pg.(page.CommandProvider); ok {
+		p.cmds[id] = cp.Commands()
+		if sh.boundFor == p {
+			sh.reg.Bind(command.PageScope(id), p.cmds[id]...)
+			sh.bound[id] = true
+		}
 	}
 	return pg
+}
+
+// notify shows a toast from a page (finished exports). Successes respect the
+// Export.Notify setting; failures always show.
+func (sh *Shell) notify(title, message string, failed bool) {
+	if !failed && !settings.Get().Export.Notify {
+		return
+	}
+	sh.toast.show(title, message, failed)
 }
 
 func (sh *Shell) showPageContent(p *project) {
@@ -376,7 +487,7 @@ func (sh *Shell) deactivatePage(p *project) {
 func (sh *Shell) showWorkspace() {
 	sh.mgr.cancelThumbnails()
 	sh.showManager = false
-	sh.root.Objects = []fyne.CanvasObject{sh.workspace, sh.toast.layer}
+	sh.root.Objects = []fyne.CanvasObject{sh.frame, sh.toast.layer}
 	sh.root.Refresh()
 }
 
@@ -400,22 +511,40 @@ func (sh *Shell) leaveManager() {
 
 // closeProject closes tab p, asking first if an export would be cancelled or changes
 // are unsaved.
-func (sh *Shell) closeProject(p *project) {
+func (sh *Shell) closeProject(p *project) { sh.closeProjectThen(p, nil) }
+
+// closeProjectThen is closeProject; then runs after p closed (not when cancelled).
+func (sh *Shell) closeProjectThen(p *project, then func()) {
 	if p == nil {
 		return
 	}
 	if busy := projectBusy(p); busy != "" {
 		sh.activate(p)
-		sh.confirmBusy(busy+". Abbrechen und schließen?", "Abbrechen und schließen", func() { sh.closeSaved(p) })
+		sh.confirmBusy(busy+". Abbrechen und schließen?", "Abbrechen und schließen", func() { sh.closeSaved(p, then) })
 		return
 	}
-	sh.closeSaved(p)
+	sh.closeSaved(p, then)
 }
 
-// closeSaved closes p, asking to save unsaved changes first.
-func (sh *Shell) closeSaved(p *project) {
-	if !p.sess.Dirty {
+// closeSaved closes p, asking to save unsaved changes first. Without the ConfirmClose
+// setting, projects that have a file are saved without asking.
+func (sh *Shell) closeSaved(p *project, then func()) {
+	closeNow := func() {
 		sh.closeNow(p)
+		if then != nil {
+			then()
+		}
+	}
+	if !p.sess.Dirty {
+		closeNow()
+		return
+	}
+	if !settings.Get().General.ConfirmClose && p.sess.Path != "" {
+		if err := sh.Save(p); err != nil {
+			sh.showErr(err)
+			return
+		}
+		closeNow()
 		return
 	}
 	sh.activate(p)
@@ -432,7 +561,7 @@ func (sh *Shell) closeSaved(p *project) {
 			}
 		}
 		if closeIt {
-			sh.closeNow(p)
+			closeNow()
 		}
 	})
 }
@@ -503,5 +632,7 @@ func (sh *Shell) refreshChrome() {
 		sh.win.SetTitle(title)
 	}
 	sh.bars.refresh()
-	sh.menu.refresh()
+	sh.syncCommands()
+	sh.notifyActive()
+	sh.reg.Refresh() // menus update enabled states and check marks
 }

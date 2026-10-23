@@ -35,8 +35,38 @@ const maxRecent = 15
 // recentMu serialises access to recent.json.
 var recentMu sync.Mutex
 
-// ProjectsDir is the default library folder ($XDG_DATA_HOME/framestudio/projects), created on demand.
+// projectsDir overrides the library folder (settings General.ProjectsDir); guarded by dirMu.
+var (
+	dirMu       sync.Mutex
+	projectsDir string
+)
+
+// SetProjectsDir makes dir the project library; "" restores the default folder. A
+// leading "~/" stands for the home folder.
+func SetProjectsDir(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		}
+	}
+	dirMu.Lock()
+	projectsDir = dir
+	dirMu.Unlock()
+}
+
+// ProjectsDir is the library folder, created on demand: the folder set with
+// SetProjectsDir, or by default $XDG_DATA_HOME/framestudio/projects.
 func ProjectsDir() (string, error) {
+	dirMu.Lock()
+	custom := projectsDir
+	dirMu.Unlock()
+	if custom != "" {
+		if err := os.MkdirAll(custom, 0o755); err != nil {
+			return "", fmt.Errorf("Projektordner %s kann nicht angelegt werden. In den Einstellungen einen anderen Ordner wählen (%w)", custom, err)
+		}
+		return custom, nil
+	}
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
