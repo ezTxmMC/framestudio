@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"framestudio-proto/src/model"
 )
 
 // Fader range in decibels. MinDB and below is silence.
@@ -48,9 +50,6 @@ func FormatDB(db float64) string {
 }
 
 // formatSeconds shows a frame count as seconds with German decimal comma, e.g. "1,20 s".
-func formatSeconds(frames, fps int) string {
-	if fps <= 0 {
-		fps = 25
-	}
-	return strings.Replace(fmt.Sprintf("%.2f s", float64(frames)/float64(fps)), ".", ",", 1)
+func formatSeconds(frames int, fps model.Rate) string {
+	return strings.Replace(fmt.Sprintf("%.2f s", fps.FramesToSeconds(frames)), ".", ",", 1)
 }

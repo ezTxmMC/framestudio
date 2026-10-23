@@ -192,7 +192,7 @@ func (v *previewer) Start() {
 	if !v.s.HasRange() {
 		in, out = 0, 0
 	}
-	from, to, err := previewRange(v.s.Playhead, in, out, p.Duration(), p.Settings.FPS)
+	from, to, err := previewRange(v.s.Playhead, in, out, p.Duration(), p.SecondFrames())
 	if err != nil {
 		v.onError(err)
 		return

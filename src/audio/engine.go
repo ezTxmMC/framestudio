@@ -476,7 +476,7 @@ type Transport struct {
 	Held    bool    // another component makes the sound (audio page preview)
 	Rate    float64 // session playback rate
 	Loop    bool
-	FPS     int
+	FPS     model.Rate
 	// Frame is the playhead at time At. Exact is true when it was exactly on the frame
 	// (playback just started); otherwise the true position lies up to a frame ahead.
 	Frame int
@@ -493,7 +493,7 @@ type Transport struct {
 // posAt extrapolates the program position (in frames) at time t, wrapping in loop
 // mode. ok is false past the end of playback.
 func (t Transport) posAt(at time.Time) (float64, bool) {
-	x := float64(t.Frame) + at.Sub(t.At).Seconds()*float64(t.FPS)*t.Rate
+	x := float64(t.Frame) + at.Sub(t.At).Seconds()*t.FPS.Float()*t.Rate
 	s, e := float64(t.Start), float64(t.End)
 	switch {
 	case t.Loop && e > s && t.Rate > 0 && x >= e:
@@ -616,11 +616,13 @@ func (v *Voice) render(heard time.Time, n int, mix []float32) bool {
 	var pos int64
 	var step int
 	var win Window
-	if plan != nil && tr.Playing && !tr.Held && tr.FPS > 0 && audibleRate(tr.Rate) {
+	if plan != nil && tr.Playing && !tr.Held && tr.FPS.Num > 0 && audibleRate(tr.Rate) {
 		if x, ok := tr.posAt(heard); ok {
 			active, step = true, int(tr.Rate)
-			target := int64(math.Round(x * SampleRate / float64(tr.FPS)))
-			frame := float64(SampleRate) / float64(tr.FPS)
+			frame := float64(SampleRate) / tr.FPS.Float()
+			// Whole frames map to their exact sample (FramesToSamples), the fraction adds on top.
+			fl := math.Floor(x)
+			target := FramesToSamples(int(fl), tr.FPS) + int64(math.Round((x-fl)*frame))
 			tol := resyncTolerance.Seconds() * SampleRate * math.Abs(tr.Rate)
 			lo, hi := -tol, frame+tol // the playhead lags the true position by < 1 frame
 			if step < 0 {
@@ -644,7 +646,7 @@ func (v *Voice) render(heard time.Time, n int, mix []float32) bool {
 	}
 	scrub := tr.Scrub != v.scrub
 	v.scrub = tr.Scrub
-	if plan != nil && !tr.Playing && !tr.Held && tr.FPS > 0 {
+	if plan != nil && !tr.Playing && !tr.Held && tr.FPS.Num > 0 {
 		if scrub {
 			v.scrubLeft, jump = scrubBlocks, true
 			pos = FramesToSamples(tr.Frame, tr.FPS)

@@ -11,7 +11,6 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
-	"framestudio-proto/src/model"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -90,7 +89,7 @@ func (c *projectCard) CreateRenderer() fyne.WidgetRenderer {
 		container.NewStack(frameBG, container.NewCenter(res), c.thumb, frameEdge))
 	inset := container.New(layout.NewCustomPaddedLayout(8, 8, 8, 8), frame)
 
-	dur := kit.MonoText(model.Timecode(d.Duration, d.FPS), studiotheme.Text, 10)
+	dur := kit.MonoText(d.Timecode(d.Duration), studiotheme.Text, 10)
 	durBG := canvas.NewRectangle(color.NRGBA{0, 0, 0, 0xB0})
 	durBG.CornerRadius = 2
 	durChip := container.NewStack(durBG, container.New(layout.NewCustomPaddedLayout(1, 1, 5, 5), dur))
@@ -108,7 +107,7 @@ func (c *projectCard) CreateRenderer() fyne.WidgetRenderer {
 	thumbArea := container.NewGridWrap(fyne.NewSize(cardSize.Width-12, (cardSize.Width-12)*9/16), thumbBox)
 
 	date := text(d.Modified.Format("02.01.2006 · 15:04"), studiotheme.Muted, 11, false)
-	fps := text(fmt.Sprintf("%d fps", d.FPS), studiotheme.Muted, 11, false)
+	fps := text(d.FPS.Label(), studiotheme.Muted, 11, false)
 	meta := container.NewBorder(nil, nil, date, fps)
 	info := container.New(layout.NewCustomPaddedLayout(0, 0, 2, 2),
 		container.NewVBox(strut(0, 2), c.name, meta))

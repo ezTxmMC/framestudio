@@ -137,8 +137,8 @@ func icon(name string, c color.NRGBA) fyne.Resource {
 }
 
 // clipLabel is the duration text of a clip, short form without leading zero hours.
-func clipLabel(length, fps int) string {
-	tc := model.Timecode(length, fps)
+func clipLabel(length int, p *model.Project) string {
+	tc := p.Timecode(length)
 	if len(tc) == 11 && tc[:3] == "00:" {
 		return tc[3:]
 	}

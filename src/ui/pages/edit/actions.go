@@ -3,7 +3,6 @@ package edit
 import (
 	"errors"
 	"fmt"
-	"math"
 
 	"framestudio-proto/src/model"
 )
@@ -14,11 +13,11 @@ const defaultSeconds = 5
 
 // secondsToFrames converts a length from the settings to frames (at least one);
 // zero or negative seconds mean defaultSeconds.
-func secondsToFrames(sec float64, fps int) int {
+func secondsToFrames(sec float64, fps model.Rate) int {
 	if sec <= 0 {
 		sec = defaultSeconds
 	}
-	return max(1, int(sec*float64(max(fps, 1))+0.5))
+	return max(1, fps.SecondsToFrames(sec))
 }
 
 // Generator is an entry of the "Generatoren" tab.
@@ -35,7 +34,7 @@ var generators = []Generator{
 var audioClipColor = model.RGBA{R: 0x3D, G: 0x9A, B: 0x5B, A: 0xFF}
 
 // generatorClip builds the clip a generator inserts at frame start, sec seconds long.
-func generatorClip(id string, fps, start int, sec float64) model.Clip {
+func generatorClip(id string, fps model.Rate, start int, sec float64) model.Clip {
 	length := secondsToFrames(sec, fps)
 	switch id {
 	case "title":
@@ -60,7 +59,7 @@ func generatorClip(id string, fps, start int, sec float64) model.Clip {
 // get stillSec seconds. The routine is shared with the media page (model.PlaceMedia).
 // Returns the main clip's ID.
 func insertMedia(p *model.Project, selectedTrack string, m model.MediaItem, start int, stillSec float64) (string, error) {
-	return p.PlaceMedia(m, start, secondsToFrames(stillSec, p.Settings.FPS), selectedTrack)
+	return p.PlaceMedia(m, start, secondsToFrames(stillSec, p.Rate()), selectedTrack)
 }
 
 // placeGenerator places a generator clip. Titles overlay the picture: they go to the
@@ -99,46 +98,6 @@ func free(t *model.Track, from, to int) bool {
 		}
 	}
 	return true
-}
-
-// rescaleFPS changes the frame rate and converts every frame position so clips keep
-// their timing in seconds.
-func rescaleFPS(p *model.Project, fps int) error {
-	old := p.Settings.FPS
-	if fps <= 0 || old <= 0 {
-		return errors.New("Bildrate muss größer als 0 sein")
-	}
-	if fps == old {
-		return nil
-	}
-	conv := func(f int) int { return scaleFrames(f, old, fps) }
-	p.Settings.FPS = fps
-	for ti := range p.Tracks {
-		prevEnd := 0
-		for ci := range p.Tracks[ti].Clips {
-			c := &p.Tracks[ti].Clips[ci]
-			start := max(conv(c.Start), prevEnd)
-			end := max(conv(c.End()), start+1)
-			c.Start, c.Length = start, end-start
-			c.SourceIn = conv(c.SourceIn)
-			if m, ok := p.MediaByID(c.MediaID); ok && m.Duration > 0 {
-				if limit := p.MediaFrames(*m) - c.SourceIn; c.Length > limit && limit >= 1 {
-					c.Length = limit
-				}
-			}
-			c.FadeIn = min(conv(c.FadeIn), c.Length)
-			c.FadeOut = min(conv(c.FadeOut), c.Length)
-			prevEnd = c.End()
-		}
-	}
-	for i := range p.Markers {
-		p.Markers[i].Frame = conv(p.Markers[i].Frame)
-	}
-	return p.Validate()
-}
-
-func scaleFrames(f, from, to int) int {
-	return int(math.Round(float64(f) * float64(to) / float64(from)))
 }
 
 // explain turns model errors into messages that say how to fix them.

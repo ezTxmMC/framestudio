@@ -365,8 +365,8 @@ func (p *Project) RemoveMarker(id string) {
 
 // Validate checks structural invariants; Load uses it to reject corrupt files.
 func (p *Project) Validate() error {
-	if p.Settings.FPS <= 0 || p.Settings.Width <= 0 || p.Settings.Height <= 0 {
-		return fmt.Errorf("ungültige Projekteinstellungen %+v", p.Settings)
+	if err := ValidateSettings(p.Settings); err != nil {
+		return fmt.Errorf("ungültige Projekteinstellungen: %w", err)
 	}
 	ids := map[string]bool{}
 	for _, t := range p.Tracks {

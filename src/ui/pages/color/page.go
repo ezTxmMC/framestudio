@@ -419,7 +419,7 @@ func (p *Page) refreshStrip() {
 	used := map[string]bool{}
 	for i, e := range p.entries {
 		thumb, missing := p.thumbFor(e.Clip, used)
-		p.cards[i].set(i+1, e, pr.Settings.FPS, thumb, missing)
+		p.cards[i].set(i+1, e, pr, thumb, missing)
 		p.cards[i].setSelected(p.s.IsSelected(e.Clip.ID), e.Clip.ID == p.s.SelectedClip)
 		objs[i] = p.cards[i]
 	}
@@ -499,7 +499,7 @@ func (p *Page) refreshCards() {
 	for i, e := range p.entries {
 		if i < len(p.cards) {
 			thumb, missing := p.thumbFor(e.Clip, used)
-			p.cards[i].set(i+1, e, p.s.Project.Settings.FPS, thumb, missing)
+			p.cards[i].set(i+1, e, p.s.Project, thumb, missing)
 		}
 	}
 	p.active = active
@@ -517,11 +517,11 @@ func clipCount(n int) string {
 
 // posterSec is the source time of the clip's first frame, the strip's representative
 // picture (0 for stills).
-func posterSec(c model.Clip, fps int) float64 {
-	if c.Kind != model.KindVideo || fps <= 0 {
+func posterSec(c model.Clip, fps model.Rate) float64 {
+	if c.Kind != model.KindVideo || fps.Num <= 0 {
 		return 0
 	}
-	return float64(c.SourceIn) / float64(fps)
+	return fps.FramesToSeconds(c.SourceIn)
 }
 
 // thumbKey identifies a strip poster: media ID, file path (changes on relink) and the

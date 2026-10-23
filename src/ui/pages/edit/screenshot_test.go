@@ -60,7 +60,7 @@ func demoProject() *model.Project {
 	title.Title.Size = 0.12
 	title.FadeIn, title.FadeOut = 12, 12
 	_ = p.PlaceClip(v2, title)
-	lower := generatorClip("lower", 25, 300, 5)
+	lower := generatorClip("lower", model.Rate25, 300, 5)
 	lower.Title.Text = "Anna Berger · Regie"
 	_ = p.PlaceClip(v2, lower)
 	p.AddMarker(250, "Interview")
@@ -172,7 +172,7 @@ func (r *fakeTimelineRenderer) Layout(size fyne.Size) {
 		tick := float32(6)
 		if s%5 == 0 {
 			tick = 10
-			add(kit.MonoText(model.Timecode(s*25, 25), studiotheme.Muted, 10), x+3, 2, 80, 12)
+			add(kit.MonoText(model.Timecode(s*25, model.Rate25, false), studiotheme.Muted, 10), x+3, 2, 80, 12)
 		}
 		add(rect(studiotheme.Faint), x, ruler-tick, 1, tick)
 	}

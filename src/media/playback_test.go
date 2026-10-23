@@ -37,7 +37,7 @@ func TestPosterDistinctFramesAndCached(t *testing.T) {
 		t.Fatal("posters at 0 s and 2 s should differ")
 	}
 	// The frame at 2 s matches the decoded video frame 50.
-	seq, err := OpenVideo(m, 0, 25, 64, 36)
+	seq, err := OpenVideo(m, 0, model.Rate25, 64, 36)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestPostersAreLimited(t *testing.T) {
 
 func TestBackwardChunkDecode(t *testing.T) {
 	m := rateVideo(t, 25, 6)
-	r, err := OpenVideo(m, 0, 25, 64, 36)
+	r, err := OpenVideo(m, 0, model.Rate25, 64, 36)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestBackwardChunkDecode(t *testing.T) {
 	defer c.Close()
 
 	// Playing backwards from frame 120: the first request decodes the chunk before it.
-	img, err := c.PlaybackFrame(m, 120, 25, 64, 36, -1)
+	img, err := c.PlaybackFrame(m, 120, model.Rate25, 64, 36, -1)
 	if err != nil || !sameImage(img, seq[120]) {
 		t.Fatalf("frame 120: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestBackwardChunkDecode(t *testing.T) {
 	}
 	hits, misses := c.hits.Load(), c.misses.Load()
 	for n := 119; n > 120-2*25; n-- {
-		img, err := c.PlaybackFrame(m, n, 25, 64, 36, -1)
+		img, err := c.PlaybackFrame(m, n, model.Rate25, 64, 36, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -133,10 +133,10 @@ func TestBackwardChunkDecode(t *testing.T) {
 		t.Fatalf("backward requests inside the chunk should all hit: %d misses", c.misses.Load()-misses)
 	}
 	// The next chunk starts below the first one.
-	if img, err := c.PlaybackFrame(m, 70, 25, 64, 36, -1); err != nil || !sameImage(img, seq[70]) {
+	if img, err := c.PlaybackFrame(m, 70, model.Rate25, 64, 36, -1); err != nil || !sameImage(img, seq[70]) {
 		t.Fatalf("frame 70: %v", err)
 	}
-	if _, ok := c.frames.get(stream{id: m.ID, path: m.Path, fps: 25, w: 64, h: 36}.frameKey(21)); !ok {
+	if _, ok := c.frames.get(stream{id: m.ID, path: m.Path, fps: model.Rate25, w: 64, h: 36}.frameKey(21)); !ok {
 		t.Fatal("second chunk should reach back two seconds")
 	}
 
@@ -145,13 +145,13 @@ func TestBackwardChunkDecode(t *testing.T) {
 	d := NewCache()
 	defer d.Close()
 	for _, n := range []int{140, 139} {
-		if img, err := d.VideoFrame(m, n, 25, 64, 36); err != nil || !sameImage(img, seq[n]) {
+		if img, err := d.VideoFrame(m, n, model.Rate25, 64, 36); err != nil || !sameImage(img, seq[n]) {
 			t.Fatalf("frame %d: %v", n, err)
 		}
 	}
 	misses = d.misses.Load()
 	for n := 138; n > 100; n -= 3 {
-		if img, err := d.VideoFrame(m, n, 25, 64, 36); err != nil || !sameImage(img, seq[n]) {
+		if img, err := d.VideoFrame(m, n, model.Rate25, 64, 36); err != nil || !sameImage(img, seq[n]) {
 			t.Fatalf("frame %d: %v", n, err)
 		}
 	}
@@ -169,7 +169,7 @@ func TestBackwardRequestsShareChunk(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := c.PlaybackFrame(m, n, 25, 64, 36, -2); err != nil {
+			if _, err := c.PlaybackFrame(m, n, model.Rate25, 64, 36, -2); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -184,19 +184,19 @@ func TestFastForwardServesNearFrame(t *testing.T) {
 	m := rateVideo(t, 25, 2)
 	c := NewCache()
 	defer c.Close()
-	s := stream{id: m.ID, path: m.Path, fps: 25, w: 64, h: 36}
-	if _, err := c.VideoFrame(m, 10, 25, 64, 36); err != nil {
+	s := stream{id: m.ID, path: m.Path, fps: model.Rate25, w: 64, h: 36}
+	if _, err := c.VideoFrame(m, 10, model.Rate25, 64, 36); err != nil {
 		t.Fatal(err)
 	}
 	ten, _ := c.frames.get(s.frameKey(10))
 	c = NewCache() // only frame 10 cached
 	defer c.Close()
 	c.frames.put(s.frameKey(10), m.ID, ten, 64*36*4)
-	img, err := c.PlaybackFrame(m, 11, 25, 64, 36, 8)
+	img, err := c.PlaybackFrame(m, 11, model.Rate25, 64, 36, 8)
 	if err != nil || img != ten {
 		t.Fatal("fast forward should show the cached neighbour")
 	}
-	img, err = c.PlaybackFrame(m, 9, 25, 64, 36, 1)
+	img, err = c.PlaybackFrame(m, 9, model.Rate25, 64, 36, 1)
 	if err != nil || img == ten {
 		t.Fatal("normal rate must return the exact frame")
 	}
@@ -236,7 +236,7 @@ func TestOfflineMap(t *testing.T) {
 	}
 	// Decoders mark files they cannot find.
 	lost := model.MediaItem{ID: "c", Name: "weg", Kind: model.KindVideo, Path: filepath.Join(dir, "weg.mp4"), Width: 4, Height: 4}
-	if _, err := c.VideoFrame(lost, 0, 25, 4, 4); err == nil || !c.Offline(lost) {
+	if _, err := c.VideoFrame(lost, 0, model.Rate25, 4, 4); err == nil || !c.Offline(lost) {
 		t.Fatal("a failed decode of a missing file should mark it offline")
 	}
 }

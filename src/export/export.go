@@ -44,6 +44,13 @@ type Options struct {
 	From, To     int // frame range, To exclusive; To <= From means whole timeline
 	IncludeAudio bool
 	AllowOffline bool // render even if media in the range is missing (placeholders, no sound)
+	// FPS overrides the output frame rate (zero = project rate). Frames are always rendered at
+	// the project rate and then converted with ffmpeg's fps filter (frames are dropped or
+	// repeated, never blended). Ignored for PNG sequences and WAV. GIF defaults to
+	// min(project rate, 15 fps) when FPS is zero.
+	FPS model.Rate
+
+	fpsFilter string // set by runVideo: ffmpeg fps filter converting to FPS
 }
 
 // Preset is a named starting point shown on the deliver page.
@@ -129,6 +136,22 @@ type Progress struct {
 	Frame, Total int
 	Elapsed, ETA time.Duration
 	Stage        string // e.g. "Bilder rendern", "Audio mischen"
+	// Note is a hint for the user that stays for the whole run, e.g. that an odd size was
+	// rounded to even. Empty when there is nothing to say.
+	Note string
+}
+
+// OutputRate is the frame rate of the file an export of o writes for a project at rate
+// project: o.FPS if set, else the project rate (GIF: at most 15 fps).
+func OutputRate(o Options, project model.Rate) model.Rate {
+	project = project.Or(model.Rate25).Reduced()
+	if !o.FPS.IsZero() {
+		return o.FPS.Reduced()
+	}
+	if o.Format == FormatGIF && project.Float() > gifMaxFPS {
+		return model.IntRate(gifMaxFPS)
+	}
+	return project
 }
 
 // Range resolves the frame range of o against p: [From,To), or the whole timeline.
@@ -145,15 +168,35 @@ var lookFFmpeg = func() bool {
 	return err == nil
 }
 
-const maxSide = 8192
+// EvenNote says, in German, that Run rounds the size of o to even numbers; empty when it
+// does not (the format needs no even size or the size is even already).
+func EvenNote(o Options) string {
+	w, h := EvenSize(o)
+	if w == o.Width && h == o.Height {
+		return ""
+	}
+	return fmt.Sprintf("%s braucht gerade Seitenlängen: %d × %d wird mit %d × %d exportiert.", Label(o.Format), o.Width, o.Height, w, h)
+}
+
+// EvenSize is the size Run really encodes: for MP4 and WebM both sides are rounded down to
+// even numbers (yuv420p needs them), other formats keep the size.
+func EvenSize(o Options) (w, h int) {
+	if o.Format == FormatMP4 || o.Format == FormatWebM {
+		return model.EvenSize(o.Width, o.Height)
+	}
+	return o.Width, o.Height
+}
 
 // Validate checks options against the project and environment before Run.
 func Validate(p *model.Project, o Options) error {
 	if p == nil {
 		return errors.New("Kein Projekt geöffnet.")
 	}
-	if p.Settings.FPS <= 0 {
+	if !p.Settings.FPS.Valid() {
 		return errors.New("Die Bildrate des Projekts ist ungültig. Prüfe die Projekteinstellungen.")
+	}
+	if !o.FPS.IsZero() && !o.FPS.Valid() {
+		return fmt.Errorf("Die Export-Bildrate muss zwischen %d und %d fps liegen. Wert anpassen oder leer lassen für die Projekt-Bildrate.", model.MinFPS, model.MaxFPS)
 	}
 	switch o.Format {
 	case FormatMP4, FormatWebM, FormatGIF, FormatPNG, FormatWAV:
@@ -172,11 +215,11 @@ func Validate(p *model.Project, o Options) error {
 		if o.Width <= 0 || o.Height <= 0 {
 			return errors.New("Die Auflösung fehlt. Gib Breite und Höhe in Pixeln an.")
 		}
-		if o.Width > maxSide || o.Height > maxSide {
-			return fmt.Errorf("Die Auflösung %d × %d ist zu groß. Höchstens %d Pixel pro Seite.", o.Width, o.Height, maxSide)
+		if o.Width > model.MaxSize || o.Height > model.MaxSize {
+			return fmt.Errorf("Die Auflösung %d × %d ist zu groß. Höchstens %d Pixel pro Seite.", o.Width, o.Height, model.MaxSize)
 		}
-		if (o.Format == FormatMP4 || o.Format == FormatWebM) && (o.Width%2 != 0 || o.Height%2 != 0) {
-			return fmt.Errorf("%s braucht eine gerade Breite und Höhe (%d × %d). Runde auf die nächste gerade Zahl.", Label(o.Format), o.Width, o.Height)
+		if w, h := EvenSize(o); w < 2 || h < 2 {
+			return fmt.Errorf("Die Auflösung %d × %d ist zu klein. Mindestens 2 Pixel pro Seite.", o.Width, o.Height)
 		}
 	}
 	if o.From < 0 {
@@ -302,6 +345,8 @@ func Run(ctx context.Context, p *model.Project, r *render.Renderer, o Options, p
 		r = render.New(media.NewCache())
 	}
 	rep := newReporter(progress)
+	rep.note = EvenNote(o)
+	o.Width, o.Height = EvenSize(o)
 	var err error
 	switch o.Format {
 	case FormatPNG:

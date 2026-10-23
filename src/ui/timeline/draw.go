@@ -556,7 +556,7 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 
 	// labels
 	if avail > 8 && bar >= 12 {
-		dur := clipLabel(c.Length, p.Settings.FPS)
+		dur := clipLabel(c.Length, p)
 		mono := fyne.TextStyle{Monospace: true}
 		dw := r.width(dur, 9.5, mono)
 		nameW := avail
@@ -666,7 +666,7 @@ func (r *tlRenderer) posterStrip(p *model.Project, g geom, c model.Clip, m model
 	pw := int(math.Ceil(float64((ix1 - ix0) * sc)))
 	first, last := from/tw1, (from+pw)/tw1
 	step := posterStep(float64(tw1) / float64(sc) / g.ppf)
-	srcFrames, fps := p.MediaFrames(m), p.Settings.FPS
+	srcFrames, fps := p.MediaFrames(m), p.Rate()
 
 	var placeholder *image.NRGBA
 	if a.thumb != nil {
@@ -835,19 +835,25 @@ func (r *tlRenderer) buildRuler(p *model.Project, g geom) []fyne.CanvasObject {
 			rect(studiotheme.Steel, x1-1, 0, 1, rulerH-1), rect(studiotheme.Steel, x1-5, 0, 5, 1))
 	}
 
-	fps := max(p.Settings.FPS, 1)
-	major, minor := rulerStep(g.ppf, fps, labelGap)
-	first := int(math.Floor(g.offset/float64(minor))) * minor
+	// Ticks run in timecode-label space so that majors sit on whole timecode seconds (also
+	// in drop-frame, where labels skip frames); x comes from the real frame.
+	rate, drop := p.Rate(), p.DropFrame()
+	major, minor := rulerStep(g.ppf, rate.Nominal(), labelGap)
+	first := int(math.Floor(float64(model.LabelFrame(max(int(g.offset), 0), rate, drop))/float64(minor))) * minor
 	last := g.offset + g.visibleFrames()
 	mono := fyne.TextStyle{Monospace: true}
-	for f := first; float64(f) <= last; f += minor {
-		if f < 0 {
+	for v := first; ; v += minor {
+		f, ok := model.FrameFromLabel(v, rate, drop)
+		if float64(f) > last {
+			break
+		}
+		if v < 0 || !ok {
 			continue
 		}
 		x := float32(math.Round(float64(g.frameX(float64(f)) - headerW)))
-		if f%major == 0 {
+		if v%major == 0 {
 			objs = append(objs, rect(studiotheme.Muted, x, rulerH-9, 1, 8),
-				r.text(model.Timecode(f, fps), studiotheme.Muted, 10, mono, x+4, 3))
+				r.text(p.Timecode(f), studiotheme.Muted, 10, mono, x+4, 3))
 		} else {
 			objs = append(objs, rect(studiotheme.Faint, x, rulerH-5, 1, 4))
 		}

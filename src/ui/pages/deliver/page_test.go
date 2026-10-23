@@ -133,9 +133,13 @@ func TestValidationInline(t *testing.T) {
 	h.configure(t, export.FormatMP4)
 	f.width.SetText("161")
 	test.Tap(f.addBtn)
-	if !f.errBox.Visible() || !strings.Contains(f.errText.Text, "gerade") {
-		t.Errorf("odd width: visible=%v %q", f.errBox.Visible(), f.errText.Text)
+	if f.errBox.Visible() || len(h.pg.queue.jobs) != 1 {
+		t.Errorf("odd width is rounded, not rejected: visible=%v %q jobs=%d", f.errBox.Visible(), f.errText.Text, len(h.pg.queue.jobs))
 	}
+	if got := videoSummary(h.pg.queue.jobs[0].opts, model.Rate25); !strings.Contains(got, "gerundet von 161×") {
+		t.Errorf("summary should say the size is rounded: %q", got)
+	}
+	h.pg.queue.jobs = h.pg.queue.jobs[:0]
 	f.width.SetText("160")
 	if f.errBox.Visible() {
 		t.Error("editing should clear the error")

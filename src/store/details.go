@@ -40,7 +40,7 @@ func detailsOf(p *model.Project, path string, fi os.FileInfo) Details {
 		name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
 	return Details{
-		Entry: Entry{Path: path, Name: name, Modified: fi.ModTime(), Duration: p.Duration(), FPS: p.Settings.FPS},
+		Entry: Entry{Path: path, Name: name, Modified: fi.ModTime(), Duration: p.Duration(), FPS: p.Rate(), DropFrame: p.DropFrame()},
 		Width: p.Settings.Width, Height: p.Settings.Height, Clips: clips,
 	}
 }

@@ -32,19 +32,20 @@ import (
 
 // Template is a preset for new projects.
 type Template struct {
-	Label              string
-	Width, Height, FPS int
+	Label         string
+	Width, Height int
+	FPS           model.Rate
 }
 
 // Templates are offered in the "Neues Projekt" dialog; the first is the default.
 var Templates = []Template{
-	{"1080p HD · 25 fps", 1920, 1080, 25},
-	{"720p HD · 25 fps", 1280, 720, 25},
-	{"4K UHD · 25 fps", 3840, 2160, 25},
-	{"1080p HD · 30 fps", 1920, 1080, 30},
-	{"1080p HD · 60 fps", 1920, 1080, 60},
-	{"Hochkant 1080×1920 · 30 fps (Social)", 1080, 1920, 30},
-	{"Quadrat 1080×1080 · 30 fps", 1080, 1080, 30},
+	{"1080p HD · 25 fps", 1920, 1080, model.Rate25},
+	{"720p HD · 25 fps", 1280, 720, model.Rate25},
+	{"4K UHD · 25 fps", 3840, 2160, model.Rate25},
+	{"1080p HD · 30 fps", 1920, 1080, model.Rate30},
+	{"1080p HD · 60 fps", 1920, 1080, model.Rate60},
+	{"Hochkant 1080×1920 · 30 fps (Social)", 1080, 1920, model.Rate30},
+	{"Quadrat 1080×1080 · 30 fps", 1080, 1080, model.Rate30},
 }
 
 // manager is the full-window project manager: library grid plus recent projects.
@@ -606,6 +607,6 @@ func defaultProjectName() string {
 // posterVideo supplies video frames for card thumbnails as single-frame grabs.
 type posterVideo struct{ c *media.Cache }
 
-func (v posterVideo) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
-	return v.c.Poster(m, float64(n)/float64(max(fps, 1)), w, h)
+func (v posterVideo) VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error) {
+	return v.c.Poster(m, fps.Or(model.Rate25).FramesToSeconds(n), w, h)
 }

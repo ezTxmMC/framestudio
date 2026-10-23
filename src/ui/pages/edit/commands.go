@@ -399,7 +399,7 @@ func hasFit(c *model.Clip) bool  { return c.Kind == model.KindImage || c.Kind ==
 func (p *Page) setFades(in, out bool) {
 	n := secondsToFrames(p.prefs.Timeline.FadeSeconds, p.ctx.Session.FPS())
 	if p.prefs.Timeline.FadeSeconds <= 0 {
-		n = p.ctx.Session.FPS()
+		n = p.ctx.Session.SecondFrames()
 	}
 	label := "Einblenden"
 	if out {

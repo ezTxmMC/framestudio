@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"framestudio-proto/src/model"
 )
 
 // Fast shuttle must never block the viewer on sequential decoding: after the first
@@ -19,7 +21,7 @@ func TestShuttleNeverBlocks(t *testing.T) {
 		if rate < 0 {
 			start = 190
 		}
-		if img, err := c.PlaybackFrame(m, start, 25, 64, 36, rate); err != nil || img == nil {
+		if img, err := c.PlaybackFrame(m, start, model.Rate25, 64, 36, rate); err != nil || img == nil {
 			t.Fatalf("first shuttle frame: %v", err)
 		}
 		slowest := time.Duration(0)
@@ -27,7 +29,7 @@ func TestShuttleNeverBlocks(t *testing.T) {
 		for range 20 {
 			n += int(rate)
 			t0 := time.Now()
-			img, err := c.PlaybackFrame(m, n, 25, 64, 36, rate)
+			img, err := c.PlaybackFrame(m, n, model.Rate25, 64, 36, rate)
 			slowest = max(slowest, time.Since(t0))
 			if err != nil || img == nil {
 				t.Fatalf("rate %v frame %d: %v", rate, n, err)
@@ -40,7 +42,7 @@ func TestShuttleNeverBlocks(t *testing.T) {
 		if p := prefetcherCount(c); p != 0 {
 			t.Fatalf("shuttle started %d sequential decoders", p)
 		}
-		s := stream{id: m.ID, path: m.Path, fps: 25, w: 64, h: 36}
+		s := stream{id: m.ID, path: m.Path, fps: model.Rate25, w: 64, h: 36}
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			c.rev.mu.Lock()
@@ -63,14 +65,14 @@ func TestReverseReadsAhead(t *testing.T) {
 	m := rateVideo(t, 25, 6)
 	c := NewCache()
 	defer c.Close()
-	s := stream{id: m.ID, path: m.Path, fps: 25, w: 64, h: 36}
-	if _, err := c.PlaybackFrame(m, 120, 25, 64, 36, -2); err != nil {
+	s := stream{id: m.ID, path: m.Path, fps: model.Rate25, w: 64, h: 36}
+	if _, err := c.PlaybackFrame(m, 120, model.Rate25, 64, 36, -2); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := c.frames.peek(s.frameKey(60)); ok {
 		t.Fatal("only one chunk expected so far")
 	}
-	if _, err := c.PlaybackFrame(m, 92, 25, 64, 36, -2); err != nil {
+	if _, err := c.PlaybackFrame(m, 92, model.Rate25, 64, 36, -2); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -87,7 +89,7 @@ func TestReverseReadsAhead(t *testing.T) {
 	misses := c.misses.Load()
 	for n := 70; n > 25; n -= 2 {
 		before := c.misses.Load()
-		if _, err := c.PlaybackFrame(m, n, 25, 64, 36, -2); err != nil {
+		if _, err := c.PlaybackFrame(m, n, model.Rate25, 64, 36, -2); err != nil {
 			t.Fatal(err)
 		}
 		if c.misses.Load() != before {
@@ -104,7 +106,7 @@ func TestCancelStopsPrefetchers(t *testing.T) {
 	m := rateVideo(t, 25, 4)
 	c := NewCache()
 	defer c.Close()
-	if _, err := c.VideoFrame(m, 5, 25, 64, 36); err != nil {
+	if _, err := c.VideoFrame(m, 5, model.Rate25, 64, 36); err != nil {
 		t.Fatal(err)
 	}
 	c.pmu.Lock()

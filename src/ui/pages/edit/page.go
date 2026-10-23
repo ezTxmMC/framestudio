@@ -223,7 +223,7 @@ func (p *Page) changed(c session.Change) {
 	if p.progName != nil && c&(session.ChangeProject|session.ChangeMeta) != 0 {
 		pr := p.ctx.Session.Project
 		setText(p.progName, pr.Name)
-		setText(p.progMeta, fmt.Sprintf("%d×%d  %d fps", pr.Settings.Width, pr.Settings.Height, pr.Settings.FPS))
+		setText(p.progMeta, fmt.Sprintf("%d×%d  %s", pr.Settings.Width, pr.Settings.Height, pr.Rate().Label()))
 	}
 	if c&session.ChangeProject != 0 && p.root != nil {
 		p.root.Refresh() // track count may change the timeline height
@@ -650,9 +650,11 @@ func (p *Page) selectInserted(id string) {
 
 // setFPS changes the frame rate in one undo step, keeping clip timing in seconds. The
 // session moves playhead and In/Out along, also on undo and redo.
-func (p *Page) setFPS(fps int) {
-	if fps == p.ctx.Session.FPS() {
+func (p *Page) setFPS(fps model.Rate) {
+	if fps.Equal(p.ctx.Session.FPS()) {
 		return
 	}
-	p.edit("Bildrate ändern", func(pr *model.Project) error { return rescaleFPS(pr, fps) })
+	st := p.ctx.Session.Project.Settings
+	st.FPS = fps
+	p.edit("Bildrate ändern", func(pr *model.Project) error { return pr.SetSettings(st) })
 }

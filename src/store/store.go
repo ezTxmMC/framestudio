@@ -27,7 +27,14 @@ type Entry struct {
 	Name     string
 	Modified time.Time
 	Duration int // frames
-	FPS      int
+	FPS      model.Rate
+	// DropFrame is the project's drop-frame timecode option.
+	DropFrame bool
+}
+
+// Timecode formats frame f the way the project shows timecodes.
+func (e Entry) Timecode(f int) string {
+	return model.Timecode(f, e.FPS, e.DropFrame && e.FPS.CanDropFrame())
 }
 
 const maxRecent = 15
@@ -87,8 +94,8 @@ func Save(p *model.Project, path string) error {
 	if p == nil {
 		return errors.New("Kein Projekt zum Speichern vorhanden")
 	}
-	if p.Version == 0 {
-		p.Version = model.FormatVersion
+	if p.Version < model.FormatVersion {
+		p.Version = model.FormatVersion // the file is written in the current format
 	}
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
@@ -174,6 +181,7 @@ func migrate(p *model.Project) error {
 		// Files without a version field predate versioning; their layout equals version 1.
 		p.Version = 1
 	}
+	p.Version = model.FormatVersion // in memory every file is the current format
 	if p.ID == "" {
 		p.ID = model.NewID()
 	}

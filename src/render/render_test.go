@@ -24,7 +24,7 @@ type fakeSource struct {
 	video func(n, w, h int) image.Image
 }
 
-func (s *fakeSource) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
+func (s *fakeSource) VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error) {
 	s.mu.Lock()
 	s.last = n
 	s.mu.Unlock()

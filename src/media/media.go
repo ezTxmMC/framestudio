@@ -248,7 +248,7 @@ func (c *Cache) fullImage(m model.MediaItem) (image.Image, error) {
 // VideoFrame returns source frame n (counted at the given project fps) of a video, scaled to fit w x h.
 // Requests that walk backwards in small steps are detected and served by chunked
 // backward decoding (see PlaybackFrame).
-func (c *Cache) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
+func (c *Cache) VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error) {
 	return c.frame(m, n, fps, w, h, 0)
 }
 
@@ -402,7 +402,7 @@ type FrameReader interface {
 }
 
 // OpenVideo starts sequential decoding at source frame n, resampled to fps and scaled to w x h.
-func OpenVideo(m model.MediaItem, n, fps, w, h int) (FrameReader, error) {
+func OpenVideo(m model.MediaItem, n int, fps model.Rate, w, h int) (FrameReader, error) {
 	if m.Kind != model.KindVideo {
 		return nil, fmt.Errorf("„%s“ ist kein Video", m.Name)
 	}
@@ -413,9 +413,7 @@ func OpenVideo(m model.MediaItem, n, fps, w, h int) (FrameReader, error) {
 	if _, err := os.Stat(m.Path); err != nil {
 		return nil, fmt.Errorf("„%s“ fehlt unter %s. Datei wiederherstellen oder neu verknüpfen", m.Name, m.Path)
 	}
-	if fps <= 0 {
-		fps = 25
-	}
+	fps = fps.Or(model.Rate25).Reduced()
 	if n < 0 {
 		n = 0
 	}

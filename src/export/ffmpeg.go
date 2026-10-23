@@ -85,6 +85,7 @@ type reporter struct {
 	start time.Time
 	last  time.Time
 	stage string
+	note  string
 }
 
 func newReporter(fn func(Progress)) *reporter {
@@ -107,7 +108,7 @@ func (r *reporter) emit(frame, total int, force bool) {
 		return
 	}
 	r.last = now
-	pr := Progress{Frame: frame, Total: total, Elapsed: now.Sub(r.start), Stage: r.stage}
+	pr := Progress{Frame: frame, Total: total, Elapsed: now.Sub(r.start), Stage: r.stage, Note: r.note}
 	if frame > 0 && total > frame {
 		pr.ETA = time.Duration(float64(pr.Elapsed) / float64(frame) * float64(total-frame))
 	}

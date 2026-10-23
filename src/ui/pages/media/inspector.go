@@ -153,7 +153,7 @@ func (in *inspector) show() {
 	}
 	changed := m.ID != in.shown.ID || m.Path != in.shown.Path
 	in.shown, in.uses = m, uses
-	fps := in.p.fps()
+	fps, proj := in.p.fps(), in.p.ctx.Session.Project
 
 	in.name.Text = ellipsize(m.Name, 290, in.name.TextSize, in.name.TextStyle)
 	in.name.Refresh()
@@ -165,11 +165,11 @@ func (in *inspector) show() {
 	}
 	set("Dauer", "Standbild")
 	if m.Kind != model.KindImage {
-		set("Dauer", fmt.Sprintf("%s  (%s s)", model.Timecode(frames(m, fps), fps), trimFloat(m.Duration.Seconds(), 2)))
+		set("Dauer", fmt.Sprintf("%s  (%s s)", proj.Timecode(frames(m, fps)), trimFloat(m.Duration.Seconds(), 2)))
 	}
 	set("Bildrate", "–")
-	if m.FPS > 0 {
-		set("Bildrate", trimFloat(m.FPS, 3)+" fps")
+	if m.FPS.Num > 0 && m.FPS.Den > 0 {
+		set("Bildrate", m.FPS.Label())
 	}
 	set("Audio", "nein")
 	if m.HasAudio {
@@ -199,7 +199,7 @@ func (in *inspector) show() {
 		in.scrub.Max = float64(n - 1)
 		in.scrub.SetValue(float64(n / 10))
 		in.scrub.OnChanged = func(v float64) { in.skimTo(int(v)) }
-		in.scrubTC.Text = model.Timecode(n/10, fps)
+		in.scrubTC.Text = proj.Timecode(n / 10)
 		in.scrubTC.Refresh()
 		in.scrubRow.Show()
 	} else {
@@ -229,7 +229,7 @@ func (in *inspector) showCount() {
 	}
 }
 
-func frames(m model.MediaItem, fps int) int { return int(m.Duration.Seconds()*float64(fps) + 0.5) }
+func frames(m model.MediaItem, fps model.Rate) int { return fps.DurationToFramesNearest(m.Duration) }
 
 func trimFloat(v float64, prec int) string {
 	s := fmt.Sprintf("%.*f", prec, v)
@@ -272,7 +272,7 @@ func (in *inspector) loadPoster(m model.MediaItem) {
 // skimTo shows source frame n of the displayed video; drags coalesce to the newest frame.
 func (in *inspector) skimTo(n int) {
 	fps := in.p.fps()
-	in.scrubTC.Text = model.Timecode(n, fps)
+	in.scrubTC.Text = in.p.ctx.Session.Timecode(n)
 	in.scrubTC.Refresh()
 	if in.skimBusy {
 		in.skimPending = n

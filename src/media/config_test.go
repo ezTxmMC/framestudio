@@ -2,6 +2,8 @@ package media
 
 import (
 	"testing"
+
+	"framestudio-proto/src/model"
 )
 
 func TestLRUSetBudgetEvicts(t *testing.T) {
@@ -60,7 +62,7 @@ func TestSetMaxDecodersStopsExtraDecoders(t *testing.T) {
 	c := NewCache()
 	defer c.Close()
 	for i := 0; i < 4; i++ {
-		if _, err := c.VideoFrame(m, i*11%50, 25, 40+i*8, 40+i*8); err != nil {
+		if _, err := c.VideoFrame(m, i*11%50, model.Rate25, 40+i*8, 40+i*8); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,7 +73,7 @@ func TestSetMaxDecodersStopsExtraDecoders(t *testing.T) {
 	if n > 1 {
 		t.Fatalf("%d decoders still running after limiting to 1", n)
 	}
-	if _, err := c.VideoFrame(m, 3, 25, 96, 96); err != nil {
+	if _, err := c.VideoFrame(m, 3, model.Rate25, 96, 96); err != nil {
 		t.Fatal(err)
 	}
 	c.pmu.Lock()

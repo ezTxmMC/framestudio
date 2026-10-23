@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/model"
-	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
@@ -229,7 +228,7 @@ func (m *multiEditor) fadeSection() fyne.CanvasObject {
 	entry := func(label string, set func(c *model.Clip, f int)) *commitEntry {
 		var e *commitEntry
 		e = newCommitEntry(true, func(s string) {
-			f, err := kit.ParseFrames(s, m.fps())
+			f, err := m.parse(s)
 			if err == nil {
 				shortest := math.MaxInt
 				for _, c := range m.clips() {

@@ -47,7 +47,9 @@ type Session struct {
 	undo, redo []snapshot
 	listeners  map[int]func(Change)
 	nextID     int
-	carry      time.Duration // sub-frame remainder while playing
+	// carry is the sub-frame remainder while playing, in units of 1/(Den*1e9) frame, so the
+	// playhead follows the exact rational frame times without drift.
+	carry int64
 }
 
 type snapshot struct {
@@ -79,7 +81,23 @@ func (s *Session) Notify(c Change) {
 	}
 }
 
-func (s *Session) FPS() int { return s.Project.Settings.FPS }
+// FPS is the project frame rate.
+func (s *Session) FPS() model.Rate { return s.Project.Rate() }
+
+// FrameRate is an alias of FPS.
+func (s *Session) FrameRate() model.Rate { return s.Project.Rate() }
+
+// SecondFrames is the frame count of a one-second step (the nominal rate).
+func (s *Session) SecondFrames() int { return s.Project.SecondFrames() }
+
+// Timecode formats frame f in the project's timecode mode (drop-frame aware).
+func (s *Session) Timecode(f int) string { return s.Project.Timecode(f) }
+
+// SetSettings changes resolution, frame rate and drop-frame as one undoable edit. A frame
+// rate change keeps clips, markers, playhead and In/Out at the same time in seconds.
+func (s *Session) SetSettings(st model.Settings) error {
+	return s.Edit("Projekteinstellungen ändern", func(p *model.Project) error { return p.SetSettings(st) })
+}
 
 // Edit applies fn to the project as one undoable step. If fn returns an error the
 // project is restored and nothing is recorded.
@@ -89,7 +107,7 @@ func (s *Session) Edit(label string, fn func(p *model.Project) error) error {
 		s.Project = before
 		return err
 	}
-	s.rescaleTime(before.Settings.FPS)
+	s.rescaleTime(before.Rate())
 	s.undo = append(s.undo, snapshot{label: label, at: time.Now(), project: before})
 	if len(s.undo) > maxUndo {
 		s.undo = s.undo[1:]
@@ -120,7 +138,7 @@ func (s *Session) EditCoalesced(key, label string, fn func(p *model.Project) err
 		s.Project = before
 		return err
 	}
-	s.rescaleTime(before.Settings.FPS)
+	s.rescaleTime(before.Rate())
 	s.undo[n-1].at = time.Now()
 	s.redo = nil
 	s.Project.Modified = time.Now()
@@ -154,7 +172,7 @@ func (s *Session) Undo() {
 	last := s.undo[len(s.undo)-1]
 	s.undo = s.undo[:len(s.undo)-1]
 	s.redo = append(s.redo, snapshot{label: last.label, project: s.Project})
-	old := s.Project.Settings.FPS
+	old := s.Project.Rate()
 	prev := s.Project
 	s.Project = last.project
 	s.rescaleTime(old)
@@ -171,7 +189,7 @@ func (s *Session) Redo() {
 	next := s.redo[len(s.redo)-1]
 	s.redo = s.redo[:len(s.redo)-1]
 	s.undo = append(s.undo, snapshot{label: next.label, project: s.Project})
-	old := s.Project.Settings.FPS
+	old := s.Project.Rate()
 	prev := s.Project
 	s.Project = next.project
 	s.rescaleTime(old)
@@ -198,12 +216,13 @@ func (s *Session) Rename(name string) {
 
 // rescaleTime keeps playhead and In/Out at the same time in seconds when the project
 // frame rate changed from old (by an edit, undo or redo).
-func (s *Session) rescaleTime(old int) {
-	fps := s.Project.Settings.FPS
-	if old <= 0 || fps <= 0 || old == fps {
+func (s *Session) rescaleTime(old model.Rate) {
+	fps := s.Project.Rate()
+	old = old.Or(fps)
+	if old.Equal(fps) {
 		return
 	}
-	conv := func(f int) int { return int(math.Round(float64(f) * float64(fps) / float64(old))) }
+	conv := func(f int) int { return model.ConvertFrames(f, old, fps) }
 	s.Playhead, s.In, s.Out = conv(s.Playhead), conv(s.In), conv(s.Out)
 	s.Notify(ChangePlayhead)
 }
@@ -519,13 +538,18 @@ func (s *Session) Advance(dt time.Duration) {
 	if !s.Playing {
 		return
 	}
-	frame := s.Project.FrameDuration()
-	s.carry += time.Duration(float64(dt) * math.Abs(s.Rate))
-	n := int(s.carry / frame)
+	r := s.Project.Rate()
+	unit := int64(r.Den) * int64(time.Second) // carry units per frame
+	adv := int64(dt)
+	if a := math.Abs(s.Rate); a != 1 {
+		adv = int64(float64(dt) * a)
+	}
+	s.carry += adv * int64(r.Num)
+	n := int(s.carry / unit)
 	if n == 0 {
 		return
 	}
-	s.carry -= time.Duration(n) * frame
+	s.carry -= int64(n) * unit
 	start, end := s.playStart(), s.playEnd()
 	looping := s.Loop && end > start
 	if s.Rate < 0 {

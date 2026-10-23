@@ -76,7 +76,7 @@ func (t *Timeline) SetStillSeconds(sec float64) {
 }
 
 func (t *Timeline) stillLen(p *model.Project) int {
-	return max(1, int(t.stillSecs*float64(max(p.Settings.FPS, 1))+0.5))
+	return max(1, p.Rate().SecondsToFrames(t.stillSecs))
 }
 
 // StartRename opens the inline name entry in the header of track id.

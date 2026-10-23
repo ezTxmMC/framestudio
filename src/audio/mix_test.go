@@ -3,7 +3,6 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -236,8 +235,8 @@ func TestMatchesFFmpegExport(t *testing.T) {
 	if pcm.Err() != nil {
 		t.Fatal(pcm.Err())
 	}
-	for _, fps := range []int{25, 24, 30} {
-		t.Run(fmt.Sprint(fps), func(t *testing.T) {
+	for _, fps := range []model.Rate{model.Rate25, model.Rate24, model.Rate30, model.NTSC24, model.NTSC30, model.NTSC60} {
+		t.Run(fps.String(), func(t *testing.T) {
 			p := model.NewProject("t")
 			p.Settings.FPS = fps
 			m := model.MediaItem{ID: "m", Name: "tone", Path: wav, Kind: model.KindAudio, Duration: 4 * time.Second}

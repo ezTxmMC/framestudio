@@ -383,7 +383,7 @@ func (p *Page) buildPool(extra fyne.CanvasObject) fyne.CanvasObject {
 			c.onSecondary = func(pos fyne.Position) { p.showMenu(m.ID, pos) }
 			c.onDragStart = func() ([]string, string) { return p.dragItems(m.ID) }
 			missing := p.ctx.Media != nil && p.ctx.Media.Offline(m)
-			c.set(m, p.fps(), p.thumbFor(m), p.isPicked(m.ID), missing)
+			c.set(m, p.ctx.Session.Project, p.thumbFor(m), p.isPicked(m.ID), missing)
 		})
 
 	p.emptyMsg = canvas.NewText("", studiotheme.Text)
@@ -420,7 +420,7 @@ func ffmpegNotice() fyne.CanvasObject {
 	return container.NewStack(bg, container.NewBorder(nil, nil, icon, nil, msg))
 }
 
-func (p *Page) fps() int { return max(p.ctx.Session.FPS(), 1) }
+func (p *Page) fps() model.Rate { return p.ctx.Session.FPS() }
 
 // onChange keeps the pool and inspector in step with the session.
 func (p *Page) onChange(c session.Change) {

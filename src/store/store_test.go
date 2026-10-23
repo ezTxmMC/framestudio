@@ -109,8 +109,8 @@ func TestListNewestFirstIgnoresBroken(t *testing.T) {
 	var names []string
 	for _, e := range list {
 		names = append(names, e.Name)
-		if e.FPS != 25 || e.Duration != 60 {
-			t.Errorf("%s: fps %d dur %d", e.Name, e.FPS, e.Duration)
+		if e.FPS != model.Rate25 || e.Duration != 60 {
+			t.Errorf("%s: fps %v dur %d", e.Name, e.FPS, e.Duration)
 		}
 	}
 	if want := []string{"A", "C", "B"}; !reflect.DeepEqual(names, want) {
@@ -226,5 +226,37 @@ func TestSortAndFilterDetails(t *testing.T) {
 	}
 	if got := FilterDetails(ds, ""); len(got) != 4 {
 		t.Errorf("empty query keeps all: %d", len(got))
+	}
+}
+
+func TestRationalRateRoundTripAndOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	p := sample("ntsc")
+	p.Settings.FPS, p.Settings.DropFrame = model.NTSC30, true
+	path := filepath.Join(dir, "n.fsproj")
+	if err := Save(p, path); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), `"version": 2`) || !strings.Contains(string(raw), `"num": 30000`) {
+		t.Errorf("file format: %s", raw)
+	}
+	q, err := Load(path)
+	if err != nil || q.Settings.FPS != model.NTSC30 || !q.Settings.DropFrame {
+		t.Fatalf("round trip: %+v %v", q.Settings, err)
+	}
+	// integer rates stay plain numbers, so version 1 readers could still read them
+	p.Settings.FPS, p.Settings.DropFrame = model.Rate25, false
+	_ = Save(p, path)
+	raw, _ = os.ReadFile(path)
+	if !strings.Contains(string(raw), `"fps": 25`) {
+		t.Errorf("integer rate: %s", raw)
+	}
+	// a version 1 file with a float media rate loads unchanged
+	old := filepath.Join(dir, "old.fsproj")
+	_ = os.WriteFile(old, []byte(`{"version":1,"name":"A","settings":{"width":640,"height":360,"fps":30},"media":[{"id":"m","name":"v","path":"/x","kind":"video","fps":29.97}],"tracks":[]}`), 0o644)
+	o, err := Load(old)
+	if err != nil || o.Settings.FPS != model.Rate30 || o.Media[0].FPS != model.NTSC30 {
+		t.Fatalf("old file: %+v %v", o, err)
 	}
 }

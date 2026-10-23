@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 
+	"framestudio-proto/src/model"
 	"framestudio-proto/src/settings"
 	"framestudio-proto/src/store"
 	"framestudio-proto/src/ui/command"
@@ -447,7 +448,7 @@ func TestStartupModes(t *testing.T) {
 		if len(sh.projects) != 1 || sh.showManager {
 			t.Fatalf("new: %d projects", len(sh.projects))
 		}
-		if st := sh.Active().Project.Settings; st.Width != 1280 || st.Height != 720 || st.FPS != 25 {
+		if st := sh.Active().Project.Settings; st.Width != 1280 || st.Height != 720 || !st.FPS.Equal(model.Rate25) {
 			t.Errorf("template %+v", st)
 		}
 	})

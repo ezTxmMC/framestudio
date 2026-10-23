@@ -140,7 +140,7 @@ func decoded(pl *Plan) bool {
 func (r *rig) play(f int, rate float64) {
 	r.f0, r.t0 = f, r.clk.Now()
 	r.tr.Gen++
-	r.tr = Transport{Playing: true, Rate: rate, FPS: 25, Frame: f, At: r.t0, Exact: true, Gen: r.tr.Gen, Start: 0, End: 250}
+	r.tr = Transport{Playing: true, Rate: rate, FPS: model.Rate25, Frame: f, At: r.t0, Exact: true, Gen: r.tr.Gen, Start: 0, End: 250}
 	r.v.SetTransport(r.tr)
 }
 
@@ -195,7 +195,7 @@ func TestPlayStartsInSyncAtOnce(t *testing.T) {
 	}
 	// The block written now is heard after the latency: it must hold the program at
 	// playhead + latency, then run on sample by sample.
-	want := int(FramesToSamples(50, 25) + int64(testLatency.Seconds()*SampleRate))
+	want := int(FramesToSamples(50, model.Rate25) + int64(testLatency.Seconds()*SampleRate))
 	if first[2*(BlockFrames-1)+1] == 0 || first[1] > first[2*(BlockFrames-1)+1] {
 		t.Fatal("the first block fades in")
 	}
@@ -251,7 +251,7 @@ func TestResyncOnJump(t *testing.T) {
 	if _, j := r.v.Stats(); j != 2 {
 		t.Fatal("a 2 s jump must resync")
 	}
-	want := int(FramesToSamples(r.f0, 25)) + int((r.clk.Now().Sub(r.t0)-10*time.Millisecond+testLatency).Seconds()*SampleRate)
+	want := int(FramesToSamples(r.f0, model.Rate25)) + int((r.clk.Now().Sub(r.t0)-10*time.Millisecond+testLatency).Seconds()*SampleRate)
 	if got := r.pos(0); math.Abs(float64(got-want%16384)) > 1920/2+2 {
 		t.Fatalf("after the jump at %d, want ~%d", got, want%16384)
 	}
@@ -276,10 +276,10 @@ func TestLoopWrapsWithoutRestart(t *testing.T) {
 		r.step(1)
 		for i := range BlockFrames {
 			p := r.pos(i)
-			if p > int(FramesToSamples(30, 25))+4 {
+			if p > int(FramesToSamples(30, model.Rate25))+4 {
 				t.Fatalf("sound past Out: %d", p)
 			}
-			if p < int(FramesToSamples(15, 25)) && p > 0 {
+			if p < int(FramesToSamples(15, model.Rate25)) && p > 0 {
 				wrapped = true
 			}
 		}
@@ -339,14 +339,14 @@ func TestStopFadesOutAndHoldMutes(t *testing.T) {
 func TestScrubSnippet(t *testing.T) {
 	r := newRig(t)
 	r.step(1)
-	r.tr = Transport{FPS: 25, Frame: 100, At: r.clk.Now(), Scrub: 1, End: 250}
+	r.tr = Transport{FPS: model.Rate25, Frame: 100, At: r.clk.Now(), Scrub: 1, End: 250}
 	r.v.SetTransport(r.tr)
 	r.step(1)
 	if r.pos(BlockFrames-1) == 0 || r.out.last()[1] > 2000 {
 		t.Fatal("the snippet fades in")
 	}
 	r.step(1)
-	if want := int(FramesToSamples(100, 25)+BlockFrames) % 16384; r.pos(0) != want {
+	if want := int(FramesToSamples(100, model.Rate25)+BlockFrames) % 16384; r.pos(0) != want {
 		t.Fatalf("snippet at %d, want %d (no latency offset while paused)", r.pos(0), want)
 	}
 	r.step(4) // 4 more blocks, the last fading out: 60 ms in all
@@ -447,7 +447,7 @@ func TestErrorsReportedOnce(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatal("no report while nothing plays")
 	}
-	v.SetTransport(Transport{Playing: true, Rate: 1, FPS: 25, At: clk.Now(), Gen: 1, End: 25, Exact: true})
+	v.SetTransport(Transport{Playing: true, Rate: 1, FPS: model.Rate25, At: clk.Now(), Gen: 1, End: 25, Exact: true})
 	for range 3 {
 		_ = e.Step()
 	}
@@ -469,7 +469,7 @@ func TestNoFFmpegReported(t *testing.T) {
 	for v.next.Load() == nil || !decoded(v.next.Load()) {
 		time.Sleep(time.Millisecond)
 	}
-	v.SetTransport(Transport{Playing: true, Rate: 1, FPS: 25, At: clk.Now(), Gen: 1, End: 25, Exact: true})
+	v.SetTransport(Transport{Playing: true, Rate: 1, FPS: model.Rate25, At: clk.Now(), Gen: 1, End: 25, Exact: true})
 	for range 3 {
 		_ = e.Step()
 	}
@@ -519,7 +519,7 @@ func TestNoGoroutineLeak(t *testing.T) {
 		v := e.AddVoice(nil)
 		p, _ := project(0, 100)
 		v.SetProject(p)
-		v.SetTransport(Transport{Playing: true, Rate: 1, FPS: 25, At: time.Now(), Gen: 1, End: 100, Exact: true})
+		v.SetTransport(Transport{Playing: true, Rate: 1, FPS: model.Rate25, At: time.Now(), Gen: 1, End: 100, Exact: true})
 		time.Sleep(30 * time.Millisecond)
 		e.RemoveVoice(v)
 		e.Close()

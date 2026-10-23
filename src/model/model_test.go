@@ -129,8 +129,8 @@ func TestFadeAndTimecode(t *testing.T) {
 	if c.FadeFactor(0) != 0 || c.FadeFactor(10) != 1 || c.FadeFactor(19) != 0 || c.FadeFactor(2) != 0.4 {
 		t.Fatalf("fade %v %v %v", c.FadeFactor(0), c.FadeFactor(10), c.FadeFactor(19))
 	}
-	if Timecode(25*3661+3, 25) != "01:01:01:03" {
-		t.Fatal(Timecode(25*3661+3, 25))
+	if Timecode(25*3661+3, Rate25, false) != "01:01:01:03" {
+		t.Fatal(Timecode(25*3661+3, Rate25, false))
 	}
 }
 

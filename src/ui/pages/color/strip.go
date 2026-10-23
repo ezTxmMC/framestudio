@@ -161,12 +161,12 @@ func (c *clipCard) MouseOut()                      { c.hovered = false; c.applyS
 
 // set shows entry e at strip position n (1-based); thumb is the media poster if loaded,
 // mediaMissing marks a clip whose media item is gone or failed to decode.
-func (c *clipCard) set(n int, e stripClip, fps int, thumb image.Image, mediaMissing bool) {
+func (c *clipCard) set(n int, e stripClip, pr *model.Project, thumb image.Image, mediaMissing bool) {
 	c.entry = e
 	cl := e.Clip
 	c.number.Text = fmt.Sprintf("%02d", n)
 	c.track.Text = e.Track
-	c.timecode.Text = model.Timecode(cl.Start, fps)
+	c.timecode.Text = pr.Timecode(cl.Start)
 	c.labelColor.FillColor = cl.Color.NRGBA()
 	if cl.Grade.IsNeutral() {
 		c.gradeDot.FillColor = color.Transparent

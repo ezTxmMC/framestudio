@@ -215,11 +215,19 @@ func TestValidate(t *testing.T) {
 	must(t, Validate(p, ok))
 
 	bad := map[string]Options{
-		"gerade Breite":   {Format: FormatMP4, Path: filepath.Join(dir, "a.mp4"), Width: 161, Height: 90},
 		"existiert nicht": {Format: FormatMP4, Path: filepath.Join(dir, "nope", "a.mp4"), Width: 160, Height: 90},
 		"Auflösung fehlt": {Format: FormatGIF, Path: filepath.Join(dir, "a.gif")},
 		"keine hörbaren":  {Format: FormatWAV, Path: filepath.Join(dir, "a.wav")},
 		"Unbekanntes":     {Format: "avi", Path: filepath.Join(dir, "a.avi"), Width: 2, Height: 2},
+	}
+	// Odd sizes are valid: Run rounds them down to even numbers and says so.
+	odd := Options{Format: FormatMP4, Path: filepath.Join(dir, "a.mp4"), Width: 161, Height: 91}
+	must(t, Validate(p, odd))
+	if w, h := EvenSize(odd); w != 160 || h != 90 || !strings.Contains(EvenNote(odd), "160 × 90") {
+		t.Errorf("even size %d×%d note %q", w, h, EvenNote(odd))
+	}
+	if EvenNote(Options{Format: FormatPNG, Width: 161, Height: 91}) != "" || EvenNote(Options{Format: FormatMP4, Width: 160, Height: 90}) != "" {
+		t.Error("no note for PNG or even sizes")
 	}
 	for want, o := range bad {
 		if err := Validate(p, o); err == nil || !strings.Contains(err.Error(), want) {
@@ -392,10 +400,10 @@ func TestPipelineOrder(t *testing.T) {
 }
 
 func TestTimelineFrames(t *testing.T) {
-	if got := timelineFrames(10, 35, 25, 15); len(got) != 15 || got[0] != 10 || got[1] != 11 || got[14] != 33 {
+	if got := timelineFrames(10, 35, model.Rate25, model.IntRate(15)); len(got) != 15 || got[0] != 10 || got[1] != 11 || got[14] != 33 {
 		t.Errorf("gif sampling %v", got)
 	}
-	if got := timelineFrames(0, 3, 25, 25); len(got) != 3 || got[2] != 2 {
+	if got := timelineFrames(0, 3, model.Rate25, model.Rate25); len(got) != 3 || got[2] != 2 {
 		t.Errorf("full rate %v", got)
 	}
 }
@@ -417,7 +425,7 @@ type fakeFallback struct {
 	calls int
 }
 
-func (f *fakeFallback) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
+func (f *fakeFallback) VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
@@ -428,14 +436,14 @@ func TestSeqSource(t *testing.T) {
 	fb := &fakeFallback{}
 	s := newSeqSource(fb, 4)
 	opens := 0
-	s.open = func(m model.MediaItem, n, fps, w, h int) (media.FrameReader, error) {
+	s.open = func(m model.MediaItem, n int, fps model.Rate, w, h int) (media.FrameReader, error) {
 		opens++
 		return &fakeReader{n: n, end: 100}, nil
 	}
 	m := model.MediaItem{ID: "m", Path: "/m"}
 	check := func(n int) {
 		t.Helper()
-		img, err := s.VideoFrame(m, n, 25, 8, 8)
+		img, err := s.VideoFrame(m, n, model.Rate25, 8, 8)
 		if err != nil || img.Bounds().Dx() != n+1 {
 			t.Fatalf("frame %d: %v %v", n, img.Bounds(), err)
 		}
@@ -465,11 +473,11 @@ func TestSeqSource(t *testing.T) {
 
 	// Concurrent, slightly reordered access stays correct.
 	s = newSeqSource(fb, 8)
-	s.open = func(m model.MediaItem, n, fps, w, h int) (media.FrameReader, error) {
+	s.open = func(m model.MediaItem, n int, fps model.Rate, w, h int) (media.FrameReader, error) {
 		return &fakeReader{n: n, end: 1000}, nil
 	}
 	err := pipeline(context.Background(), 300, 6, func(i int) (int, error) {
-		img, err := s.VideoFrame(m, i, 25, 8, 8)
+		img, err := s.VideoFrame(m, i, model.Rate25, 8, 8)
 		if err != nil {
 			return 0, err
 		}

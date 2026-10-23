@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strconv"
 	"sync"
 
 	"framestudio-proto/src/model"
@@ -92,20 +91,18 @@ func (r *reverse) note(s stream, n int) (prev int, ok bool) {
 // (1 normal, 2/4/8 fast forward, negative = reverse, 0 = unknown). Negative rates decode
 // backwards in chunks; |rate| >= 2 lets a frame within ±1 of n stand in when n itself is
 // not decoded yet. With rate 0 or 1 it behaves exactly like VideoFrame.
-func (c *Cache) PlaybackFrame(m model.MediaItem, n, fps, w, h int, rate float64) (image.Image, error) {
+func (c *Cache) PlaybackFrame(m model.MediaItem, n int, fps model.Rate, w, h int, rate float64) (image.Image, error) {
 	return c.frame(m, n, fps, w, h, rate)
 }
 
-func (c *Cache) frame(m model.MediaItem, n, fps, w, h int, rate float64) (image.Image, error) {
+func (c *Cache) frame(m model.MediaItem, n int, fps model.Rate, w, h int, rate float64) (image.Image, error) {
 	switch m.Kind {
 	case model.KindImage:
 		return c.Image(m, w, h)
 	case model.KindAudio:
 		return nil, fmt.Errorf("„%s“ hat kein Bild", m.Name)
 	}
-	if fps <= 0 {
-		fps = 25
-	}
+	fps = fps.Or(model.Rate25).Reduced()
 	w, h = fitSize(m.Width, m.Height, w, h)
 	if w <= 0 || h <= 0 {
 		return nil, errors.New("Bildgröße für die Vorschau ist ungültig")
@@ -175,7 +172,7 @@ func (c *Cache) near(s stream, n int, rate float64) (image.Image, bool) {
 			if rate > 0 {
 				c.pmu.Lock()
 				for _, p := range c.prefetchers {
-					if p.s == s && p.covers(n, 2*s.fps) {
+					if p.s == s && p.covers(n, 2*s.fps.Nominal()) {
 						p.demand(n)
 						break
 					}
@@ -204,7 +201,7 @@ func (c *Cache) single(m model.MediaItem, s stream, n int) (image.Image, error) 
 // chunkFrames is the number of frames of one backward chunk of s, limited so a chunk
 // fills at most a quarter of the frame cache.
 func (c *Cache) chunkFrames(s stream) int {
-	n := reverseSeconds * s.fps
+	n := reverseSeconds * s.fps.Nominal()
 	if limit := int(c.frames.getBudget() / 4 / int64(s.w*s.h*4)); n > limit {
 		n = max(limit, 1)
 	}
@@ -418,10 +415,10 @@ func (c *Cache) goGrab(m model.MediaItem, s stream, n int, st *shuttle) bool {
 
 // keyframeArgs builds an ffmpeg command line that writes the keyframe at or before frame
 // n as raw RGBA: only keyframes are decoded, so a grab costs one frame even in long GOPs.
-func keyframeArgs(path string, n, fps, w, h int) []string {
+func keyframeArgs(path string, n int, fps model.Rate, w, h int) []string {
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-skip_frame", "nokey"}
-	if t := seconds(n, fps); t > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 6, 64))
+	if t := fps.FramesToDuration(n); t > 0 {
+		args = append(args, "-ss", model.DurationSeconds(t))
 	}
 	args = append(args, "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1")
 	return append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=bicubic", w, h), "-f", "rawvideo", "-pix_fmt", "rgba", "-")

@@ -396,25 +396,25 @@ func TestProjectFPSChange(t *testing.T) {
 	}
 	rate.SetSelected("50 fps")
 	title := clipNamed(t, f.s.Project, "Titel")
-	if f.s.FPS() != 50 || title.Start != 50 || title.Length != 100 || f.s.Project.Markers[0].Frame != 100 {
-		t.Fatalf("not rescaled: fps %d title %d+%d", f.s.FPS(), title.Start, title.Length)
+	if !f.s.FPS().Equal(model.Rate50) || title.Start != 50 || title.Length != 100 || f.s.Project.Markers[0].Frame != 100 {
+		t.Fatalf("not rescaled: fps %v title %d+%d", f.s.FPS(), title.Start, title.Length)
 	}
 	if f.s.Playhead != 100 {
 		t.Fatal("playhead not rescaled")
 	}
 	f.s.Undo()
-	if f.s.FPS() != 25 || clipNamed(t, f.s.Project, "Titel").Start != 25 {
+	if !f.s.FPS().Equal(model.Rate25) || clipNamed(t, f.s.Project, "Titel").Start != 25 {
 		t.Fatal("fps change must be one undo step")
 	}
 }
 
 func TestRescaleFPSKeepsMediaInBounds(t *testing.T) {
 	p := model.NewProject("x")
-	p.Settings.FPS = 30
+	p.Settings.FPS = model.Rate30
 	id := p.AddMedia(model.MediaItem{Name: "v", Kind: model.KindVideo, Duration: 1001 * time.Millisecond})
 	c := p.ClipFromMedia(p.Media[0], 0, 0)
 	_ = p.PlaceClip(p.Tracks[0].ID, c)
-	if err := rescaleFPS(p, 24); err != nil {
+	if err := p.SetSettings(model.Settings{Width: p.Settings.Width, Height: p.Settings.Height, FPS: model.Rate24, Background: p.Settings.Background}); err != nil {
 		t.Fatal(err)
 	}
 	got := p.Tracks[0].Clips[0]
@@ -494,13 +494,13 @@ func TestInsertSkipsLockedTracks(t *testing.T) {
 func TestFPSChangeUndoKeepsRange(t *testing.T) {
 	f := newFixture(t, basicProject())
 	f.s.Playhead, f.s.In, f.s.Out = 50, 25, 75
-	f.pg.setFPS(50)
+	f.pg.setFPS(model.Rate50)
 	if f.s.Playhead != 100 || f.s.In != 50 || f.s.Out != 150 {
 		t.Fatalf("after change: %d %d %d", f.s.Playhead, f.s.In, f.s.Out)
 	}
 	f.s.Undo()
-	if f.s.FPS() != 25 || f.s.Playhead != 50 || f.s.In != 25 || f.s.Out != 75 {
-		t.Fatalf("after undo: fps %d, %d %d %d", f.s.FPS(), f.s.Playhead, f.s.In, f.s.Out)
+	if !f.s.FPS().Equal(model.Rate25) || f.s.Playhead != 50 || f.s.In != 25 || f.s.Out != 75 {
+		t.Fatalf("after undo: fps %v, %d %d %d", f.s.FPS(), f.s.Playhead, f.s.In, f.s.Out)
 	}
 }
 

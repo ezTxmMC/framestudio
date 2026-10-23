@@ -184,7 +184,7 @@ func demoProject() *model.Project {
 	sec := func(s float64) int { return int(s * 25) }
 	voice := pr.AddMedia(model.MediaItem{Name: "Interview Anna.wav", Path: "/media/interview-anna.wav", Kind: model.KindAudio, Duration: 50 * time.Second})
 	music := pr.AddMedia(model.MediaItem{Name: "Score Morgenlicht.mp3", Path: "/media/morgenlicht.mp3", Kind: model.KindAudio, Duration: 70 * time.Second})
-	drone := pr.AddMedia(model.MediaItem{Name: "Drohne Küste.mp4", Path: "/media/drohne.mp4", Kind: model.KindVideo, Duration: 30 * time.Second, HasAudio: true, Width: 1920, Height: 1080, FPS: 25})
+	drone := pr.AddMedia(model.MediaItem{Name: "Drohne Küste.mp4", Path: "/media/drohne.mp4", Kind: model.KindVideo, Duration: 30 * time.Second, HasAudio: true, Width: 1920, Height: 1080, FPS: model.Rate25})
 	pr.AddTrack(model.TrackAudio)
 	pr.AddTrack(model.TrackAudio)
 	pr.AddTrack(model.TrackAudio)

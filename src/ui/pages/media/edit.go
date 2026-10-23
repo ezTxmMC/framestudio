@@ -19,8 +19,7 @@ const stillSeconds = 5
 // shared with the edit page). Stills get five seconds. It returns the ID of the main
 // clip and its end frame.
 func placeMedia(p *model.Project, m model.MediaItem, at int, preferredTrack string) (string, int, error) {
-	fps := max(p.Settings.FPS, 1)
-	id, err := p.PlaceMedia(m, at, stillSeconds*fps, preferredTrack)
+	id, err := p.PlaceMedia(m, at, max(1, p.Rate().SecondsToFrames(stillSeconds)), preferredTrack)
 	if err != nil {
 		return "", 0, err
 	}

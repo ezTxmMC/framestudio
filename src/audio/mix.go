@@ -10,7 +10,7 @@ import (
 // sample units and their decoded sources. Plans are immutable once built, so the mixer
 // goroutine reads them without locks.
 type Plan struct {
-	FPS    int
+	FPS    model.Rate
 	Tracks []TrackPlan // all audio tracks, in project order
 	Err    error       // a problem that makes the mix silent (e.g. ErrNoFFmpeg)
 	keys   map[string]string
@@ -39,11 +39,13 @@ type ClipPlan struct {
 }
 
 // FramesToSamples converts a timeline frame position to a sample position.
-func FramesToSamples(f, fps int) int64 {
-	if fps <= 0 {
+// The result is exact: f*SampleRate*Den/Num rounded to the nearest sample (model.Rate.SamplesAt).
+// An unset rate gives 0.
+func FramesToSamples(f int, fps model.Rate) int64 {
+	if fps.Num <= 0 || fps.Den <= 0 {
 		return 0
 	}
-	return int64(math.Round(float64(f) * SampleRate / float64(fps)))
+	return fps.SamplesAt(f, SampleRate)
 }
 
 // BuildPlan prepares p for mixing. source returns the decoded audio of a media item
@@ -51,7 +53,7 @@ func FramesToSamples(f, fps int) int64 {
 // so their audio is ready when they are switched back on. Clips follow export's rules:
 // audio tracks only, clips of kind audio whose media is audio or video with sound.
 func BuildPlan(p *model.Project, source func(m model.MediaItem) (Source, error)) *Plan {
-	fps := p.Settings.FPS
+	fps := p.Rate()
 	pl := &Plan{FPS: fps, keys: map[string]string{}}
 	solo := false
 	for _, t := range p.Tracks {
@@ -92,7 +94,7 @@ func BuildPlan(p *model.Project, source func(m model.MediaItem) (Source, error))
 	return pl
 }
 
-func clipPlan(c model.Clip, gain float64, fps int, src Source) ClipPlan {
+func clipPlan(c model.Clip, gain float64, fps model.Rate, src Source) ClipPlan {
 	cp := ClipPlan{
 		Start:  FramesToSamples(c.Start, fps),
 		End:    FramesToSamples(c.End(), fps),

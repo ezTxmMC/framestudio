@@ -7,17 +7,19 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"framestudio-proto/src/model"
 )
 
 func TestParseFrames(t *testing.T) {
 	cases := map[string]int{"2": 50, "1,5": 38, "48f": 48, "00:00:02:12": 62, "01:00": 25, "1:00:00": 1500}
 	for in, want := range cases {
-		if got, err := ParseFrames(in, 25); err != nil || got != want {
+		if got, err := ParseFrames(in, model.Rate25, false); err != nil || got != want {
 			t.Errorf("%q: got %d, %v; want %d", in, got, err, want)
 		}
 	}
 	for _, bad := range []string{"", "x", "00:00:00:30", "-1"} {
-		if _, err := ParseFrames(bad, 25); err == nil {
+		if _, err := ParseFrames(bad, model.Rate25, false); err == nil {
 			t.Errorf("%q should fail", bad)
 		}
 	}
@@ -47,5 +49,34 @@ func TestSliderGivesFocusBack(t *testing.T) {
 	s.DragEnd()
 	if w.Canvas().Focused() != nil {
 		t.Fatal("drag end must release the focus")
+	}
+}
+
+func TestParseFramesNTSCAndDropFrame(t *testing.T) {
+	cases := []struct {
+		in   string
+		rate model.Rate
+		drop bool
+		want int
+	}{
+		{"00:01:00;02", model.NTSC30, true, 1800},
+		{"00:01:00:02", model.NTSC30, true, 1800}, // either separator
+		{"00:10:00;00", model.NTSC30, true, 17982},
+		{"1:00", model.NTSC30, false, 30},
+		{"00:00:01:00", model.NTSC24, false, 24},
+		{"2", model.NTSC30, false, 60},
+		{"1,5", model.NTSC24, false, 36},
+		{"48f", model.NTSC24, true, 48},
+	}
+	for _, c := range cases {
+		if got, err := ParseFrames(c.in, c.rate, c.drop); err != nil || got != c.want {
+			t.Errorf("%q at %v drop=%v: %d, %v; want %d", c.in, c.rate, c.drop, got, err, c.want)
+		}
+	}
+	if _, err := ParseFrames("00:01:00;00", model.NTSC30, true); err == nil {
+		t.Error("00:01:00;00 does not exist in drop-frame")
+	}
+	if _, err := ParseFrames("00:00:00:24", model.NTSC24, false); err == nil {
+		t.Error("frame 24 does not exist at 23.976")
 	}
 }

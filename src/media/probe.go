@@ -181,7 +181,7 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 				m.Width, m.Height = m.Height, m.Width
 			}
 			m.FPS = parseRate(s.RFrameRate)
-			if avg := parseRate(s.AvgFrameRate); m.FPS == 0 || (m.FPS > 240 && avg > 0) {
+			if avg := parseRate(s.AvgFrameRate); m.FPS.IsZero() || (m.FPS.Float() > model.MaxFPS && !avg.IsZero()) {
 				m.FPS = avg
 			}
 			videoDur = streamDuration(s.Duration, s.Tags)
@@ -203,7 +203,7 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 		return errors.New("Datei enthält keine Tonspur")
 	}
 	if m.Kind == model.KindAudio {
-		m.Width, m.Height, m.FPS = 0, 0, 0
+		m.Width, m.Height, m.FPS = 0, 0, model.Rate{}
 		m.HasAudio = true
 	}
 	m.Duration = time.Duration(dur * float64(time.Second))
@@ -241,17 +241,19 @@ func rotated(tag string, side []struct {
 	return q == 90 || q == 270
 }
 
-// parseRate parses ffprobe rates like "30000/1001"; invalid rates give 0.
-func parseRate(s string) float64 {
-	num, den, ok := strings.Cut(s, "/")
+// parseRate parses ffprobe rates like "30000/1001" exactly; invalid rates (0/0) give the
+// zero Rate. A plain decimal is snapped (model.SnapRate).
+func parseRate(s string) model.Rate {
+	num, den, ok := strings.Cut(strings.TrimSpace(s), "/")
 	if !ok {
-		return parseFloat(s)
+		return model.SnapRate(parseFloat(s))
 	}
-	n, d := parseFloat(num), parseFloat(den)
-	if n <= 0 || d <= 0 {
-		return 0
+	n, err1 := strconv.ParseInt(strings.TrimSpace(num), 10, 32)
+	d, err2 := strconv.ParseInt(strings.TrimSpace(den), 10, 32)
+	if err1 != nil || err2 != nil || n <= 0 || d <= 0 {
+		return model.Rate{}
 	}
-	return math.Round(n/d*1000) / 1000
+	return model.Rate{Num: int(n), Den: int(d)}.Reduced()
 }
 
 func parseFloat(s string) float64 {

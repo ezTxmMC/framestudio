@@ -406,30 +406,36 @@ func frameCount(p *model.Project, o export.Options) int {
 }
 
 // outputRate is the frame rate of the written file.
-func outputRate(o export.Options, fps int) int {
-	if o.Format == export.FormatGIF {
-		return min(fps, 15)
-	}
-	return fps
-}
+func outputRate(o export.Options, fps model.Rate) model.Rate { return export.OutputRate(o, fps) }
 
 // jobSummary is the compact technical line of a queue card.
-func jobSummary(o export.Options, fps, frames int) string {
+func jobSummary(o export.Options, fps model.Rate, drop bool, frames int) string {
 	parts := []string{strings.ToUpper(string(o.Format))}
 	if o.Format != export.FormatWAV {
-		parts = append(parts, fmt.Sprintf("%d×%d", o.Width, o.Height), fmt.Sprintf("%d fps", outputRate(o, fps)))
+		parts = append(parts, sizeText(o, "%d×%d"), outputRate(o, fps).Label())
 	}
-	return strings.Join(append(parts, model.Timecode(frames, fps)), " · ")
+	return strings.Join(append(parts, model.Timecode(frames, fps, drop && fps.CanDropFrame())), " · ")
+}
+
+// sizeText is the output size; MP4 and WebM round odd sizes down to even ones (export.EvenSize),
+// which the text says.
+func sizeText(o export.Options, format string) string {
+	w, h := export.EvenSize(o)
+	s := fmt.Sprintf(format, w, h)
+	if w != o.Width || h != o.Height {
+		s += fmt.Sprintf(" (gerundet von %d×%d)", o.Width, o.Height)
+	}
+	return s
 }
 
 // videoSummary / audioSummary describe the encoded streams of an export.
-func videoSummary(o export.Options, fps int) string {
+func videoSummary(o export.Options, fps model.Rate) string {
 	codec := map[export.Format]string{export.FormatMP4: "H.264", export.FormatWebM: "VP9",
 		export.FormatGIF: "GIF", export.FormatPNG: "PNG"}[o.Format]
 	if codec == "" {
 		return "–"
 	}
-	return fmt.Sprintf("%s · %d × %d · %d fps", codec, o.Width, o.Height, outputRate(o, fps))
+	return fmt.Sprintf("%s · %s · %s", codec, sizeText(o, "%d × %d"), outputRate(o, fps).Label())
 }
 
 func audioSummary(o export.Options) string {

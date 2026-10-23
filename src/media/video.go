@@ -38,12 +38,12 @@ func fitSize(sw, sh, w, h int) (int, int) {
 }
 
 // clampFrame keeps frame n (at fps) inside the media duration.
-func clampFrame(m model.MediaItem, n, fps int) int {
+func clampFrame(m model.MediaItem, n int, fps model.Rate) int {
 	if n < 0 {
 		n = 0
 	}
 	if m.Duration > 0 {
-		last := int(m.Duration.Seconds()*float64(fps)) - 1
+		last := fps.DurationToFrames(m.Duration+time.Microsecond) - 1
 		if n > last {
 			n = max(last, 0)
 		}
@@ -51,11 +51,9 @@ func clampFrame(m model.MediaItem, n, fps int) int {
 	return n
 }
 
-func seconds(n, fps int) float64 { return float64(n) / float64(fps) }
-
 // seekLead is how far before the wanted frame decoding starts, so the frame rate filter
 // sees the source frame that precedes the target time.
-const seekLead = 0.5
+const seekLead = 500 * time.Millisecond
 
 // frameArgs builds an ffmpeg command line that writes frames n, n+1, ... of a video
 // resampled to fps as raw RGBA of w x h to stdout; frames > 0 stops after that many.
@@ -63,16 +61,16 @@ const seekLead = 0.5
 // Timestamps stay absolute (-copyts) and the fps filter runs before the cut, so frame n
 // is the same source frame whether decoding starts at 0 or seeks: random access, the
 // prefetchers and sequential export all show identical frames for every rate pair.
-func frameArgs(path string, n, fps, w, h, frames int) []string {
+func frameArgs(path string, n int, fps model.Rate, w, h, frames int) []string {
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
-	if t := seconds(n, fps) - seekLead; t > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 6, 64))
+	if t := fps.FramesToDuration(n) - seekLead; t > 0 {
+		args = append(args, "-ss", model.DurationSeconds(t))
 	}
 	args = append(args, "-copyts", "-start_at_zero", "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn")
 	if frames > 0 {
 		args = append(args, "-frames:v", strconv.Itoa(frames))
 	}
-	vf := fmt.Sprintf("fps=%d,trim=start_pts=%d,scale=%d:%d:flags=bicubic", fps, n, w, h)
+	vf := fmt.Sprintf("fps=%s,trim=start_pts=%d,scale=%d:%d:flags=bicubic", fps.Fraction(), n, w, h)
 	return append(args, "-vf", vf, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgba", "-")
 }
 
@@ -141,12 +139,12 @@ func decodeError(m model.MediaItem, stderr string, err error) error {
 // stream identifies one decoded rendition of a video: same file, rate and output size.
 type stream struct {
 	id, path string
-	fps      int
+	fps      model.Rate
 	w, h     int
 }
 
 func (s stream) frameKey(n int) string {
-	return fmt.Sprintf("vf|%s|%s|%d|%dx%d|%d", s.id, s.path, s.fps, s.w, s.h, n)
+	return fmt.Sprintf("vf|%s|%s|%s|%dx%d|%d", s.id, s.path, s.fps.Fraction(), s.w, s.h, n)
 }
 
 // prefetcher runs one ffmpeg process that decodes a stream sequentially into the
@@ -347,7 +345,7 @@ func (c *Cache) prefetcherFor(m model.MediaItem, s stream, n int) (*prefetcher, 
 			continue
 		}
 		live = append(live, p)
-		if found == nil && p.s == s && p.covers(n, 2*s.fps) {
+		if found == nil && p.s == s && p.covers(n, 2*s.fps.Nominal()) {
 			found = p
 		}
 	}
@@ -374,7 +372,7 @@ func (c *Cache) prefetcherFor(m model.MediaItem, s stream, n int) (*prefetcher, 
 		}
 		c.evict(all)
 	}
-	ahead := prefetchSeconds * s.fps
+	ahead := prefetchSeconds * s.fps.Nominal()
 	if limit := int(c.frames.getBudget() / 4 / int64(s.w*s.h*4)); ahead > limit {
 		ahead = max(limit, 1)
 	}

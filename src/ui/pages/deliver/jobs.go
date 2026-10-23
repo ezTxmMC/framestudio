@@ -45,7 +45,8 @@ type job struct {
 	opts    export.Options
 	project *model.Project // clone of the timeline, retaken when rendering starts
 	frames  int
-	fps     int
+	fps     model.Rate
+	drop    bool // drop-frame timecode in summaries
 
 	status   jobStatus
 	progress export.Progress
@@ -212,7 +213,7 @@ func (q *renderQueue) uses(path string) bool {
 // add enqueues an export of project; start marks it to render as soon as possible.
 func (q *renderQueue) add(o export.Options, project *model.Project, start bool) *job {
 	q.nextID++
-	j := &job{id: q.nextID, opts: o, project: project, frames: frameCount(project, o), fps: project.Settings.FPS}
+	j := &job{id: q.nextID, opts: o, project: project, frames: frameCount(project, o), fps: project.Rate(), drop: project.DropFrame()}
 	if start {
 		j.status = jobWaiting
 	}
@@ -280,7 +281,7 @@ func (q *renderQueue) start(j *job) {
 	// Render the timeline as it is now, not as it was when the job was added.
 	j.project = q.sess.Project.Clone()
 	j.frames = frameCount(j.project, j.opts)
-	j.fps = j.project.Settings.FPS
+	j.fps, j.drop = j.project.Rate(), j.project.DropFrame()
 	ctx, cancel := context.WithCancel(context.Background())
 	j.cancel = cancel
 	j.status = jobRunning
@@ -426,8 +427,8 @@ func (q *renderQueue) projectChanged() {
 		if !j.queued() {
 			continue
 		}
-		if n := frameCount(p, j.opts); n != j.frames || j.fps != p.Settings.FPS {
-			j.frames, j.fps = n, p.Settings.FPS
+		if n := frameCount(p, j.opts); n != j.frames || !j.fps.Equal(p.Rate()) || j.drop != p.DropFrame() {
+			j.frames, j.fps, j.drop = n, p.Rate(), p.DropFrame()
 			q.jobChanged(j)
 		}
 	}

@@ -195,19 +195,19 @@ func TestStripPosterRefreshesAfterRelink(t *testing.T) {
 func TestThumbKeyFollowsSourceTimeAndPath(t *testing.T) {
 	m := model.MediaItem{ID: "m1", Path: "/a.mov", Kind: model.KindVideo}
 	c := model.Clip{Kind: model.KindVideo, SourceIn: 50}
-	k1 := thumbKey(m, posterSec(c, 25))
-	if posterSec(c, 25) != 2 {
-		t.Errorf("poster at %v s, want 2", posterSec(c, 25))
+	k1 := thumbKey(m, posterSec(c, model.Rate25))
+	if posterSec(c, model.Rate25) != 2 {
+		t.Errorf("poster at %v s, want 2", posterSec(c, model.Rate25))
 	}
 	c.SourceIn = 75
-	if thumbKey(m, posterSec(c, 25)) == k1 {
+	if thumbKey(m, posterSec(c, model.Rate25)) == k1 {
 		t.Error("trimmed clip must get a new poster key")
 	}
 	m.Path = "/b.mov"
 	if thumbKey(m, 2) == k1 {
 		t.Error("relinked media must get a new poster key")
 	}
-	if posterSec(model.Clip{Kind: model.KindImage, SourceIn: 10}, 25) != 0 {
+	if posterSec(model.Clip{Kind: model.KindImage, SourceIn: 10}, model.Rate25) != 0 {
 		t.Error("stills use time 0")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
@@ -87,18 +88,22 @@ func pipeline[T any](ctx context.Context, n, pool int, work func(i int) (T, erro
 }
 
 // timelineFrames lists the timeline frames sampled at outFPS over [from,to).
-func timelineFrames(from, to, fps, outFPS int) []int {
-	if outFPS >= fps {
+func timelineFrames(from, to int, fps, outFPS model.Rate) []int {
+	fps, outFPS = fps.Or(model.Rate25), outFPS.Or(fps)
+	if !(int64(outFPS.Num)*int64(fps.Den) < int64(fps.Num)*int64(outFPS.Den)) {
 		out := make([]int, 0, to-from)
 		for f := from; f < to; f++ {
 			out = append(out, f)
 		}
 		return out
 	}
-	n := ((to-from)*outFPS + fps - 1) / fps
+	// out frame k shows the timeline frame at time k/outFPS: floor(k*fps/outFPS), exact.
+	num := int64(outFPS.Num) * int64(fps.Den)
+	den := int64(outFPS.Den) * int64(fps.Num)
+	n := ((int64(to-from))*num + den - 1) / den
 	out := make([]int, n)
 	for k := range out {
-		out[k] = from + k*fps/outFPS
+		out[k] = from + int(int64(k)*den/num)
 	}
 	return out
 }
@@ -156,18 +161,30 @@ func videoArgs(o Options) []string {
 	}
 	switch o.Format {
 	case FormatMP4:
-		return []string{"-c:v", "libx264", "-preset", "medium", "-crf", pick("18", "23", "28"),
-			"-pix_fmt", "yuv420p", "-movflags", "+faststart"}
+		return append(fpsFilterArgs(o), "-c:v", "libx264", "-preset", "medium", "-crf", pick("18", "23", "28"),
+			"-pix_fmt", "yuv420p", "-movflags", "+faststart")
 	case FormatWebM:
-		return []string{"-c:v", "libvpx-vp9", "-crf", pick("30", "34", "40"), "-b:v", "0",
-			"-row-mt", "1", "-deadline", "good", "-cpu-used", "2", "-pix_fmt", "yuv420p"}
+		return append(fpsFilterArgs(o), "-c:v", "libvpx-vp9", "-crf", pick("30", "34", "40"), "-b:v", "0",
+			"-row-mt", "1", "-deadline", "good", "-cpu-used", "2", "-pix_fmt", "yuv420p")
 	case FormatGIF:
 		colors := pick("256", "128", "64")
-		return []string{"-vf", fmt.Sprintf("scale=%d:-1:flags=lanczos,split[a][b];"+
-			"[a]palettegen=max_colors=%s:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4", o.Width, colors),
+		pre := ""
+		if o.fpsFilter != "" {
+			pre = o.fpsFilter + ","
+		}
+		return []string{"-vf", fmt.Sprintf("%sscale=%d:-1:flags=lanczos,split[a][b];"+
+			"[a]palettegen=max_colors=%s:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4", pre, o.Width, colors),
 			"-loop", "0"}
 	}
 	return nil
+}
+
+// fpsFilterArgs is the -vf argument that converts the rendered stream to the target rate.
+func fpsFilterArgs(o Options) []string {
+	if o.fpsFilter == "" {
+		return nil
+	}
+	return []string{"-vf", o.fpsFilter}
 }
 
 func audioArgs(f Format) []string {
@@ -182,12 +199,20 @@ func audioArgs(f Format) []string {
 
 func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Options, rep *reporter) error {
 	from, to := Range(p, o)
-	fps := p.Settings.FPS
-	outFPS := fps
-	if o.Format == FormatGIF {
-		outFPS = min(fps, gifMaxFPS)
+	fps := p.Rate()
+	// target is the frame rate of the file. Frames are rendered at the project rate and
+	// converted with ffmpeg's fps filter when the target differs; only GIF renders fewer
+	// frames up front when its target is lower than the project rate.
+	target := OutputRate(o, fps)
+	renderRate := fps
+	if o.Format == FormatGIF && target.Float() < fps.Float() {
+		renderRate = target
 	}
-	frames := timelineFrames(from, to, fps, outFPS)
+	frames := timelineFrames(from, to, fps, renderRate)
+	o.fpsFilter = ""
+	if !renderRate.Equal(target) {
+		o.fpsFilter = "fps=" + target.Fraction()
+	}
 
 	tmp, err := tempOutput(o.Path)
 	if err != nil {
@@ -196,7 +221,7 @@ func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Optio
 	defer os.Remove(tmp) // no-op after the final rename
 
 	args := []string{"-f", "rawvideo", "-pix_fmt", "rgba", "-s", fmt.Sprintf("%dx%d", o.Width, o.Height),
-		"-r", strconv.Itoa(outFPS), "-i", "-"}
+		"-r", renderRate.Fraction(), "-i", "-"}
 	var mix AudioMix
 	hasAudio := false
 	if o.IncludeAudio && o.Format != FormatGIF {
@@ -287,7 +312,7 @@ func runWAV(ctx context.Context, p *model.Project, o Options, rep *reporter) err
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ffmpeg kann nicht gestartet werden: %w", err)
 	}
-	readProgress(stdout, p.Settings.FPS, total, rep)
+	readProgress(stdout, p.Rate(), total, rep)
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -299,7 +324,7 @@ func runWAV(ctx context.Context, p *model.Project, o Options, rep *reporter) err
 }
 
 // readProgress turns ffmpeg "-progress" output (out_time_us=...) into frame progress.
-func readProgress(rd io.Reader, fps, total int, rep *reporter) {
+func readProgress(rd io.Reader, fps model.Rate, total int, rep *reporter) {
 	sc := bufio.NewScanner(rd)
 	for sc.Scan() {
 		v, ok := strings.CutPrefix(sc.Text(), "out_time_us=")
@@ -310,7 +335,7 @@ func readProgress(rd io.Reader, fps, total int, rep *reporter) {
 		if err != nil || us < 0 {
 			continue
 		}
-		rep.Frame(min(int(us*int64(fps)/1e6), total-1), total)
+		rep.Frame(min(fps.DurationToFrames(time.Duration(us)*time.Microsecond), total-1), total)
 	}
 }
 

@@ -197,7 +197,7 @@ func (c *clipPanel) update() {
 	defer func() { c.updating = false }()
 	c.empty.Hide()
 	c.scroll.Show()
-	fps := p.Settings.FPS
+	fps := p.Rate()
 
 	clips := make([]model.Clip, 0, len(c.ids))
 	locked := 0
@@ -236,7 +236,7 @@ func (c *clipPanel) update() {
 			src += "  ·  Ton aus Video"
 		}
 		if m.Duration > 0 {
-			src += "  ·  " + model.Timecode(p.MediaFrames(*m), fps)
+			src += "  ·  " + p.Timecode(p.MediaFrames(*m))
 		}
 		c.source.Text = fitText(src, 12, fyne.TextStyle{}, c.sourceWidth())
 	} else if !sameMedia {
@@ -252,12 +252,12 @@ func (c *clipPanel) update() {
 	}
 	if multi {
 		c.srcRange.Text = mixed
-		c.length.Text = model.Timecode(total, fps) + "  gesamt"
+		c.length.Text = p.Timecode(total) + "  gesamt"
 	} else {
-		c.srcRange.Text = model.Timecode(cl.SourceIn, fps) + " – " + model.Timecode(cl.SourceIn+cl.Length, fps)
-		c.length.Text = model.Timecode(cl.Length, fps)
+		c.srcRange.Text = p.Timecode(cl.SourceIn) + " – " + p.Timecode(cl.SourceIn+cl.Length)
+		c.length.Text = p.Timecode(cl.Length)
 	}
-	c.place.Text = model.Timecode(first, fps) + " – " + model.Timecode(last, fps)
+	c.place.Text = p.Timecode(first) + " – " + p.Timecode(last)
 	for _, t := range []*canvas.Text{c.source, c.srcRange, c.place, c.length} {
 		t.Refresh()
 	}

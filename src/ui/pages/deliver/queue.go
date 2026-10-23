@@ -183,7 +183,7 @@ func newJobView(q *queue, j *job) *jobView {
 	v.title = smallText(j.name(), studiotheme.Text, 13)
 	v.title.TextStyle = fyne.TextStyle{Bold: true}
 	v.status = smallText("", studiotheme.Muted, 12)
-	v.meta = kit.MonoText(jobSummary(j.opts, j.fps, j.frames), studiotheme.Muted, 10.5)
+	v.meta = kit.MonoText(jobSummary(j.opts, j.fps, j.drop, j.frames), studiotheme.Muted, 10.5)
 	v.bar = widget.NewProgressBar()
 	v.eta = kit.MonoText("", studiotheme.Muted, 11)
 	v.result = widget.NewLabel("")
@@ -215,7 +215,7 @@ func newJobView(q *queue, j *job) *jobView {
 
 func (v *jobView) refresh() {
 	j := v.j
-	if meta := jobSummary(j.opts, j.fps, j.frames); meta != v.meta.Text {
+	if meta := jobSummary(j.opts, j.fps, j.drop, j.frames); meta != v.meta.Text {
 		v.meta.Text = meta
 		v.meta.Refresh()
 	}

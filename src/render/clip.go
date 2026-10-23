@@ -25,10 +25,7 @@ func (r *Renderer) drawClip(l *image.NRGBA, p *model.Project, c *model.Clip, f i
 	if !ok {
 		return drawOffline(l, c.Name), true
 	}
-	fps := p.Settings.FPS
-	if fps <= 0 {
-		fps = 25
-	}
+	fps := p.Rate().Reduced()
 	rw, rh := requestSize(c.Fit, *m, w, h)
 	var src image.Image
 	var err error

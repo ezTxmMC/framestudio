@@ -78,8 +78,7 @@ func (d rowDefaults) of(k model.TrackKind) float32 {
 // fitFrames is the number of frames visible at zoom 1: the whole program plus some air,
 // at least ten seconds.
 func fitFrames(p *model.Project) float64 {
-	fps := max(p.Settings.FPS, 1)
-	return float64(max(p.Duration(), 10*fps)) * 1.05
+	return float64(max(p.Duration(), 10*p.SecondFrames())) * 1.05
 }
 
 // trackHeight is a track's lane height: the user's choice from heights, else the default.

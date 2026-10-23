@@ -137,7 +137,7 @@ func (tv *trackView) redraw() {
 
 func (tv *trackView) updatePlayhead() {
 	s := tv.pg.s
-	if tc := model.Timecode(s.Playhead, s.FPS()); tv.tc.Text != tc {
+	if tc := s.Timecode(s.Playhead); tv.tc.Text != tc {
 		tv.tc.Text = tc
 		tv.tc.Refresh()
 	}
@@ -460,7 +460,7 @@ func (r *ruler) Scrolled(e *fyne.ScrollEvent) {
 func visibleTicks(pg *Page, w float32, minPx float32) (first, step, last int) {
 	span := pg.span()
 	vis := int(math.Ceil(pg.view.visible(span)))
-	step = tickStep(vis, w, pg.s.FPS(), minPx)
+	step = tickStep(vis, w, pg.s.SecondFrames(), minPx)
 	first = int(pg.view.start) / step * step
 	last = int(pg.view.start) + vis + 1
 	return first, step, last
@@ -476,7 +476,6 @@ func (r *ruler) build(size fyne.Size) []fyne.CanvasObject {
 		edge := canvas.NewRectangle(studiotheme.Steel)
 		objs = append(objs, place(band, x0, 0, x1-x0, size.Height), place(edge, x0, size.Height-3, x1-x0, 3))
 	}
-	fps := s.FPS()
 	first, step, last := visibleTicks(pg, size.Width, 104)
 	minor := step / 5
 	if minor < 1 || step%5 != 0 {
@@ -492,7 +491,7 @@ func (r *ruler) build(size fyne.Size) []fyne.CanvasObject {
 		}
 		if f%step == 0 {
 			objs = append(objs, place(canvas.NewRectangle(studiotheme.Muted), x, size.Height-9, 1, 9))
-			lbl := kit.MonoText(model.Timecode(f, fps), studiotheme.Muted, 10)
+			lbl := kit.MonoText(s.Timecode(f), studiotheme.Muted, 10)
 			if x+4+80 <= size.Width {
 				objs = append(objs, place(lbl, x+4, 3, 90, 13))
 			}

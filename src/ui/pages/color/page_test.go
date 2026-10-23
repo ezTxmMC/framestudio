@@ -39,7 +39,7 @@ func newFixture(t *testing.T) *fixture {
 	pr := model.NewProject("Test")
 	v1, v2, a1 := pr.Tracks[0].ID, pr.Tracks[1].ID, pr.Tracks[2].ID
 	vid := pr.AddMedia(model.MediaItem{Name: "Interview.mov", Path: "/nicht/da.mov", Kind: model.KindVideo,
-		Width: 1920, Height: 1080, Duration: 4e9, FPS: 25, HasAudio: true})
+		Width: 1920, Height: 1080, Duration: 4e9, FPS: model.Rate25, HasAudio: true})
 	still := pr.AddMedia(model.MediaItem{Name: "Logo.png", Path: "/nicht/da.png", Kind: model.KindImage, Width: 800, Height: 600})
 	m, _ := pr.MediaByID(vid)
 	cv := pr.ClipFromMedia(*m, 0, 50)

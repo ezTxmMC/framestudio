@@ -102,7 +102,7 @@ func TestFrameRateChangeMovesPlayheadAndRange(t *testing.T) {
 		}
 	}
 	_ = s.Edit("Bildrate ändern", func(p *model.Project) error {
-		p.Settings.FPS = 50
+		p.Settings.FPS = model.Rate50
 		p.Tracks[0].Clips[0].Length = 1000
 		return nil
 	})
@@ -225,5 +225,54 @@ func TestSelectedTrackFollowsPrimary(t *testing.T) {
 	s.Undo()
 	if s.SelectedTrack != s.Project.Tracks[0].ID {
 		t.Fatal("undo must bring the selected track back to V1")
+	}
+}
+
+// After 24 h of playback in small ticks the playhead is exactly the frame of that time, for
+// integer and NTSC rates: the sub-frame carry never loses or invents time.
+func TestAdvanceNoDriftOver24Hours(t *testing.T) {
+	for _, r := range []model.Rate{model.Rate25, model.NTSC24, model.NTSC30, model.NTSC60} {
+		p := model.NewProject("long")
+		p.Settings.FPS = r
+		_ = p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "A", 0, 6000000))
+		s := New(p)
+		s.SetPlaying(true)
+		const tick = 16667 * time.Microsecond // a ~60 Hz clock
+		total := time.Duration(0)
+		for total+tick <= 24*time.Hour {
+			s.Advance(tick)
+			total += tick
+		}
+		if want := r.DurationToFrames(total); s.Playhead != want {
+			t.Errorf("%v: playhead %d after %v, want %d", r, s.Playhead, total, want)
+		}
+	}
+}
+
+func TestSetSettingsIsOneUndoableEdit(t *testing.T) {
+	s := newSession()
+	s.Playhead, s.In, s.Out = 25, 0, 50
+	st := s.Project.Settings
+	st.FPS, st.Width, st.Height, st.DropFrame = model.NTSC30, 1280, 720, true
+	if err := s.SetSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	if s.Project.Rate() != model.NTSC30 || s.Project.Settings.Width != 1280 || !s.Project.DropFrame() || s.Playhead != 30 || s.Out != 60 {
+		t.Fatalf("settings %+v playhead %d out %d", s.Project.Settings, s.Playhead, s.Out)
+	}
+	if got := s.Timecode(1800); got != "00:01:00;02" {
+		t.Errorf("drop-frame timecode %q", got)
+	}
+	if s.SecondFrames() != 30 {
+		t.Errorf("second step %d", s.SecondFrames())
+	}
+	s.Undo()
+	if s.Project.Rate() != model.Rate25 || s.Playhead != 25 || s.Out != 50 || s.Project.Settings.Width != 1920 || s.CanUndo() {
+		t.Fatalf("one undo must restore everything: %+v ph %d", s.Project.Settings, s.Playhead)
+	}
+	bad := st
+	bad.FPS = model.Rate{Num: 500, Den: 1}
+	if err := s.SetSettings(bad); err == nil || s.CanUndo() {
+		t.Error("invalid rate must be rejected without an undo step")
 	}
 }

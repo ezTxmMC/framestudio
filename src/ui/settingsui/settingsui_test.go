@@ -2,6 +2,7 @@ package settingsui
 
 import (
 	"encoding/json"
+	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/winchrome"
 	"image/png"
 	"os"
@@ -425,7 +426,7 @@ func TestStartupErrorAndRestartFlags(t *testing.T) {
 	if RestartRequested() {
 		t.Fatal("cancelled")
 	}
-	if TemplateByID("1080P60").FPS != 60 || TemplateByID("nope").ID != Templates[0].ID {
+	if !TemplateByID("1080P60").FPS.Equal(model.Rate60) || TemplateByID("nope").ID != Templates[0].ID {
 		t.Fatal("templates")
 	}
 }

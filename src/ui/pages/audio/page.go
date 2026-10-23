@@ -154,7 +154,7 @@ func (p *Page) Content() fyne.CanvasObject {
 
 	p.zoom = kit.NewSlider(0, 1)
 	p.zoom.Step = 0.001
-	p.zoom.OnChanged = func(v float64) { p.setZoom(sliderToZoom(v, maxZoom(p.span(), p.s.FPS())), -1) }
+	p.zoom.OnChanged = func(v float64) { p.setZoom(sliderToZoom(v, maxZoom(p.span(), p.s.SecondFrames())), -1) }
 	zoomOut := kit.ToolButton(theme.ZoomOutIcon(), func() { p.setZoom(p.view.zoom/1.5, -1) })
 	zoomIn := kit.ToolButton(theme.ZoomInIcon(), func() { p.setZoom(p.view.zoom*1.5, -1) })
 	fit := widget.NewButton("Einpassen", func() { p.setZoom(1, -1) })
@@ -276,7 +276,7 @@ func (p *Page) changed(c session.Change) {
 
 func (p *Page) refresh() {
 	p.stale = false
-	p.view.clamp(p.span(), p.s.FPS())
+	p.view.clamp(p.span(), p.s.SecondFrames())
 	p.syncZoomSlider()
 	if p.tracks != nil {
 		p.tracks.update()
@@ -323,7 +323,7 @@ func (p *Page) showErr(err error) {
 
 // span is the number of frames the lanes scroll over: the program plus some headroom.
 func (p *Page) span() int {
-	fps := max(p.s.FPS(), 1)
+	fps := max(p.s.SecondFrames(), 1)
 	d := max(p.s.Project.Duration(), 10*fps)
 	return d + d/16
 }
@@ -343,7 +343,7 @@ func (p *Page) laneWidth() float32 {
 // setZoom zooms around the lane position x (pixels), or around the playhead if it is
 // visible (else the centre) when x < 0.
 func (p *Page) setZoom(zoom float64, x float32) {
-	span, fps := p.span(), p.s.FPS()
+	span, fps := p.span(), p.s.SecondFrames()
 	w := p.laneWidth()
 	frac := 0.5
 	anchor := p.view.start + p.view.visible(span)/2
@@ -369,7 +369,7 @@ func (p *Page) scrollLanes(dx float32) {
 		return
 	}
 	old := p.view
-	p.view.scrollBy(float64(dx/w)*p.view.visible(p.span()), p.span(), p.s.FPS())
+	p.view.scrollBy(float64(dx/w)*p.view.visible(p.span()), p.span(), p.s.SecondFrames())
 	if p.view != old {
 		p.redrawLanes()
 	}
@@ -396,7 +396,7 @@ func (p *Page) syncZoomSlider() {
 	if p.zoom == nil {
 		return
 	}
-	v := zoomToSlider(p.view.zoom, maxZoom(p.span(), p.s.FPS()))
+	v := zoomToSlider(p.view.zoom, maxZoom(p.span(), p.s.SecondFrames()))
 	if math.Abs(p.zoom.Value-v) > 1e-9 {
 		p.zoom.Value = v // set directly: SetValue would fire OnChanged
 		p.zoom.Refresh()
@@ -408,7 +408,7 @@ func (p *Page) followPlayhead() {
 	if p.tracks == nil {
 		return
 	}
-	if p.view.follow(p.s.Playhead, p.s.Playing, p.s.Rate, p.span(), p.s.FPS()) {
+	if p.view.follow(p.s.Playhead, p.s.Playing, p.s.Rate, p.span(), p.s.SecondFrames()) {
 		p.redrawLanes()
 	}
 }

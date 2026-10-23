@@ -298,7 +298,7 @@ func (b *bars) refresh() {
 		setEnabled(b.undo, p.sess.CanUndo())
 		setEnabled(b.redo, p.sess.CanRedo())
 		st := p.sess.Project.Settings
-		b.format.Text = fmt.Sprintf("%d × %d  ·  %d fps", st.Width, st.Height, st.FPS)
+		b.format.Text = fmt.Sprintf("%d × %d  ·  %s", st.Width, st.Height, st.FPS.Label())
 		b.length.Text = "Dauer " + p.sess.Project.Timecode(p.sess.Project.Duration())
 	}
 	// Texts changed width: lay the bars out again.

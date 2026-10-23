@@ -91,7 +91,7 @@ func kindIcon(k model.ClipKind) fyne.Resource {
 }
 
 // infoLine returns the primary (duration or size) and secondary text of a media item.
-func infoLine(m model.MediaItem, fps int) (string, string) {
+func infoLine(m model.MediaItem, p *model.Project) (string, string) {
 	size := ""
 	if m.Width > 0 {
 		size = fmt.Sprintf("%d×%d", m.Width, m.Height)
@@ -100,15 +100,15 @@ func infoLine(m model.MediaItem, fps int) (string, string) {
 	case model.KindImage:
 		return size, "Standbild"
 	case model.KindAudio:
-		return model.Timecode(int(m.Duration.Seconds()*float64(fps)+0.5), fps), "Audio"
+		return p.Timecode(frames(m, p.Rate())), "Audio"
 	}
-	return model.Timecode(int(m.Duration.Seconds()*float64(fps)+0.5), fps), size
+	return p.Timecode(frames(m, p.Rate())), size
 }
 
-func (c *card) set(m model.MediaItem, fps int, thumb image.Image, selected, missing bool) {
+func (c *card) set(m model.MediaItem, p *model.Project, thumb image.Image, selected, missing bool) {
 	c.fullName = m.Name
 	c.icon.Resource = kindIcon(m.Kind)
-	c.info.Text, c.detail.Text = infoLine(m, fps)
+	c.info.Text, c.detail.Text = infoLine(m, p)
 	c.thumb.Image = thumb
 	c.placeholder.Resource = theme.NewColoredResource(kindIcon(m.Kind), theme.ColorNameDisabled)
 	c.placeholder.Hidden = thumb != nil

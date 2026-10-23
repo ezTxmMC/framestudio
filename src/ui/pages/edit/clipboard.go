@@ -15,7 +15,7 @@ var board clipboard
 type clipboard struct {
 	entries []clipEntry
 	media   []model.MediaItem
-	fps     int
+	fps     model.Rate
 }
 
 // clipEntry is one copied clip with its place relative to the copied group: lane is the
@@ -70,7 +70,7 @@ func copyClips(p *model.Project, ids []string) clipboard {
 		cb.entries = append(cb.entries, clipEntry{clip: x.c, kind: x.kind, lane: x.idx - low[x.kind], offset: x.c.Start - start})
 	}
 	sort.SliceStable(cb.entries, func(i, j int) bool { return cb.entries[i].offset < cb.entries[j].offset })
-	cb.fps = p.Settings.FPS
+	cb.fps = p.Rate()
 	return cb
 }
 
@@ -123,8 +123,8 @@ func (p *Page) paste() {
 		ids, end = ids[:0], at
 		mediaID := adoptMedia(pr, cb.media)
 		conv := func(f int) int { return f }
-		if cb.fps > 0 && cb.fps != pr.Settings.FPS {
-			conv = func(f int) int { return scaleFrames(f, cb.fps, pr.Settings.FPS) }
+		if cb.fps.Num > 0 && !cb.fps.Equal(pr.Rate()) {
+			conv = func(f int) int { return model.ConvertFrames(f, cb.fps, pr.Rate()) }
 		}
 		base := map[model.TrackKind]int{}
 		if t, ti := pr.Track(sel); t != nil {

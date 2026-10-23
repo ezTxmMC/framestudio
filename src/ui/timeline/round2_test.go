@@ -1029,13 +1029,13 @@ func TestPosterLoaderBackground(t *testing.T) {
 	l := newPosterLoader(src, func() { refreshed++ })
 	m := model.MediaItem{ID: "v", Path: "/x/v.mov", Kind: model.KindVideo, Duration: 10 * time.Second}
 	for f := 0; f < 5; f++ {
-		if l.get(m, f*25, 25) != nil {
+		if l.get(m, f*25, model.Rate25) != nil {
 			t.Fatal("first request is asynchronous")
 		}
 	}
 	if !q.Until(func() bool {
 		for f := 0; f < 5; f++ {
-			if l.get(m, f*25, 25) == nil {
+			if l.get(m, f*25, model.Rate25) == nil {
 				return false
 			}
 		}
@@ -1053,7 +1053,7 @@ func TestPosterLoaderBackground(t *testing.T) {
 	}
 	l.close()
 	l.wg.Wait()
-	if l.get(m, 999, 25) != nil {
+	if l.get(m, 999, model.Rate25) != nil {
 		t.Fatal("closed loader must not start work")
 	}
 }
@@ -1064,7 +1064,7 @@ func TestPosterQueueBound(t *testing.T) {
 	l := newPosterLoader(src, nil)
 	m := model.MediaItem{ID: "v", Path: "/x/v.mov"}
 	for f := 0; f < posterQueueMax+posterWorkers+10; f++ {
-		l.get(m, f, 25)
+		l.get(m, f, model.Rate25)
 	}
 	l.mu.Lock()
 	qn, items := len(l.queue), len(l.items)

@@ -80,7 +80,7 @@ func newTestShell(t *testing.T) (*Shell, fyne.Window, map[string][]*fakePage) {
 func saveSample(t *testing.T, name string, w, h, fps, length int) string {
 	t.Helper()
 	p := model.NewProject(name)
-	p.Settings.Width, p.Settings.Height, p.Settings.FPS = w, h, fps
+	p.Settings.Width, p.Settings.Height, p.Settings.FPS = w, h, model.IntRate(fps)
 	if length > 0 {
 		if err := p.PlaceClip(p.Tracks[0].ID, model.NewClip(model.KindColor, "Farbe", 0, length)); err != nil {
 			t.Fatal(err)
@@ -192,7 +192,7 @@ func TestSaveWithoutPathWritesIntoLibrary(t *testing.T) {
 	sh, w, _ := newTestShell(t)
 	sh.newProject("Mein Film", Templates[5])
 	s := sh.Active()
-	if s.Project.Settings.Width != 1080 || s.Project.Settings.Height != 1920 || s.Project.Settings.FPS != 30 {
+	if s.Project.Settings.Width != 1080 || s.Project.Settings.Height != 1920 || !s.Project.Settings.FPS.Equal(model.Rate30) {
 		t.Fatalf("template not applied: %+v", s.Project.Settings)
 	}
 	if s.SelectedTrack != s.Project.Tracks[0].ID {

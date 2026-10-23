@@ -65,10 +65,7 @@ func posterSlot(m model.MediaItem, sec float64) int {
 	}
 	q := int(math.Round(sec * posterQuantum))
 	if d := m.Duration.Seconds(); d > 0 {
-		step := 1.0 / 25
-		if m.FPS > 0 {
-			step = 1 / m.FPS
-		}
+		step := 1 / m.FPS.Or(model.Rate25).Float()
 		last := int(math.Floor((d - step) * posterQuantum))
 		q = min(q, max(last, 0))
 	}

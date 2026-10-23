@@ -52,7 +52,8 @@ var resolutions = []struct {
 	{"1080 × 1080  Quadrat", 1080, 1080},
 }
 
-var frameRates = []int{24, 25, 30, 50, 60}
+// frameRates is the temporary preset list of the project inspector.
+var frameRates = model.RatePresets
 
 // Palettes as 0xRRGGBBAA.
 var (
@@ -133,9 +134,14 @@ func (in *clipEditor) clip() *model.Clip {
 	return c
 }
 
-func (in *inspector) fps() int { return in.s.FPS() }
+func (in *inspector) fps() model.Rate { return in.s.FPS() }
 
-func (in *inspector) tc(f int) string { return model.Timecode(f, in.fps()) }
+func (in *inspector) tc(f int) string { return in.s.Timecode(f) }
+
+// parse reads a time typed by the user in the project's rate and timecode mode.
+func (in *inspector) parse(s string) (int, error) {
+	return kit.ParseFrames(s, in.s.FPS(), in.s.Project.DropFrame())
+}
 
 // set changes one property of the inspected clip. Continuous controls coalesce into a
 // single undo step per clip and field.
@@ -279,7 +285,7 @@ func (in *clipEditor) timingSection(c *model.Clip, extra ...fyne.CanvasObject) f
 	dur := newCommitEntry(true, nil)
 	end := kit.MonoText("", studiotheme.Muted, 12)
 	start.OnCommit = func(s string) {
-		f, err := kit.ParseFrames(s, in.fps())
+		f, err := in.parse(s)
 		if err == nil {
 			err = in.timing("Clip verschieben", func(p *model.Project, c *model.Clip, track string) error {
 				return p.MoveClip(c.ID, track, f)
@@ -291,7 +297,7 @@ func (in *clipEditor) timingSection(c *model.Clip, extra ...fyne.CanvasObject) f
 		}
 	}
 	dur.OnCommit = func(s string) {
-		f, err := kit.ParseFrames(s, in.fps())
+		f, err := in.parse(s)
 		if err == nil && f < 1 {
 			err = errors.New("Die Dauer muss mindestens 1 Frame betragen")
 		}
@@ -521,7 +527,7 @@ func (in *clipEditor) fadeSection() fyne.CanvasObject {
 			if c == nil {
 				return
 			}
-			f, err := kit.ParseFrames(s, in.fps())
+			f, err := in.parse(s)
 			if err == nil && f > c.Length {
 				err = fmt.Errorf("Die Blende ist länger als der Clip (%s)", in.tc(c.Length))
 			}
@@ -574,7 +580,7 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 	}
 	rateNames := make([]string, len(frameRates))
 	for i, r := range frameRates {
-		rateNames[i] = fmt.Sprintf("%d fps", r)
+		rateNames[i] = r.Label()
 	}
 	rate := newSelect(rateNames, nil)
 	rate.OnChanged = func(v string) {
@@ -593,7 +599,6 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 			return nil
 		})
 	})
-	rateHint := text("23,976 fps wird nicht unterstützt", studiotheme.Faint, 11)
 
 	stat := func() *canvas.Text { return text("", studiotheme.Text, 12) }
 	tracks, clips, media, markers := stat(), stat(), stat(), stat()
@@ -616,7 +621,7 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 		}
 		res.SetOptions(opts)
 		res.SetSelected(sel)
-		cur := fmt.Sprintf("%d fps", p.Settings.FPS)
+		cur := p.Rate().Label()
 		if !contains(rateNames, cur) {
 			rate.SetOptions(append(append([]string{}, rateNames...), cur))
 		} else {
@@ -646,7 +651,6 @@ func (in *inspector) buildProject() []fyne.CanvasObject {
 			field("Name", name), nameNote.box,
 			field("Auflösung", res),
 			field("Bildrate", rate),
-			field("", rateHint),
 			field("Hintergrund", bg.box),
 		),
 		section("Übersicht",

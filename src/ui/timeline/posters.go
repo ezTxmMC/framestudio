@@ -60,7 +60,7 @@ func newPosterLoader(src posterSource, refresh func()) *posterLoader {
 
 // get returns the frame of m at source frame (project frames, fps), or nil while it
 // loads. The first call for a frame queues it.
-func (l *posterLoader) get(m model.MediaItem, frame, fps int) image.Image {
+func (l *posterLoader) get(m model.MediaItem, frame int, fps model.Rate) image.Image {
 	if l == nil || l.src == nil {
 		return nil
 	}
@@ -84,7 +84,7 @@ func (l *posterLoader) get(m model.MediaItem, frame, fps int) image.Image {
 	}
 	e := &posterEntry{}
 	l.items[k] = e
-	req := posterReq{key: k, m: m, sec: float64(frame) / float64(max(fps, 1))}
+	req := posterReq{key: k, m: m, sec: fps.FramesToSeconds(frame)}
 	if l.inline {
 		l.mu.Unlock()
 		img, _ := l.src.Poster(req.m, req.sec, thumbW, thumbH)

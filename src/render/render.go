@@ -16,7 +16,7 @@ import (
 // VideoSource supplies decoded video frames. *media.Cache implements it; export
 // supplies a sequential decoder for speed.
 type VideoSource interface {
-	VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error)
+	VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error)
 }
 
 type Options struct {
@@ -31,7 +31,7 @@ type Options struct {
 // PlaybackSource is an optional VideoSource extension for shuttle playback.
 // *media.Cache implements it.
 type PlaybackSource interface {
-	PlaybackFrame(m model.MediaItem, n, fps, w, h int, rate float64) (image.Image, error)
+	PlaybackFrame(m model.MediaItem, n int, fps model.Rate, w, h int, rate float64) (image.Image, error)
 }
 
 type Renderer struct {

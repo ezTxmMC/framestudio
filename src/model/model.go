@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"image/color"
 	"time"
 )
 
-const FormatVersion = 1
+// FormatVersion is the project file format. Version 2 stores the frame rate as a Rate
+// (a number for integer rates, {"num","den"} otherwise) and adds settings.dropFrame; version 1
+// files (integer "fps") still load unchanged.
+const FormatVersion = 2
 
 type ClipKind string
 
@@ -169,7 +171,7 @@ type MediaItem struct {
 	Width    int           `json:"width,omitempty"`
 	Height   int           `json:"height,omitempty"`
 	Duration time.Duration `json:"duration,omitempty"` // zero for stills
-	FPS      float64       `json:"fps,omitempty"`
+	FPS      Rate          `json:"fps,omitzero"`       // source frame rate of videos
 	HasAudio bool          `json:"hasAudio,omitempty"`
 }
 
@@ -181,9 +183,12 @@ type Marker struct {
 }
 
 type Settings struct {
-	Width      int  `json:"width"`
-	Height     int  `json:"height"`
-	FPS        int  `json:"fps"`
+	Width  int  `json:"width"`
+	Height int  `json:"height"`
+	FPS    Rate `json:"fps"` // project frame rate, see Rate for the JSON forms
+	// DropFrame selects SMPTE drop-frame timecode display; it only has an effect at
+	// 29.97 and 59.94 fps (Rate.CanDropFrame).
+	DropFrame  bool `json:"dropFrame,omitempty"`
 	Background RGBA `json:"background"`
 }
 
@@ -210,7 +215,7 @@ func NewProject(name string) *Project {
 	now := time.Now()
 	p := &Project{
 		Version: FormatVersion, ID: NewID(), Name: name, Created: now, Modified: now,
-		Settings: Settings{Width: 1920, Height: 1080, FPS: 25, Background: RGBA{0, 0, 0, 255}},
+		Settings: Settings{Width: 1920, Height: 1080, FPS: Rate25, Background: RGBA{0, 0, 0, 255}},
 		Media:    []MediaItem{}, Markers: []Marker{},
 	}
 	p.AddTrack(TrackVideo)
@@ -243,30 +248,31 @@ func (p *Project) Duration() int {
 	return end
 }
 
-func (p *Project) FrameDuration() time.Duration {
-	return time.Second / time.Duration(p.Settings.FPS)
-}
+// Rate is the project frame rate (25 fps if unset).
+func (p *Project) Rate() Rate { return p.Settings.FPS.norm() }
 
-func (p *Project) FramesToDuration(f int) time.Duration {
-	return time.Duration(f) * time.Second / time.Duration(p.Settings.FPS)
-}
+// DropFrame reports whether timecodes are shown as drop-frame (only at 29.97 / 59.94).
+func (p *Project) DropFrame() bool { return p.Settings.DropFrame && p.Rate().CanDropFrame() }
 
-func (p *Project) DurationToFrames(d time.Duration) int {
-	return int(d * time.Duration(p.Settings.FPS) / time.Second)
-}
+// FrameDuration is the length of one frame.
+func (p *Project) FrameDuration() time.Duration { return p.Rate().FramesToDuration(1) }
 
-// Timecode formats frame f as HH:MM:SS:FF.
-func (p *Project) Timecode(f int) string { return Timecode(f, p.Settings.FPS) }
+// FramesToDuration is the time of frame f, exact (see Rate).
+func (p *Project) FramesToDuration(f int) time.Duration { return p.Rate().FramesToDuration(f) }
 
-func Timecode(f, fps int) string {
-	if f < 0 {
-		f = 0
-	}
-	if fps <= 0 {
-		fps = 25
-	}
-	s := f / fps
-	return fmt.Sprintf("%02d:%02d:%02d:%02d", s/3600, s/60%60, s%60, f%fps)
+// DurationToFrames is the number of whole project frames in d.
+func (p *Project) DurationToFrames(d time.Duration) int { return p.Rate().DurationToFrames(d) }
+
+// SecondFrames is the number of frames of a one-second step: the nominal rate (24 at
+// 23.976, 30 at 29.97).
+func (p *Project) SecondFrames() int { return p.Rate().Nominal() }
+
+// Timecode formats frame f as HH:MM:SS:FF, or HH:MM:SS;FF in drop-frame mode.
+func (p *Project) Timecode(f int) string { return Timecode(f, p.Rate(), p.DropFrame()) }
+
+// ParseTimecode reads a full timecode in the project's counting mode.
+func (p *Project) ParseTimecode(s string) (int, error) {
+	return ParseTimecode(s, p.Rate(), p.DropFrame())
 }
 
 func (p *Project) Track(id string) (*Track, int) {
@@ -300,8 +306,15 @@ func (p *Project) MediaByID(id string) (*MediaItem, bool) {
 }
 
 // MediaFrames is the length of a media item in project frames (0 for stills).
+//
+// Durations come from ffprobe as decimal seconds and are a hair below the exact frame
+// boundary as often as above it (4.003999 s for 120 frames at 29.97), so a microsecond of
+// tolerance (a hundredth of a frame at 240 fps) keeps whole-frame media whole.
 func (p *Project) MediaFrames(m MediaItem) int {
-	return p.DurationToFrames(m.Duration)
+	if m.Duration <= 0 {
+		return 0
+	}
+	return p.DurationToFrames(m.Duration + time.Microsecond)
 }
 
 // VideoTracks / AudioTracks return the track indices of each kind in compositing order.

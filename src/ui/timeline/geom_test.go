@@ -233,10 +233,10 @@ func TestFilmstripTilesStayAnchored(t *testing.T) {
 }
 
 func TestClipLabel(t *testing.T) {
-	if got := clipLabel(62, 25); got != "00:02:12" {
+	if got := clipLabel(62, model.NewProject("x")); got != "00:02:12" {
 		t.Errorf("got %q", got)
 	}
-	if got := clipLabel(25*3600, 25); got != "01:00:00:00" {
+	if got := clipLabel(25*3600, model.NewProject("x")); got != "01:00:00:00" {
 		t.Errorf("got %q", got)
 	}
 }

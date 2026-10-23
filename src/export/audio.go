@@ -2,7 +2,6 @@ package export
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"framestudio-proto/src/model"
@@ -70,14 +69,15 @@ func HasAudio(p *model.Project, from, to int) bool {
 // may exclude media that cannot be read (nil = all). ok is false if nothing is audible.
 func BuildAudioMix(p *model.Project, from, to, firstInput int, available func(model.MediaItem) bool) (mix AudioMix, ok bool) {
 	parts := audioParts(p, from, to, available)
-	if len(parts) == 0 || p.Settings.FPS <= 0 {
+	if len(parts) == 0 || !p.Settings.FPS.Valid() {
 		return AudioMix{}, false
 	}
-	fps := float64(p.Settings.FPS)
-	// Every position is a whole sample at 48 kHz, rounded like the live engine's
-	// FramesToSamples, so cuts at 24 or 30 fps (frames that are not whole milliseconds)
-	// join without gaps or overlaps and export matches what the engine plays.
-	smp := func(frames int) int64 { return int64(math.Round(float64(frames) * 48000 / fps)) }
+	rate := p.Rate()
+	// Every position is a whole sample at 48 kHz, computed exactly from the frame number
+	// (Rate.SamplesAt, the same function as the live engine's FramesToSamples), so cuts at
+	// 23.976 or 29.97 fps (frames that are not whole samples) join without gaps or overlaps
+	// and export matches what the engine plays.
+	smp := func(frames int) int64 { return rate.SamplesAt(frames, 48000) }
 	var b strings.Builder
 	for i, part := range parts {
 		c := part.clip

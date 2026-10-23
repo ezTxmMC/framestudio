@@ -23,7 +23,7 @@ const (
 // frames absorbs the slight reordering of the parallel renderers; anything else falls back
 // to the random-access source.
 type seqSource struct {
-	open     func(m model.MediaItem, n, fps, w, h int) (media.FrameReader, error)
+	open     func(m model.MediaItem, n int, fps model.Rate, w, h int) (media.FrameReader, error)
 	fallback render.VideoSource
 	keep     int // frames kept per reader
 
@@ -35,8 +35,9 @@ type seqSource struct {
 }
 
 type seqKey struct {
-	id, path  string
-	fps, w, h int
+	id, path string
+	fps      model.Rate
+	w, h     int
 }
 
 type seqReader struct {
@@ -65,7 +66,7 @@ func newSeqSource(fallback render.VideoSource, keep int) *seqSource {
 
 var errNoSource = errors.New("keine Videoquelle")
 
-func (s *seqSource) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image, error) {
+func (s *seqSource) VideoFrame(m model.MediaItem, n int, fps model.Rate, w, h int) (image.Image, error) {
 	if rd := s.reader(m, n, fps, w, h); rd != nil {
 		if img, ok := rd.frame(n, s.keep); ok {
 			return img, nil
@@ -78,7 +79,7 @@ func (s *seqSource) VideoFrame(m model.MediaItem, n, fps, w, h int) (image.Image
 }
 
 // reader finds a decoder that can serve frame n, opening one if needed.
-func (s *seqSource) reader(m model.MediaItem, n, fps, w, h int) *seqReader {
+func (s *seqSource) reader(m model.MediaItem, n int, fps model.Rate, w, h int) *seqReader {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.open == nil {

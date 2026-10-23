@@ -136,7 +136,7 @@ func TestApplyProbe(t *testing.T) {
 	if err := applyProbe(&m, []byte(js)); err != nil {
 		t.Fatal(err)
 	}
-	if m.Width != 1080 || m.Height != 1920 || m.FPS != 29.97 || !m.HasAudio || m.Duration != 12500*time.Millisecond {
+	if m.Width != 1080 || m.Height != 1920 || m.FPS != model.NTSC30 || !m.HasAudio || m.Duration != 12500*time.Millisecond {
 		t.Fatalf("unexpected %+v", m)
 	}
 	m = model.MediaItem{Kind: model.KindVideo}
@@ -151,7 +151,7 @@ func TestApplyProbe(t *testing.T) {
 
 func TestProbeVideoAndAudio(t *testing.T) {
 	m := mustProbe(t, testVideo(t))
-	if m.Kind != model.KindVideo || m.Width != 160 || m.Height != 90 || m.FPS != 25 || !m.HasAudio || m.Name != "clip" {
+	if m.Kind != model.KindVideo || m.Width != 160 || m.Height != 90 || m.FPS != model.Rate25 || !m.HasAudio || m.Name != "clip" {
 		t.Fatalf("unexpected %+v", m)
 	}
 	if m.Duration < 1900*time.Millisecond || m.Duration > 2200*time.Millisecond {
@@ -240,14 +240,14 @@ func TestVideoFrame(t *testing.T) {
 	m := mustProbe(t, testVideo(t))
 	c := NewCache()
 	defer c.Close()
-	f0, err := c.VideoFrame(m, 0, 25, 80, 80)
+	f0, err := c.VideoFrame(m, 0, model.Rate25, 80, 80)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b := f0.Bounds(); b.Dx() != 80 || b.Dy() != 45 {
 		t.Fatalf("frame size %v", b)
 	}
-	f10, err := c.VideoFrame(m, 10, 25, 80, 80)
+	f10, err := c.VideoFrame(m, 10, model.Rate25, 80, 80)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestVideoFrame(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	hits := c.hits.Load()
 	for n := 11; n < 20; n++ {
-		if _, err := c.VideoFrame(m, n, 25, 80, 80); err != nil {
+		if _, err := c.VideoFrame(m, n, model.Rate25, 80, 80); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -267,16 +267,16 @@ func TestVideoFrame(t *testing.T) {
 		t.Fatalf("sequential frames should mostly hit the cache, got %d hits", c.hits.Load()-hits)
 	}
 	// Prefetched frames match direct single-frame decodes.
-	one, err := decodeOne(context.Background(), m, frameArgs(m.Path, 15, 25, 80, 45, 1), 80, 45)
+	one, err := decodeOne(context.Background(), m, frameArgs(m.Path, 15, model.Rate25, 80, 45, 1), 80, 45)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f15, _ := c.VideoFrame(m, 15, 25, 80, 80)
+	f15, _ := c.VideoFrame(m, 15, model.Rate25, 80, 80)
 	if !sameImage(one, f15) {
 		t.Error("prefetched frame 15 differs from a direct decode")
 	}
 	// Past the end the last frame is held.
-	if _, err := c.VideoFrame(m, 500, 25, 80, 80); err != nil {
+	if _, err := c.VideoFrame(m, 500, model.Rate25, 80, 80); err != nil {
 		t.Fatal(err)
 	}
 	c.Invalidate(m.ID)
@@ -295,7 +295,7 @@ func TestTwoPlayheadsShareStream(t *testing.T) {
 	// Two clips of the same file, 4 s apart, play in parallel.
 	for n := 0; n < 6; n++ {
 		for _, base := range []int{0, 100} {
-			if _, err := c.VideoFrame(m, base+n, 25, 64, 36); err != nil {
+			if _, err := c.VideoFrame(m, base+n, model.Rate25, 64, 36); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -312,7 +312,7 @@ func TestPrefetcherLimit(t *testing.T) {
 	m := mustProbe(t, testVideo(t))
 	c := NewCache()
 	for i := 0; i < maxPrefetchers+3; i++ {
-		if _, err := c.VideoFrame(m, i*7%50, 25, 40+i*8, 40+i*8); err != nil {
+		if _, err := c.VideoFrame(m, i*7%50, model.Rate25, 40+i*8, 40+i*8); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -333,7 +333,7 @@ func TestPrefetcherLimit(t *testing.T) {
 
 func TestOpenVideo(t *testing.T) {
 	m := mustProbe(t, testVideo(t))
-	r, err := OpenVideo(m, 0, 25, 160, 90)
+	r, err := OpenVideo(m, 0, model.Rate25, 160, 90)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestOpenVideo(t *testing.T) {
 		t.Fatalf("got %d frames, want 50", count)
 	}
 	// Starting at frame 25 at 10 fps (1 s of 2 s) gives 10 frames.
-	r, err = OpenVideo(m, 10, 10, 80, 45)
+	r, err = OpenVideo(m, 10, model.IntRate(10), 80, 45)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestOpenVideo(t *testing.T) {
 	}
 	_ = r.Close()
 	// Closing early kills the process.
-	r, _ = OpenVideo(m, 0, 25, 160, 90)
+	r, _ = OpenVideo(m, 0, model.Rate25, 160, 90)
 	_, _ = r.Next()
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
@@ -473,7 +473,7 @@ func readAll(t *testing.T, r FrameReader) []image.Image {
 func TestRandomAccessMatchesSequential(t *testing.T) {
 	for _, tc := range []struct{ src, fps int }{{30, 25}, {25, 30}, {25, 25}} {
 		m := rateVideo(t, tc.src, 6)
-		r, err := OpenVideo(m, 0, tc.fps, 64, 36)
+		r, err := OpenVideo(m, 0, model.IntRate(tc.fps), 64, 36)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -484,14 +484,14 @@ func TestRandomAccessMatchesSequential(t *testing.T) {
 		c := NewCache()
 		for _, n := range []int{1, 5, 7, 12, 37, 61, 99, 6*tc.fps - 1} {
 			ctx := context.Background()
-			one, err := decodeOne(ctx, m, frameArgs(m.Path, n, tc.fps, 64, 36, 1), 64, 36)
+			one, err := decodeOne(ctx, m, frameArgs(m.Path, n, model.IntRate(tc.fps), 64, 36, 1), 64, 36)
 			if err != nil {
 				t.Fatalf("%d->%d frame %d: %v", tc.src, tc.fps, n, err)
 			}
 			if !sameImage(one, seq[n]) {
 				t.Errorf("%d->%d: random access frame %d differs from sequential decoding", tc.src, tc.fps, n)
 			}
-			r, err := OpenVideo(m, n, tc.fps, 64, 36)
+			r, err := OpenVideo(m, n, model.IntRate(tc.fps), 64, 36)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -500,7 +500,7 @@ func TestRandomAccessMatchesSequential(t *testing.T) {
 			if err != nil || !sameImage(first, seq[n]) {
 				t.Errorf("%d->%d: OpenVideo(%d) differs from sequential decoding (%v)", tc.src, tc.fps, n, err)
 			}
-			vf, err := c.VideoFrame(m, n, tc.fps, 64, 36)
+			vf, err := c.VideoFrame(m, n, model.IntRate(tc.fps), 64, 36)
 			if err != nil || !sameImage(vf, seq[n]) {
 				t.Errorf("%d->%d: VideoFrame(%d) differs from sequential decoding (%v)", tc.src, tc.fps, n, err)
 			}
@@ -520,7 +520,7 @@ func TestProbeUsesVideoStreamDuration(t *testing.T) {
 	}
 	c := NewCache()
 	defer c.Close()
-	if _, err := c.VideoFrame(m, 99, 25, 64, 36); err != nil {
+	if _, err := c.VideoFrame(m, 99, model.Rate25, 64, 36); err != nil {
 		t.Fatalf("last frame: %v", err)
 	}
 }
