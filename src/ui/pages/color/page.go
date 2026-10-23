@@ -14,12 +14,13 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
+	fynelayout "fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/viewer"
@@ -46,12 +47,10 @@ type Page struct {
 	compareBtn   *widget.Button
 	compareBadge fyne.CanvasObject
 
-	scope        scopeKind
-	scopeBtns    []*widget.Button
-	scopeImg     *canvas.Image
-	scopeWaiting fyne.CanvasObject
-	scopeScale   *fyne.Container
-	scopes       *scopeRunner
+	sv  *scopeView
+	top *container.Split // viewer | scopes
+	// pending is a layout applied before Content was built.
+	pending *layout.Page
 
 	entries     []stripClip
 	cards       []*clipCard
@@ -109,13 +108,15 @@ func (p *Page) Content() fyne.CanvasObject {
 	if p.content != nil {
 		return p.content
 	}
-	p.scopes = &scopeRunner{async: func(f func()) { p.async(f) }, show: p.showScope}
+	p.sv = newScopeView(func(f func()) { p.async(f) }, nil)
+	p.sv.onKind = func(scopeKind) { p.refreshCommands() }
 
-	top := container.NewHSplit(p.buildViewer(), p.buildScopes())
-	top.Offset = 0.6
+	top := container.NewHSplit(p.buildViewer(), p.sv.object)
+	top.Offset = defaultTopSplit
+	p.top = top
 	p.primary = newPrimaryPanel(p)
-	bottom := container.New(layout.NewCustomPaddedVBoxLayout(4), p.buildStrip(), p.primary.object)
-	body := container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4),
+	bottom := container.New(fynelayout.NewCustomPaddedVBoxLayout(4), p.buildStrip(), p.primary.object)
+	body := container.New(fynelayout.NewCustomPaddedLayout(4, 4, 4, 4),
 		container.NewBorder(nil, bottom, nil, nil, top))
 	p.content = container.NewStack(canvas.NewRectangle(studiotheme.Gap), body)
 
@@ -150,6 +151,10 @@ func (p *Page) Content() fyne.CanvasObject {
 	}
 	p.refreshStrip()
 	p.primary.refresh()
+	if p.pending != nil {
+		p.ApplyLayout(*p.pending)
+		p.pending = nil
+	}
 	return p.content
 }
 
@@ -168,8 +173,8 @@ func (p *Page) buildViewer() fyne.CanvasObject {
 	badgeBG.CornerRadius = 3
 	badgeBG.StrokeColor = studiotheme.Steel
 	badgeBG.StrokeWidth = 1
-	badge := container.NewStack(badgeBG, container.New(layout.NewCustomPaddedLayout(2, 2, 8, 8), badgeText))
-	p.compareBadge = container.New(layout.NewCustomPaddedLayout(8, 0, 8, 0),
+	badge := container.NewStack(badgeBG, container.New(fynelayout.NewCustomPaddedLayout(2, 2, 8, 8), badgeText))
+	p.compareBadge = container.New(fynelayout.NewCustomPaddedLayout(8, 0, 8, 0),
 		container.NewVBox(container.NewHBox(badge)))
 	p.compareBadge.Hide()
 
@@ -178,37 +183,8 @@ func (p *Page) buildViewer() fyne.CanvasObject {
 		container.NewBorder(nil, viewer.Transport(p.s), nil, nil, monitor))
 }
 
-func (p *Page) buildScopes() fyne.CanvasObject {
-	seg := container.NewHBox()
-	for i, name := range scopeNames {
-		k := scopeKind(i)
-		b := widget.NewButton(name, func() { p.setScope(k) })
-		p.scopeBtns = append(p.scopeBtns, b)
-		seg.Add(b)
-	}
-	p.updateScopeButtons()
-
-	p.scopeImg = canvas.NewImageFromImage(nil)
-	p.scopeImg.FillMode = canvas.ImageFillContain
-	p.scopeImg.ScaleMode = canvas.ImageScaleSmooth
-	p.scopeImg.Hide()
-	bg := canvas.NewRectangle(scopeBG)
-	bg.CornerRadius = 4
-	waiting := canvas.NewText("Kein Bild – Playhead auf einen Clip setzen", studiotheme.Faint)
-	waiting.TextSize = 12
-	p.scopeWaiting = container.NewCenter(waiting)
-	p.scopeScale = container.New(waveScaleLayout{})
-	for _, l := range []string{"100", "75", "50", "25", "0"} {
-		t := kit.MonoText(l, studiotheme.Faint, 9)
-		p.scopeScale.Add(t)
-	}
-	p.scopeScale.Hide()
-	return kit.Panel("Scopes", seg, container.NewStack(bg,
-		container.New(layout.NewCustomPaddedLayout(6, 6, 6, 6), p.scopeImg, p.scopeScale), p.scopeWaiting))
-}
-
 func (p *Page) buildStrip() fyne.CanvasObject {
-	p.stripBox = container.New(layout.NewCustomPaddedHBoxLayout(6))
+	p.stripBox = container.New(fynelayout.NewCustomPaddedHBoxLayout(6))
 	p.stripScroll = container.NewHScroll(p.stripBox)
 	probe := newClipCard(nil)
 	p.stripScroll.SetMinSize(fyne.NewSize(0, probe.MinSize().Height+10))
@@ -231,9 +207,7 @@ func (p *Page) Activate() {
 	p.autoSelect(true)
 	p.refreshStrip()
 	p.primary.refresh()
-	if f := p.scopes.latest(); f != nil {
-		p.scopes.submit(f, p.scope)
-	}
+	p.sv.resubmit()
 }
 
 // Deactivate stops the hidden viewer from rendering every seek and playback tick.
@@ -259,8 +233,8 @@ func (p *Page) Close() {
 		u()
 	}
 	p.unsubMedia = nil
-	if p.scopes != nil {
-		p.scopes.close()
+	if p.sv != nil {
+		p.sv.close()
 	}
 	if p.viewer != nil {
 		p.viewer.Close()
@@ -623,54 +597,17 @@ func (p *Page) toggleCompare() {
 	}
 	p.compareBtn.Refresh()
 	p.primary.refresh()
+	p.refreshCommands()
 }
 
-func (p *Page) setScope(k scopeKind) {
-	if p.scope == k {
-		return
-	}
-	p.scope = k
-	p.updateScopeButtons()
-	p.scopeImg.Image = nil
-	p.scopeImg.Hide()
-	p.scopeScale.Hide()
-	if f := p.scopes.latest(); f != nil {
-		p.scopes.submit(f, k)
-	}
-}
-
-func (p *Page) updateScopeButtons() {
-	for i, b := range p.scopeBtns {
-		if scopeKind(i) == p.scope {
-			b.Importance = widget.HighImportance
-		} else {
-			b.Importance = widget.LowImportance
-		}
-		b.Refresh()
-	}
-}
+func (p *Page) setScope(k scopeKind) { p.sv.setKind(k) }
 
 // onFrame receives every preview frame from the viewer on the UI thread.
 func (p *Page) onFrame(img *image.NRGBA) {
 	if !p.active {
 		return
 	}
-	p.scopes.submit(img, p.scope)
-}
-
-func (p *Page) showScope(k scopeKind, img *image.NRGBA) {
-	if k != p.scope {
-		return
-	}
-	p.scopeImg.Image = img
-	p.scopeImg.Show()
-	if k == scopeWaveform {
-		p.scopeScale.Show()
-	} else {
-		p.scopeScale.Hide()
-	}
-	p.scopeImg.Refresh()
-	p.scopeWaiting.Hide()
+	p.sv.submit(img)
 }
 
 func (p *Page) showErr(err error) {

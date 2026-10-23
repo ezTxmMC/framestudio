@@ -17,14 +17,16 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
+	fynelayout "fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -99,10 +101,33 @@ type Page struct {
 	files   *browser
 	insp    *inspector
 	content fyne.CanvasObject
+
+	// poolOnly builds just the pool with its import buttons (the detachable media pool
+	// panel, see panel.go).
+	poolOnly bool
+	// Layout: files | (pool | inspector), see layout.go.
+	outer, inner *container.Split
+	filesBox     fyne.CanvasObject
+	inspBox      fyne.CanvasObject
+	pending      *layout.Page
+	// openDir shows a folder in the file manager (media.reveal); tests replace it.
+	openDir       func(dir string) error
+	unsubSettings func()
 }
 
 func New(ctx *page.Context) page.Page {
+	p := newPage(ctx, false)
+	pages[ctx.Session] = p
+	return p
+}
+
+// pages maps each session to its media page, for the global commands (UI thread only).
+var pages = map[*session.Session]*Page{}
+
+func newPage(ctx *page.Context, poolOnly bool) *Page {
 	p := &Page{
+		poolOnly:     poolOnly,
+		openDir:      openWithSystem,
 		ctx:          ctx,
 		spawn:        func(f func()) { go f() },
 		probe:        media.ProbeContext,
@@ -115,6 +140,13 @@ func New(ctx *page.Context) page.Page {
 	p.life, p.stopLife = context.WithCancel(context.Background())
 	p.content = p.build()
 	p.unsub = ctx.Session.Subscribe(p.onChange)
+	p.unsubSettings = settings.Subscribe(func(st settings.Settings) {
+		kit.Do(func() {
+			if !p.closed && !p.importing {
+				p.recursive.SetChecked(st.Media.ImportRecursive)
+			}
+		})
+	})
 	if ctx.Media != nil {
 		p.unsubOff = ctx.Media.OnOfflineChange(func() { kit.Do(p.offlineChanged) })
 	}
@@ -137,9 +169,19 @@ func (p *Page) Activate() {
 func (p *Page) Deactivate() { p.stopWatch() }
 
 func (p *Page) Close() {
+	if p.closed {
+		return
+	}
 	p.closed = true
+	if pages[p.ctx.Session] == p {
+		delete(pages, p.ctx.Session)
+	}
 	p.stopLife()
 	p.stopWatch()
+	if p.unsubSettings != nil {
+		p.unsubSettings()
+		p.unsubSettings = nil
+	}
 	if p.unsub != nil {
 		p.unsub()
 		p.unsub = nil
@@ -277,20 +319,30 @@ func (p *Page) build() fyne.CanvasObject {
 	p.importBtn.Importance = widget.HighImportance
 	p.folderBtn = widget.NewButtonWithIcon("Ordner importieren", theme.FolderOpenIcon(), p.showFolderDialog)
 	p.recursive = widget.NewCheck("Unterordner einbeziehen", nil)
+	p.recursive.Checked = settings.Get().Media.ImportRecursive
 	p.progress = widget.NewProgressBar()
 	p.progressMsg = canvas.NewText("", studiotheme.Muted)
 	p.progressMsg.TextSize = 12
 	p.progressBox = container.NewVBox(p.progressMsg, p.progress)
 	p.progressBox.Hide()
+	if p.poolOnly {
+		return p.buildPoolPanel()
+	}
 	left := kit.Panel("Dateien", nil, container.NewBorder(
 		container.NewVBox(p.importBtn, p.folderBtn, p.recursive, spacer(2)),
 		p.progressBox, nil, nil, p.files.content()))
 
-	return container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), container.NewBorder(nil, nil,
-		fixedWidth(250, left), fixedWidth(330, p.insp.panel()), p.buildPool()))
+	p.filesBox = fixedWidth(minFilesWidth, left)
+	p.inspBox = fixedWidth(minInspectorWidth, p.insp.panel())
+	p.inner = container.NewHSplit(p.buildPool(nil), p.inspBox)
+	p.inner.Offset = defaultInspectorSplit
+	p.outer = container.NewHSplit(p.filesBox, p.inner)
+	p.outer.Offset = defaultFilesSplit
+	return container.New(fynelayout.NewCustomPaddedLayout(4, 4, 4, 4), p.outer)
 }
 
-func (p *Page) buildPool() fyne.CanvasObject {
+// buildPool builds the pool panel; extra tools (may be nil) go right of the filters.
+func (p *Page) buildPool(extra fyne.CanvasObject) fyne.CanvasObject {
 	p.search = widget.NewEntry()
 	p.search.SetPlaceHolder("Suchen")
 	p.search.ActionItem = widget.NewIcon(theme.SearchIcon())
@@ -346,7 +398,10 @@ func (p *Page) buildPool() fyne.CanvasObject {
 		spacer(4), container.NewCenter(p.emptyBtn)))
 
 	p.count.Alignment = fyne.TextAlignTrailing
-	p.tools = container.NewHBox(fixedWidth(170, container.NewVBox(layout.NewSpacer(), p.count, layout.NewSpacer())), spacer(4), fixedWidth(190, p.search), fixedWidth(118, p.kindSel))
+	p.tools = container.NewHBox(fixedWidth(170, container.NewVBox(fynelayout.NewSpacer(), p.count, fynelayout.NewSpacer())), spacer(4), fixedWidth(190, p.search), fixedWidth(118, p.kindSel))
+	if extra != nil {
+		p.tools.Add(extra)
+	}
 	body := container.NewStack(p.grid, p.empty)
 	if !media.FFmpegAvailable() {
 		body = container.NewBorder(ffmpegNotice(), nil, nil, nil, body)
@@ -654,6 +709,7 @@ func (p *Page) showMenu(id string, pos fyne.Position) {
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Alle auswählen", p.selectAll),
 		relink,
+		fyne.NewMenuItem("Im Dateimanager zeigen", p.reveal),
 		fyne.NewMenuItem("Entfernen…"+what, func() { p.confirmRemove(items...) }),
 	)
 	widget.ShowPopUpMenuAtPosition(menu, p.ctx.Window.Canvas(), pos)
@@ -735,6 +791,11 @@ func (p *Page) remove(ids ...string) {
 	if len(ids) > 1 {
 		label = "Medien entfernen"
 	}
+	p.removeAs(label, ids...)
+}
+
+// removeAs removes the media ids as one undo step named label.
+func (p *Page) removeAs(label string, ids ...string) {
 	err := p.ctx.Session.Edit(label, func(pr *model.Project) error {
 		for _, id := range ids {
 			if err := pr.RemoveMedia(id); err != nil {
@@ -866,6 +927,9 @@ func (p *Page) setImporting(on bool) {
 		p.folderBtn.Enable()
 		p.emptyBtn.Enable()
 		p.progressBox.Hide()
+	}
+	if p.content != nil {
+		p.content.Refresh() // re-layout: the progress row appears or goes away
 	}
 }
 

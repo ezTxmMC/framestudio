@@ -22,7 +22,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
+	fynelayout "fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -30,6 +30,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
 	"framestudio-proto/src/ui/kit"
+	"framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -82,6 +83,15 @@ type Page struct {
 	active  bool
 	stale   bool
 	closed  bool
+
+	// mixerOnly builds just the mixer (the detachable mixer panel, see panel.go).
+	mixerOnly bool
+	main      *container.Split // lanes / bottom row
+	bottom    *container.Split // clip | mixer
+	clipBox   fyne.CanvasObject
+	mixerBox  fyne.CanvasObject
+	// pending is a layout applied before Content was built.
+	pending *layout.Page
 }
 
 func New(ctx *page.Context) page.Page {
@@ -128,6 +138,9 @@ func (p *Page) Content() fyne.CanvasObject {
 	if p.content != nil {
 		return p.content
 	}
+	if p.mixerOnly {
+		return p.mixerContent()
+	}
 	p.tracks = newTrackView(p)
 	p.mixer = newMixer(p)
 	p.clip = newClipPanel(p)
@@ -157,15 +170,22 @@ func (p *Page) Content() fyne.CanvasObject {
 	add.Importance = widget.LowImportance
 
 	top := kit.Panel("Spuren", tools, p.tracks.obj)
-	bottom := container.NewHSplit(kit.Panel("Clip", nil, p.clip.obj), kit.Panel("Mixer", add, p.mixer.obj))
-	bottom.Offset = 0.27
+	p.clipBox = kit.Panel("Clip", nil, p.clip.obj)
+	p.mixerBox = kit.Panel("Mixer", add, p.mixer.obj)
+	bottom := container.NewHSplit(p.clipBox, p.mixerBox)
+	bottom.Offset = defaultBottomSplit
 	split := container.NewVSplit(top, bottom)
-	split.Offset = 0.5
+	split.Offset = defaultMainSplit
+	p.main, p.bottom = split, bottom
 	p.content = container.NewStack(canvas.NewRectangle(studiotheme.Gap),
-		container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), split))
+		container.New(fynelayout.NewCustomPaddedLayout(4, 4, 4, 4), split))
 
 	p.unsub = p.s.Subscribe(p.changed)
 	p.refresh()
+	if p.pending != nil {
+		p.ApplyLayout(*p.pending)
+		p.pending = nil
+	}
 	return p.content
 }
 
@@ -192,12 +212,7 @@ func (p *Page) Deactivate() {
 func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	switch k.Name {
 	case fyne.KeySpace:
-		if p.prev.Busy() || p.s.Playing {
-			p.prev.Stop()
-			p.s.SetPlaying(false)
-		} else {
-			p.prev.Start()
-		}
+		p.togglePreview()
 	case fyne.KeyJ:
 		p.s.Shuttle(-1)
 	case fyne.KeyK:
@@ -246,7 +261,9 @@ func (p *Page) changed(c session.Change) {
 	}
 	if c&session.ChangePlayhead != 0 {
 		p.followPlayhead()
-		p.tracks.updatePlayhead()
+		if p.tracks != nil {
+			p.tracks.updatePlayhead()
+		}
 		p.updateTransport()
 	}
 }
@@ -255,14 +272,19 @@ func (p *Page) refresh() {
 	p.stale = false
 	p.view.clamp(p.span(), p.s.FPS())
 	p.syncZoomSlider()
-	p.tracks.update()
+	if p.tracks != nil {
+		p.tracks.update()
+	}
 	p.mixer.update()
-	p.clip.update()
+	if p.clip != nil {
+		p.clip.update()
+	}
 	p.updateTransport()
 }
 
 func (p *Page) updateTransport() {
-	if p.content == nil {
+	if p.content == nil || p.play == nil {
+		p.syncMeters()
 		return
 	}
 	busy := p.prev.Busy()

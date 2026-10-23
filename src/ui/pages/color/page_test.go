@@ -336,12 +336,12 @@ func TestScopesFromViewerFrames(t *testing.T) {
 	f.p.Activate()
 	f.p.setScope(scopeWaveform)
 	f.p.onFrame(testFrame(320, 180))
-	img, ok := f.p.scopeImg.Image.(*image.NRGBA)
-	if !ok || img.Rect.Dx() != scopeW || f.p.scopeWaiting.Visible() {
+	img, ok := f.p.sv.img.Image.(*image.NRGBA)
+	if !ok || img.Rect.Dx() != scopeW || f.p.sv.waiting.Visible() {
 		t.Fatal("waveform should be shown after a frame arrives")
 	}
 	f.p.setScope(scopeVectorscope)
-	if img := f.p.scopeImg.Image.(*image.NRGBA); img.Rect.Dx() != vectorSize {
+	if img := f.p.sv.img.Image.(*image.NRGBA); img.Rect.Dx() != vectorSize {
 		t.Errorf("vectorscope size %v", img.Rect)
 	}
 }

@@ -38,21 +38,21 @@ func TestQueueReorder(t *testing.T) {
 	h := newHarness(t)
 	q := h.pg.queue
 	js := h.addJobs("A", "B", "C")
-	if !js[0].view.up.Disabled() || js[0].view.down.Disabled() || !js[2].view.down.Disabled() {
+	if !q.cards[js[0]].up.Disabled() || q.cards[js[0]].down.Disabled() || !q.cards[js[2]].down.Disabled() {
 		t.Fatal("move buttons at the ends must be disabled")
 	}
-	test.Tap(js[2].view.up)
+	test.Tap(q.cards[js[2]].up)
 	if got := jobNames(q); got != "A,C,B" {
 		t.Fatalf("after C up: %s", got)
 	}
-	if q.list.Objects[1] != js[2].view.content {
+	if q.list.Objects[1] != q.cards[js[2]].content {
 		t.Error("list order not updated")
 	}
-	test.Tap(js[0].view.down)
+	test.Tap(q.cards[js[0]].down)
 	if got := jobNames(q); got != "C,A,B" {
 		t.Fatalf("after A down: %s", got)
 	}
-	if !js[2].view.up.Disabled() || js[1].view.down.Disabled() == false {
+	if !q.cards[js[2]].up.Disabled() || q.cards[js[1]].down.Disabled() == false {
 		t.Error("enabled states not updated after moving")
 	}
 	// Render order follows the list: arm A and C, C starts first.
@@ -71,8 +71,8 @@ func TestQueueReorder(t *testing.T) {
 	}
 	// Running and finished jobs cannot be moved.
 	js[1].status = jobDone
-	js[1].view.refresh()
-	if js[1].view.order.Visible() {
+	q.cards[js[1]].refresh()
+	if q.cards[js[1]].order.Visible() {
 		t.Error("finished jobs must not show move buttons")
 	}
 }
@@ -84,7 +84,7 @@ func TestClearFinishedKeepsFailedAndQueued(t *testing.T) {
 	js[0].status, js[1].status, js[2].status = jobDone, jobFailed, jobCanceled
 	js[1].err = errors.New("kaputt")
 	for _, j := range js {
-		j.view.refresh()
+		q.cards[j].refresh()
 	}
 	q.refresh()
 	if !q.clear.Visible() || q.clear.Text != "Fertige entfernen" {

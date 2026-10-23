@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"framestudio-proto/src/export"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -87,7 +88,7 @@ func newSettingsForm(pg *Page) *settingsForm {
 	nameRow := container.NewBorder(nil, nil, nil, container.NewPadded(vcenter(f.ext)), f.name)
 
 	f.folder = widget.NewEntry()
-	f.folder.SetText(defaultFolder())
+	f.folder.SetText(exportFolder())
 	f.folder.OnChanged = func(string) { f.changed() }
 	browse := widget.NewButtonWithIcon("", theme.FolderOpenIcon(), f.chooseFolder)
 	folderRow := container.NewBorder(nil, nil, nil, browse, f.folder)
@@ -172,7 +173,7 @@ func newSettingsForm(pg *Page) *settingsForm {
 	f.content = kit.Panel("Render-Einstellungen", nil, f.body)
 
 	f.refreshProject()
-	f.applyPreset(0)
+	f.applyPreset(defaultPreset(f.presets))
 	return f
 }
 
@@ -466,7 +467,7 @@ func (f *settingsForm) options() (export.Options, error) {
 func (f *settingsForm) submit(start bool) {
 	o, err := f.options()
 	if err == nil {
-		o.Path = f.pg.queue.uniquePath(o.Path)
+		o.Path = f.pg.rq.uniquePath(o.Path)
 		err = export.Validate(f.pg.ctx.Session.Project, o)
 	}
 	var off *export.OfflineError
@@ -497,7 +498,7 @@ func (f *settingsForm) submit(start bool) {
 
 func (f *settingsForm) enqueue(o export.Options, start bool) {
 	f.setError(nil)
-	f.pg.queue.add(o, f.pg.ctx.Session.Project.Clone(), start)
+	f.pg.rq.add(o, f.pg.ctx.Session.Project.Clone(), start)
 	f.pg.updateSummary()
 }
 
@@ -541,6 +542,30 @@ func fileName(project string) string {
 		return "Export"
 	}
 	return name
+}
+
+// exportFolder is the folder from the settings (Export.Folder) or defaultFolder.
+func exportFolder() string {
+	if d := strings.TrimSpace(settings.Get().Export.Folder); d != "" {
+		if strings.HasPrefix(d, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				d = filepath.Join(home, d[1:])
+			}
+		}
+		return d
+	}
+	return defaultFolder()
+}
+
+// defaultPreset is the index of the preset named in the settings (Export.Preset), or 0.
+func defaultPreset(presets []export.Preset) int {
+	name := settings.Get().Export.Preset
+	for i, ps := range presets {
+		if ps.Name == name {
+			return i
+		}
+	}
+	return 0
 }
 
 // defaultFolder is ~/Videos when it exists, otherwise the home directory.
