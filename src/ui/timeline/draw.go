@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"fmt"
+	"hash/fnv"
 	"image"
 	"image/color"
 	"math"
@@ -34,6 +35,7 @@ type tlRenderer struct {
 	lanesC, headerC, rulsC *container.Clip
 	corner                 *fyne.Container
 	cornerTC               *canvas.Text
+	overlay                *fyne.Container // inline rename entry
 
 	phLine *canvas.Rectangle
 	phHead *canvas.ArbitraryPolygon
@@ -77,7 +79,8 @@ func newRenderer(t *Timeline) *tlRenderer {
 	r.headerC = container.NewClip(r.header)
 	r.rulsC = container.NewClip(r.ruler)
 	r.corner = container.NewWithoutLayout()
-	r.objects = []fyne.CanvasObject{r.bg, r.lanesC, r.headerC, r.rulsC, r.corner}
+	r.overlay = container.NewWithoutLayout()
+	r.objects = []fyne.CanvasObject{r.bg, r.lanesC, r.headerC, r.rulsC, r.corner, r.overlay}
 	return r
 }
 
@@ -184,15 +187,35 @@ func (r *tlRenderer) rebuild() {
 	r.header.Objects = r.buildHeaders(p, g)
 	r.ruler.Objects = r.buildRuler(p, g)
 	r.corner.Objects = r.buildCorner(g)
+	r.overlay.Objects = r.buildOverlay(p, g)
 	r.placePlayhead(g)
 
 	r.imgs = r.nextImgs
-	for _, c := range []*fyne.Container{r.lanes, r.header, r.ruler, r.corner} {
+	for _, c := range []*fyne.Container{r.lanes, r.header, r.ruler, r.corner, r.overlay} {
 		c.Refresh()
 	}
-	if len(r.tiles) > 64 {
+	if len(r.tiles) > 400 {
 		clear(r.tiles)
 	}
+}
+
+// buildOverlay places the inline rename entry over its track header.
+func (r *tlRenderer) buildOverlay(p *model.Project, g geom) []fyne.CanvasObject {
+	st := r.t.rename
+	if st == nil {
+		return nil
+	}
+	_, ti := p.Track(st.track)
+	ri := g.rowOfTrack(ti)
+	if ri < 0 {
+		return nil
+	}
+	rw := g.rows[ri]
+	h := min(st.entry.MinSize().Height, rw.h-4)
+	y := max(rulerH, rw.y+(rw.h-1-h)/2)
+	st.entry.Move(fyne.NewPos(6, y))
+	st.entry.Resize(fyne.NewSize(headerW-12, h))
+	return []fyne.CanvasObject{st.entry}
 }
 
 // updatePlayhead moves only the playhead objects; used while playing.
@@ -253,8 +276,12 @@ func trackDim(p *model.Project, tr *model.Track) bool {
 
 func (r *tlRenderer) buildLanes(p *model.Project, g geom) []fyne.CanvasObject {
 	t, s := r.t, r.t.s
-	laneW, laneH := g.laneW(), max(g.h-rulerH, 0)
+	laneW, laneH := g.laneW(), g.bodyH()
 	var objs []fyne.CanvasObject
+	d := t.drag
+	if d != nil && !d.active() && d.mode != dragMarquee {
+		d = nil
+	}
 
 	// lane backgrounds
 	lastVideo := -1
@@ -275,54 +302,71 @@ func (r *tlRenderer) buildLanes(p *model.Project, g geom) []fyne.CanvasObject {
 	}
 
 	// In/Out range and markers behind the clips
+	cover := min(laneH, g.content-g.scroll)
 	if s.HasRange() {
 		x0, x1 := g.frameX(float64(s.In))-headerW, g.frameX(float64(s.Out))-headerW
-		objs = append(objs, rect(alpha(studiotheme.Steel, 0x16), x0, 0, x1-x0, min(laneH, g.content)))
+		objs = append(objs, rect(alpha(studiotheme.Steel, 0x16), x0, 0, x1-x0, cover))
 	}
 	for _, m := range p.Markers {
 		x := g.frameX(float64(m.Frame)) - headerW
 		if x >= -1 && x <= laneW {
-			objs = append(objs, rect(alpha(m.Color.NRGBA(), 0x50), x, 0, 1, min(laneH, g.content)))
+			objs = append(objs, rect(alpha(m.Color.NRGBA(), 0x50), x, 0, 1, cover))
 		}
 	}
 
-	d := t.drag
+	// clips; a ripple or roll in progress draws its result instead of the project
+	cp := p
+	if d != nil && d.preview != nil && len(d.preview.Tracks) == len(p.Tracks) {
+		cp = d.preview
+	}
+	moving := map[string]bool{}
+	if d != nil && d.mode == dragMove {
+		for _, it := range d.group {
+			moving[it.clip.ID] = true
+		}
+	}
 	for _, rw := range g.rows {
 		y := rw.y - rulerH
 		if y+rw.h < 0 || y > laneH {
 			continue
 		}
-		tr := &p.Tracks[rw.track]
+		tr := &cp.Tracks[rw.track]
 		for _, c := range tr.Clips {
-			st := clipState{selected: c.ID == s.SelectedClip}
-			if d != nil && d.clip.ID == c.ID && d.active() {
-				if d.mode == dragMove {
-					st.faded = true
-				} else {
-					c.Start, c.Length = d.start, d.length
-					st.trim = d.mode
-				}
+			st := clipState{selected: s.IsSelected(c.ID), primary: c.ID == s.SelectedClip}
+			switch {
+			case moving[c.ID]:
+				st.faded = true
+			case d != nil && d.clip.ID == c.ID && (d.mode == dragTrimL || d.mode == dragTrimR):
+				c.Start, c.Length = d.start, d.length
+				st.trim = d.mode
 			}
 			objs = r.drawClip(objs, p, g, c, y, rw.h, st)
 		}
-		if tr.Locked {
+		if d != nil && d.mode >= dragRippleL && d.from == rw.track {
+			x := g.frameX(float64(d.edge)) - headerW
+			objs = append(objs, rect(studiotheme.Steel, x-1, y+clipPadY, 3, rw.h-2*clipPadY-1))
+		}
+		if p.Tracks[rw.track].Locked {
 			objs = append(objs,
 				rect(color.NRGBA{0, 0, 0, 0x38}, 0, y, laneW, rw.h-1),
 				r.image("hatch", 0, y, laneW, rw.h-1, func(w, h int) image.Image {
 					return hatchImage(w, h, lockHatch, int(9*r.t.scale()))
 				}))
-		} else if trackDim(p, tr) {
+		} else if trackDim(p, &p.Tracks[rw.track]) {
 			objs = append(objs, rect(alpha(studiotheme.Lane, 0x9C), 0, y, laneW, rw.h-1))
 		}
 	}
 
-	// ghost of a clip being moved
-	if d != nil && d.mode == dragMove && d.active() {
-		if ri := g.rowOfTrack(d.track); ri >= 0 {
-			rw := g.rows[ri]
-			c := d.clip
-			c.Start = d.start
-			objs = r.drawClip(objs, p, g, c, rw.y-rulerH, rw.h, clipState{ghost: true})
+	// ghosts of the clips being moved
+	if d != nil && d.mode == dragMove {
+		for _, it := range d.group {
+			ti := d.groupTarget(p, it)
+			if ri := g.rowOfTrack(ti); ri >= 0 {
+				rw := g.rows[ri]
+				c := it.clip
+				c.Start += d.dFrames
+				objs = r.drawClip(objs, p, g, c, rw.y-rulerH, rw.h, clipState{ghost: true})
+			}
 		}
 	}
 
@@ -331,12 +375,14 @@ func (r *tlRenderer) buildLanes(p *model.Project, g geom) []fyne.CanvasObject {
 		objs = append(objs, rect(studiotheme.Border, 0, rw.y-rulerH+rw.h-1, laneW, 2))
 	}
 
-	if t.snapAt >= 0 && d != nil {
+	objs = r.drawDrop(objs, p, g)
+
+	if t.snapAt >= 0 && (d != nil || t.drop != nil) {
 		x := g.frameX(float64(t.snapAt)) - headerW
 		objs = append(objs, rect(studiotheme.Steel, x, 0, 1, laneH))
 	}
 
-	if hint := emptyHint(p); hint != "" {
+	if hint := emptyHint(p); hint != "" && t.drop == nil {
 		size := float32(12)
 		w := r.width(hint, size, fyne.TextStyle{})
 		y := min(g.content, laneH)/2 - 8
@@ -346,7 +392,69 @@ func (r *tlRenderer) buildLanes(p *model.Project, g geom) []fyne.CanvasObject {
 		objs = append(objs, r.text(r.fit(hint, size, fyne.TextStyle{}, laneW-24), studiotheme.Muted, size, fyne.TextStyle{}, max(12, (laneW-w)/2), y))
 	}
 
+	// rubber band
+	if d != nil && d.mode == dragMarquee {
+		x0, x1 := min(d.press.X, d.cur.X)-headerW, max(d.press.X, d.cur.X)-headerW
+		y0, y1 := min(d.press.Y, d.cur.Y)-rulerH, max(d.press.Y, d.cur.Y)-rulerH
+		band := rect(alpha(studiotheme.Steel, 0x1E), x0, y0, max(x1-x0, 1), max(y1-y0, 1))
+		band.StrokeColor, band.StrokeWidth = alpha(studiotheme.Steel, 0xE0), 1
+		objs = append(objs, band)
+	}
+
+	// vertical scroll indicator
+	if y, h, ok := g.scrollThumb(); ok {
+		col := alpha(studiotheme.Muted, 0x70)
+		if t.drag != nil && t.drag.mode == dragVScroll {
+			col = studiotheme.Steel
+		}
+		objs = append(objs, rect(alpha(studiotheme.Gap, 0xA0), laneW-scrollW-2, 0, scrollW+2, laneH))
+		th := rect(col, laneW-scrollW-1, y+1, scrollW, h-2)
+		th.CornerRadius = scrollW / 2
+		objs = append(objs, th)
+	}
+
 	return append(objs, r.phLine)
+}
+
+// drawDrop draws the preview of a media drag: ghost clips on their target tracks and a
+// strip for a track the drop would create.
+func (r *tlRenderer) drawDrop(objs []fyne.CanvasObject, p *model.Project, g geom) []fyne.CanvasObject {
+	plan := r.t.drop
+	if plan == nil {
+		return objs
+	}
+	laneW := g.laneW()
+	newRows := map[model.TrackKind]float32{} // y of the strip for a created track per kind
+	slot := g.tailY() - rulerH
+	for _, gh := range plan.ghosts {
+		if gh.track != -1 {
+			continue
+		}
+		if _, ok := newRows[gh.newKind]; !ok {
+			h := rowHeight(gh.newKind)
+			newRows[gh.newKind] = slot
+			strip := rect(alpha(studiotheme.Steel, 0x14), 0, slot, laneW, h-1)
+			strip.StrokeColor, strip.StrokeWidth = alpha(studiotheme.Steel, 0x60), 1
+			label := "Neue Videospur"
+			if gh.newKind == model.TrackAudio {
+				label = "Neue Audiospur"
+			}
+			objs = append(objs, strip, r.text(label, studiotheme.Steel, 11, fyne.TextStyle{Bold: true}, 8, slot+(tailH-14.3)/2))
+			slot += h
+		}
+	}
+	for _, gh := range plan.ghosts {
+		switch {
+		case gh.track >= 0 && gh.track < len(p.Tracks):
+			if ri := g.rowOfTrack(gh.track); ri >= 0 {
+				rw := g.rows[ri]
+				objs = r.drawClip(objs, p, g, gh.clip, rw.y-rulerH, rw.h, clipState{ghost: true})
+			}
+		case gh.track == -1:
+			objs = r.drawClip(objs, p, g, gh.clip, newRows[gh.newKind], rowHeight(gh.newKind), clipState{ghost: true})
+		}
+	}
+	return objs
 }
 
 func emptyHint(p *model.Project) string {
@@ -361,6 +469,7 @@ func emptyHint(p *model.Project) string {
 
 type clipState struct {
 	selected bool
+	primary  bool     // the primary clip of the selection (inspector)
 	faded    bool     // original position of a clip being moved
 	ghost    bool     // target preview of a move
 	trim     dragMode // edge being trimmed
@@ -419,9 +528,12 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 		a := r.t.ld.snapshot(r.t.ld.get(*m, wave, waveBuckets(p, *m)))
 		offline = a.offline
 		if !offline && ix1-ix0 >= 1 && bodyH > 4 {
-			if wave {
+			switch {
+			case wave:
 				objs = append(objs, r.waveform(p, g, c, *m, a, ix0, ix1, bodyTop, bodyH-1))
-			} else if a.thumb != nil {
+			case c.Kind == model.KindVideo && m.Duration > 0 && a.done && r.t.posters.src != nil:
+				objs = append(objs, r.posterStrip(p, g, c, *m, a, x0, ix0, ix1, bodyTop, bodyH-1, body))
+			case a.thumb != nil: // stills (and video without frame access) repeat one image
 				objs = append(objs, r.filmstrip(g, c, *m, a, x0, ix0, ix1, bodyTop, bodyH-1, body))
 			}
 		}
@@ -468,9 +580,13 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 		o := rect(color.Transparent, vx0, top, vx1-vx0, h)
 		o.StrokeColor, o.StrokeWidth, o.CornerRadius = studiotheme.Steel, 2, 3
 		objs = append(objs, o)
+	case st.selected && st.primary:
+		o := rect(color.Transparent, vx0, top, vx1-vx0, h)
+		o.StrokeColor, o.StrokeWidth, o.CornerRadius = white, 2, 3
+		objs = append(objs, o)
 	case st.selected:
 		o := rect(color.Transparent, vx0, top, vx1-vx0, h)
-		o.StrokeColor, o.StrokeWidth, o.CornerRadius = white, 1.5, 3
+		o.StrokeColor, o.StrokeWidth, o.CornerRadius = alpha(white, 0xC0), 1.25, 3
 		objs = append(objs, o)
 	}
 	switch st.trim {
@@ -527,6 +643,60 @@ func (r *tlRenderer) waveform(p *model.Project, g geom, c model.Clip, m model.Me
 	}
 	key := fmt.Sprintf("wave|%s|%p|%d|%.2f|%.4f|%.3f|%v", m.ID, a.peaks, len(a.peaks), srcStart, spec.fpp, c.Volume, base)
 	return r.image(key, ix0, y, ix1-ix0, h, func(w, h int) image.Image { return waveImage(w, h, spec) })
+}
+
+// posterStrip draws real frames along the visible body of a video clip: each tile shows the
+// source frame at its position (quantised to the tile grid), loaded in the background.
+// Tiles still loading show the media thumbnail, or a plain placeholder.
+func (r *tlRenderer) posterStrip(p *model.Project, g geom, c model.Clip, m model.MediaItem, a asset, x0, ix0, ix1, y, h float32, bg color.NRGBA) fyne.CanvasObject {
+	sc := r.t.scale()
+	ph := max(1, int(math.Ceil(float64(h*sc))))
+	aspect := 16.0 / 9
+	switch {
+	case m.Width > 0 && m.Height > 0:
+		aspect = float64(m.Width) / float64(m.Height)
+	case a.thumb != nil && a.thumb.Bounds().Dy() > 0:
+		aspect = float64(a.thumb.Bounds().Dx()) / float64(a.thumb.Bounds().Dy())
+	}
+	tw := max(8, int(math.Round(float64(ph)*aspect)))
+	tw1 := tw + 1 // one pixel gap between frames
+	from := int(math.Round(float64((ix0 - x0) * sc)))
+	pw := int(math.Ceil(float64((ix1 - ix0) * sc)))
+	first, last := from/tw1, (from+pw)/tw1
+	step := posterStep(float64(tw1) / float64(sc) / g.ppf)
+	srcFrames, fps := p.MediaFrames(m), p.Settings.FPS
+
+	var placeholder *image.NRGBA
+	if a.thumb != nil {
+		placeholder = r.scaledTile(a.thumb, tw, ph)
+	}
+	tiles := make([]*image.NRGBA, 0, last-first+1)
+	hash := fnv.New64a()
+	for i := first; i <= last; i++ {
+		local := float64(i*tw1) / float64(sc) / g.ppf
+		f := posterFrame(c.SourceIn, local, step, srcFrames)
+		tile := placeholder
+		if img := r.t.posters.get(m, f, fps); img != nil {
+			tile = r.scaledTile(img, tw, ph)
+		}
+		tiles = append(tiles, tile)
+		fmt.Fprintf(hash, "%p,", tile)
+	}
+	key := fmt.Sprintf("poster|%s|%x|%d|%d|%v", m.ID, hash.Sum64(), from, tw, bg)
+	return r.image(key, ix0, y, ix1-ix0, h, func(w, h int) image.Image {
+		return posterStripImage(w, h, tiles, first, tw, from, bg)
+	})
+}
+
+// scaledTile returns img scaled to cover w x h, cached per source image while drawing.
+func (r *tlRenderer) scaledTile(img image.Image, w, h int) *image.NRGBA {
+	k := fmt.Sprintf("cover|%p|%dx%d", img, w, h)
+	if t, ok := r.tiles[k]; ok {
+		return t
+	}
+	t := scaleCover(img, w, h)
+	r.tiles[k] = t
+	return t
 }
 
 // filmstrip repeats the media thumbnail across the visible body of a video or image clip.
@@ -590,6 +760,24 @@ func (r *tlRenderer) buildHeaders(p *model.Project, g geom) []fyne.CanvasObject 
 	if lastVideo >= 0 && lastVideo+1 < len(g.rows) {
 		rw := g.rows[lastVideo]
 		objs = append(objs, rect(studiotheme.Border, 0, rw.y-rulerH+rw.h-1, headerW, 2))
+	}
+	if d := r.t.drag; d != nil && d.mode == dragResize {
+		if tr, ti := p.Track(d.trackID); tr != nil {
+			if ri := g.rowOfTrack(ti); ri >= 0 {
+				rw := g.rows[ri]
+				objs = append(objs, rect(studiotheme.Steel, 0, rw.y-rulerH+rw.h-2, headerW, 2))
+			}
+		}
+	}
+	if plan := r.t.drop; plan != nil && plan.newTrack {
+		y := g.tailY() - rulerH
+		h := rowHeight(plan.newKind)
+		objs = append(objs, rect(alpha(studiotheme.Steel, 0x18), 0, y, headerW, h-1), rect(studiotheme.Steel, 0, y, 2, h-1))
+		ic := canvas.NewImageFromResource(icon("plus", studiotheme.Steel))
+		ic.FillMode = canvas.ImageFillContain
+		ic.Move(fyne.NewPos(10, y+tailH/2-7))
+		ic.Resize(fyne.NewSize(14, 14))
+		objs = append(objs, ic, r.text("Neue Spur", studiotheme.Steel, 13, fyne.TextStyle{Bold: true}, 30, y+tailH/2-8.5))
 	}
 	return append(objs, rect(studiotheme.Border, headerW-1, 0, 1, bodyH))
 }

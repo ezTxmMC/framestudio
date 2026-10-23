@@ -5,6 +5,7 @@ package timeline
 
 import (
 	"math"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
@@ -12,6 +13,7 @@ import (
 	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/kit"
 )
 
 type Tool int
@@ -43,14 +45,32 @@ type Timeline struct {
 	offset   float64 // frame at the left edge of the lanes
 	vscroll  float32
 
-	unsub  func()
-	ld     *loader
-	known  map[string]model.MediaItem // media as last drawn, to spot relinks
-	r      *tlRenderer
-	closed bool
+	unsub   func()
+	ld      *loader
+	posters *posterLoader
+	known   map[string]model.MediaItem // media as last drawn, to spot relinks
+	r       *tlRenderer
+	closed  bool
 
-	drag  *dragState
-	hover hit
+	// heights holds track heights the user dragged, by track ID (view state, not saved).
+	heights map[string]float32
+
+	win        fyne.Window
+	unregister func() // drop zone registration
+
+	drag     *dragState
+	drop     *dropPlan // media drag hovering over the timeline
+	hover    hit
+	hoverPos fyne.Position
+	// mods are the keyboard modifiers of the last mouse press or move (Tapped and Scrolled
+	// carry none).
+	mods fyne.KeyModifier
+	// lastTap remembers the previous header click to detect double clicks (rename).
+	lastTap struct {
+		at    time.Time
+		track string
+	}
+	rename *renameState
 	// snapAt is the frame of the active snap indicator, -1 when none.
 	snapAt int
 	// scrubbing suppresses view paging while the user drags the playhead.
@@ -65,6 +85,12 @@ func New(s *session.Session, cache *media.Cache) *Timeline {
 		src = cache
 	}
 	t.ld = newLoader(src, t.Refresh)
+	var psrc posterSource
+	if cache != nil {
+		psrc = cache
+	}
+	t.posters = newPosterLoader(psrc, t.Refresh)
+	t.heights = map[string]float32{}
 	t.ExtendBaseWidget(t)
 	t.unsub = s.Subscribe(t.changed)
 	return t
@@ -80,6 +106,44 @@ func (t *Timeline) Tool() Tool { return t.tool }
 // SetBladeAllTracks makes the blade cut every unlocked track at the clicked frame.
 func (t *Timeline) SetBladeAllTracks(on bool) { t.bladeAll = on }
 func (t *Timeline) BladeAllTracks() bool      { return t.bladeAll }
+
+// AttachWindow registers the timeline as a drop target for media dragged inside w (media
+// pool, library). Call it once the widget is in the window; Close unregisters.
+func (t *Timeline) AttachWindow(w fyne.Window) {
+	if t.unregister != nil {
+		t.unregister()
+		t.unregister = nil
+	}
+	t.win = w
+	if w != nil && !t.closed {
+		t.unregister = kit.RegisterDropZone(w, t)
+	}
+}
+
+// ClearSelection deselects all clips.
+func (t *Timeline) ClearSelection() { t.s.SelectClip("") }
+
+// Escape cancels what the pointer is doing (marquee, move, trim, rename) or, when idle,
+// clears the clip selection. It reports whether anything changed. The edit page calls it
+// for the Esc key.
+func (t *Timeline) Escape() bool {
+	switch {
+	case t.rename != nil:
+		t.cancelRename()
+	case t.drag != nil && t.drag.mode != dragNone && t.drag.mode != dragIgnore:
+		if t.drag.mode == dragMarquee {
+			t.s.SelectClips(t.drag.orig)
+		}
+		t.drag = &dragState{mode: dragIgnore} // swallow the rest of this drag
+		t.snapAt, t.scrubbing = -1, false
+		t.Refresh()
+	case len(t.s.Selected) > 0 || t.s.SelectedClip != "":
+		t.ClearSelection()
+	default:
+		return false
+	}
+	return true
+}
 
 // SetZoom sets the zoom factor (1 = whole program fits) keeping the playhead in place.
 func (t *Timeline) SetZoom(z float32) {
@@ -101,6 +165,25 @@ func (t *Timeline) SetZoom(z float32) {
 
 func (t *Timeline) Zoom() float32 { return t.zoom }
 
+// zoomAt zooms to z keeping the frame under widget x in place, and reports the change
+// through OnZoomChanged.
+func (t *Timeline) zoomAt(z float32, x float32) {
+	z = clampZoom(z)
+	if z == t.zoom {
+		return
+	}
+	old := t.geom()
+	x = max(headerW, min(x, old.w))
+	f := old.xFrame(x)
+	t.zoom = z
+	g := t.geom()
+	t.offset = g.clampOffset(t.s.Project, f-float64(x-headerW)/g.ppf, t.zoom)
+	t.Refresh()
+	if t.OnZoomChanged != nil {
+		t.OnZoomChanged(z)
+	}
+}
+
 func (t *Timeline) SetSnapping(on bool) { t.snapping = on }
 func (t *Timeline) Snapping() bool      { return t.snapping }
 
@@ -113,7 +196,12 @@ func (t *Timeline) Close() {
 	if t.unsub != nil {
 		t.unsub()
 	}
+	if t.unregister != nil {
+		t.unregister()
+		t.unregister = nil
+	}
 	t.ld.close()
+	t.posters.close()
 }
 
 func (t *Timeline) CreateRenderer() fyne.WidgetRenderer {
@@ -122,13 +210,13 @@ func (t *Timeline) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (t *Timeline) MinSize() fyne.Size {
-	return fyne.NewSize(headerW+200, rulerH+videoRowH)
+	return fyne.NewSize(headerW+200, rulerH+audioRowH)
 }
 
 // geom returns the geometry for the current size and view, clamping the view state.
 func (t *Timeline) geom() geom {
 	sz := t.Size()
-	g := newGeom(t.s.Project, sz.Width, sz.Height, t.zoom, t.offset, t.vscroll)
+	g := layoutGeom(t.s.Project, sz.Width, sz.Height, t.zoom, t.offset, t.vscroll, t.heights)
 	t.offset = g.offset
 	t.vscroll = g.vscroll()
 	return g
@@ -141,8 +229,15 @@ func (t *Timeline) changed(c session.Change) {
 	}
 	if c&(session.ChangeProject|session.ChangeSelection) != 0 {
 		if c&session.ChangeProject != 0 {
-			t.drag = nil // the dragged clip may be gone (undo)
+			if t.drag != nil && t.drag.mode != dragScrub && t.drag.mode != dragMarquee {
+				t.drag = nil // the dragged clip may be gone (undo)
+			}
 			t.forgetChangedMedia()
+			if t.rename != nil {
+				if tr, _ := t.s.Project.Track(t.rename.track); tr == nil {
+					t.cancelRename()
+				}
+			}
 		}
 		t.follow()
 		t.Refresh()
@@ -164,6 +259,7 @@ func (t *Timeline) forgetChangedMedia() {
 	for _, m := range t.s.Project.Media {
 		if old, ok := t.known[m.ID]; ok && (old.Path != m.Path || old.Duration != m.Duration) {
 			t.ld.forget(m.ID)
+			t.posters.forget(m.ID)
 		}
 		known[m.ID] = m
 	}
@@ -180,9 +276,14 @@ func (t *Timeline) follow() bool {
 	if x >= headerW && x <= g.w-12 {
 		return false
 	}
-	// Page like an NLE: the playhead lands near the left edge.
+	// Page like an NLE: the playhead lands near the edge it enters from, the left one when
+	// playing forwards and the right one when playing backwards (J/K/L shuttle).
 	vis := g.visibleFrames()
-	off := g.clampOffset(t.s.Project, float64(t.s.Playhead)-vis*0.05, t.zoom)
+	at := 0.05
+	if t.s.Playing && t.s.Rate < 0 {
+		at = 0.9
+	}
+	off := g.clampOffset(t.s.Project, float64(t.s.Playhead)-vis*at, t.zoom)
 	if math.Abs(off-t.offset) < 1e-9 {
 		return false
 	}
