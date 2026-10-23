@@ -3,7 +3,6 @@ package audio
 import (
 	"context"
 	"errors"
-	"image/png"
 	"math"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 	"framestudio-proto/src/export"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/liveaudio"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
@@ -155,6 +155,20 @@ type harness struct {
 	w    fyne.Window
 	jobs []func()
 	errs []error
+
+	mods   fyne.KeyModifier
+	now    time.Time
+	tick   func() // the running meter clock's tick, nil when stopped
+	clocks int    // meter clocks started
+	level  func() (liveaudio.Level, map[string]liveaudio.Level)
+}
+
+// advance moves the fake clock by dt and runs one meter tick if polling.
+func (h *harness) advance(dt time.Duration) {
+	h.now = h.now.Add(dt)
+	if h.tick != nil {
+		h.tick()
+	}
 }
 
 func (h *harness) flush() {
@@ -219,6 +233,27 @@ func newHarness(t *testing.T, pr *model.Project) *harness {
 	h.p = New(ctx).(*Page)
 	h.p.waves = fakeWaves{}
 	h.p.spawn = func(f func()) { h.jobs = append(h.jobs, f) }
+	h.now = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	h.p.now = func() time.Time { return h.now }
+	h.p.mods = func() fyne.KeyModifier { return h.mods }
+	h.p.prev.live = func() bool { return false }
+	h.p.levels = func(*session.Session) (liveaudio.Level, map[string]liveaudio.Level) {
+		if h.level != nil {
+			return h.level()
+		}
+		return liveaudio.Level{}, nil
+	}
+	h.p.clock = func(tick func()) func() {
+		h.clocks++
+		h.tick = tick
+		stopped := false
+		return func() {
+			if !stopped {
+				stopped = true
+				h.tick = nil
+			}
+		}
+	}
 	h.w = test.NewTempWindow(t, h.p.Content())
 	ctx.Window = h.w
 	h.w.Resize(fyne.NewSize(1440, 860))
@@ -313,7 +348,7 @@ func TestLaneTapSelectsAndClipPanelEdits(t *testing.T) {
 	clip := tr.Clips[0]
 	x := h.p.xOf(clip.Start+10, l.Size().Width)
 	test.TapAt(l, fyne.NewPos(x, rowH/2))
-	if h.s.SelectedClip != clip.ID || h.p.clip.id != clip.ID {
+	if h.s.SelectedClip != clip.ID || len(h.p.clip.ids) != 1 || h.p.clip.ids[0] != clip.ID {
 		t.Fatalf("tap should select the clip, selected %q", h.s.SelectedClip)
 	}
 	if h.p.clip.name.Text != clip.Name || h.p.clip.volVal.Text != "-9,0 dB" {
@@ -435,31 +470,4 @@ func TestEmptyProject(t *testing.T) {
 		t.Errorf("preview of an empty project: %v", h.errs)
 	}
 	h.p.TypedKey(&fyne.KeyEvent{Name: fyne.KeyEnd})
-}
-
-func TestScreenshot(t *testing.T) {
-	out := os.Getenv("FS_SCREENSHOT")
-	if out == "" {
-		t.Skip("set FS_SCREENSHOT to write /tmp/fs-audio.png")
-	}
-	h := newHarness(t, demoProject())
-	a := h.s.Project.TrackIndices(model.TrackAudio)
-	h.s.SelectClip(h.s.Project.Tracks[a[0]].Clips[0].ID)
-	h.s.Seek(25 * 12)
-	h.s.SetIn(25 * 8)
-	h.s.SetOut(25 * 30)
-	h.flush()
-	img := h.w.Canvas().Capture()
-	path := "/tmp/fs-audio.png"
-	if out != "1" {
-		path = out
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		t.Fatal(err)
-	}
 }

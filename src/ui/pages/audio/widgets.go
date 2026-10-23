@@ -186,3 +186,114 @@ func mix(a, b color.NRGBA, t float64) color.NRGBA {
 	l := func(x, y uint8) uint8 { return uint8(float64(x)*(1-t) + float64(y)*t + 0.5) }
 	return color.NRGBA{l(a.R, b.R), l(a.G, b.G), l(a.B, b.B), 0xFF}
 }
+
+// hCenter centres its objects horizontally at their minimum width and full height.
+type hCenter struct{}
+
+func (hCenter) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objs {
+		w := min(o.MinSize().Width, size.Width)
+		o.Move(fyne.NewPos((size.Width-w)/2, 0))
+		o.Resize(fyne.NewSize(w, size.Height))
+	}
+}
+
+func (hCenter) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	var s fyne.Size
+	for _, o := range objs {
+		s = s.Max(o.MinSize())
+	}
+	return s
+}
+
+var trashIcon = fyne.NewStaticResource("trash.svg", []byte(fmt.Sprintf(
+	`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#%02X%02X%02X" `+
+		`d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 12H7L6 9zm4 2v8h1.5v-8H10zm2.5 0v8H14v-8h-1.5z"/></svg>`,
+	studiotheme.Muted.R, studiotheme.Muted.G, studiotheme.Muted.B)))
+
+// hScrollBar pans the lanes: the thumb shows the visible part of the program.
+type hScrollBar struct {
+	widget.BaseWidget
+	pg      *Page
+	hovered bool
+	drag    bool
+}
+
+const hbarH = 10
+
+func newHScrollBar(pg *Page) *hScrollBar {
+	b := &hScrollBar{pg: pg}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+// thumb returns the thumb's x and width on a bar w pixels wide.
+func (b *hScrollBar) thumb(w float32) (x, tw float32) {
+	span := b.pg.span()
+	v := b.pg.view
+	tw = max(float32(v.visible(span)/float64(span))*w, 24)
+	if tw >= w {
+		return 0, w
+	}
+	free := float64(span) - v.visible(span)
+	return float32(v.start/free) * (w - tw), tw
+}
+
+func (b *hScrollBar) Dragged(e *fyne.DragEvent) {
+	b.drag = true
+	w := b.Size().Width
+	_, tw := b.thumb(w)
+	if w-tw <= 0 {
+		return
+	}
+	span := b.pg.span()
+	free := float64(span) - b.pg.view.visible(span)
+	lw := b.pg.laneWidth()
+	if lw <= 0 {
+		return
+	}
+	// convert the thumb movement to lane pixels
+	frames := float64(e.Dragged.DX) / float64(w-tw) * free
+	b.pg.scrollLanes(float32(frames / b.pg.view.visible(span) * float64(lw)))
+}
+
+func (b *hScrollBar) DragEnd() { b.drag = false; b.Refresh() }
+
+// Tapped pages towards the click.
+func (b *hScrollBar) Tapped(e *fyne.PointEvent) {
+	x, tw := b.thumb(b.Size().Width)
+	lw := b.pg.laneWidth()
+	switch {
+	case e.Position.X < x:
+		b.pg.scrollLanes(-lw * 0.9)
+	case e.Position.X > x+tw:
+		b.pg.scrollLanes(lw * 0.9)
+	}
+}
+
+func (b *hScrollBar) Scrolled(e *fyne.ScrollEvent) {
+	if !b.pg.wheel(e, -1) {
+		b.pg.scrollLanes(-e.Scrolled.DY * 3)
+	}
+}
+
+func (b *hScrollBar) MouseIn(*desktop.MouseEvent)    { b.hovered = true; b.Refresh() }
+func (b *hScrollBar) MouseMoved(*desktop.MouseEvent) {}
+func (b *hScrollBar) MouseOut()                      { b.hovered = false; b.Refresh() }
+
+func (b *hScrollBar) CreateRenderer() fyne.WidgetRenderer {
+	return newDrawnRenderer(b, fyne.NewSize(40, hbarH), func(size fyne.Size) []fyne.CanvasObject {
+		objs := []fyne.CanvasObject{place(canvas.NewRectangle(studiotheme.Panel), 0, 0, size.Width, size.Height)}
+		x, tw := b.thumb(size.Width)
+		if tw >= size.Width {
+			return objs // everything fits
+		}
+		c := studiotheme.Faint
+		if b.hovered || b.drag {
+			c = studiotheme.Muted
+		}
+		th := canvas.NewRectangle(c)
+		th.CornerRadius = 3
+		return append(objs, place(th, x+1, 2, tw-2, size.Height-4))
+	})
+}

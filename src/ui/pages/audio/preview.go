@@ -50,25 +50,34 @@ func pickPlayer(lookPath func(string) (string, error), file string) (playerCmd, 
 	return playerCmd{}, errNoPlayer
 }
 
-// previewRange returns the frames [from, to) to preview: the In/Out range if set, otherwise
-// from the playhead (or the start, if the playhead is past the end), at most previewSeconds long.
-func previewRange(playhead, in, out, duration, fps int) (from, to int, err error) {
+// previewSpan returns the frames [from, to) to preview: the In/Out range if set,
+// otherwise from the playhead (or the start, if the playhead is past the end) to the end.
+func previewSpan(playhead, in, out, duration int) (from, to int, err error) {
 	if duration <= 0 {
 		return 0, 0, errNoAudio
-	}
-	if fps <= 0 {
-		fps = 25
 	}
 	if out > in {
 		from, to = in, min(out, duration)
 		if from >= to {
 			return 0, 0, errors.New("Der In/Out-Bereich liegt hinter dem Programmende. Bereich neu setzen.")
 		}
-	} else {
-		from, to = playhead, duration
-		if from >= duration {
-			from = 0
-		}
+		return from, to, nil
+	}
+	from = playhead
+	if from >= duration {
+		from = 0
+	}
+	return from, duration, nil
+}
+
+// previewRange is previewSpan limited to previewSeconds, for the mixdown preview.
+func previewRange(playhead, in, out, duration, fps int) (from, to int, err error) {
+	if fps <= 0 {
+		fps = 25
+	}
+	from, to, err = previewSpan(playhead, in, out, duration)
+	if err != nil {
+		return 0, 0, err
 	}
 	return from, min(to, from+previewSeconds*fps), nil
 }
@@ -91,8 +100,11 @@ const (
 	previewPlaying
 )
 
-// previewer mixes the timeline audio to a temporary WAV and plays it with an external
-// player while the session playhead runs in sync. All methods run on the UI thread.
+// previewer plays the preview range. With live sound (the default) it plays the range
+// through session playback, which the live engine sounds: Loop is switched off for the
+// preview and restored afterwards. Without live sound it mixes the range to a temporary WAV,
+// plays it with an external player while the session playhead runs in sync, and holds the
+// live engine meanwhile. All methods run on the UI thread.
 type previewer struct {
 	s        *session.Session
 	run      func(ctx context.Context, p *model.Project, o export.Options) error
@@ -100,6 +112,11 @@ type previewer struct {
 	spawn    func(func()) // runs background work
 	onChange func()       // state or status changed
 	onError  func(error)
+	live     func() bool // whether the live engine can sound playback
+
+	liveKnown int  // liveAvailable: 0 unknown, 1 yes, -1 no
+	liveMode  bool // the running preview uses session playback
+	loopWas   bool // Loop was on before a live preview switched it off
 
 	state   previewState
 	status  string
@@ -130,12 +147,45 @@ func (v *previewer) wait(timeout time.Duration) bool {
 // Busy reports whether a preview is being mixed or played.
 func (v *previewer) Busy() bool { return v.state != previewIdle }
 
-// Start mixes and plays the preview range, replacing any running preview.
+// liveAvailable reports whether the live engine has the tools to sound playback: ffmpeg
+// and one of its players. The answer is looked up once.
+func (v *previewer) liveAvailable() bool {
+	if v.liveKnown == 0 {
+		v.liveKnown = -1
+		if _, err := v.lookPath("ffmpeg"); err == nil {
+			for _, n := range []string{"pw-play", "paplay", "ffplay"} {
+				if _, err := v.lookPath(n); err == nil {
+					v.liveKnown = 1
+					break
+				}
+			}
+		}
+	}
+	return v.liveKnown > 0
+}
+
+// idleStatus describes what "Vorhören" would play.
+func (v *previewer) idleStatus() string {
+	what := "Ab Abspielkopf"
+	if v.s.HasRange() {
+		what = "In/Out-Bereich"
+	}
+	if v.live != nil && v.live() {
+		return what
+	}
+	return what + ", max. 30 s"
+}
+
+// Start plays the preview range, replacing any running preview.
 func (v *previewer) Start() {
 	v.Stop()
 	p := v.s.Project
 	if !hasAudioClips(p) {
 		v.onError(errNoAudio)
+		return
+	}
+	if v.live != nil && v.live() {
+		v.startLive()
 		return
 	}
 	in, out := v.s.In, v.s.Out
@@ -215,6 +265,39 @@ func (v *previewer) Stop() {
 	v.finish()
 }
 
+// startLive plays the range through session playback: from In (or the playhead) to Out
+// (or the end), without looping.
+func (v *previewer) startLive() {
+	in, out := v.s.In, v.s.Out
+	if !v.s.HasRange() {
+		in, out = 0, 0
+	}
+	from, _, err := previewSpan(v.s.Playhead, in, out, v.s.Project.Duration())
+	if err != nil {
+		v.onError(err)
+		return
+	}
+	v.gen++
+	v.liveMode, v.loopWas = true, v.s.Loop
+	v.state = previewPlaying
+	v.status = "Ab Abspielkopf wird abgespielt"
+	if v.s.HasRange() {
+		v.status = "In/Out-Bereich wird abgespielt"
+	}
+	v.syncing = true
+	if v.loopWas {
+		v.s.SetLoop(false)
+	}
+	v.s.Seek(from)
+	v.s.SetPlaying(true)
+	v.syncing = false
+	if !v.s.Playing { // nothing to play
+		v.finish()
+		return
+	}
+	v.onChange()
+}
+
 func (v *previewer) finish() {
 	v.gen++
 	if v.cancel != nil {
@@ -222,11 +305,15 @@ func (v *previewer) finish() {
 		v.cancel = nil
 	}
 	v.state, v.status = previewIdle, ""
+	v.syncing = true
 	if v.s.Playing {
-		v.syncing = true
 		v.s.SetPlaying(false)
-		v.syncing = false
 	}
+	if v.liveMode && v.loopWas && !v.s.Loop {
+		v.s.SetLoop(true)
+	}
+	v.syncing = false
+	v.liveMode, v.loopWas = false, false
 	if v.release != nil {
 		v.release()
 		v.release = nil

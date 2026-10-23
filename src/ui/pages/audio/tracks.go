@@ -38,6 +38,7 @@ type trackView struct {
 	tc     *canvas.Text
 	empty  *fyne.Container
 	scroll *container.Scroll
+	hbar   *hScrollBar
 	obj    fyne.CanvasObject
 }
 
@@ -63,8 +64,13 @@ func newTrackView(pg *Page) *trackView {
 	tv.scroll = container.NewVScroll(tv.list)
 	body := container.NewStack(backdrop, tv.scroll, tv.empty)
 
+	tv.hbar = newHScrollBar(pg)
+	barCorner := canvas.NewRectangle(studiotheme.Panel)
+	barCorner.SetMinSize(fyne.NewSize(headerW, 0))
+	bottom := container.NewBorder(hline(), nil, barCorner, nil, tv.hbar)
+
 	tv.obj = container.NewStack(canvas.NewRectangle(studiotheme.Lane),
-		container.NewBorder(top, nil, nil, nil, body), tv.head)
+		container.NewBorder(top, bottom, nil, nil, body), tv.head)
 	return tv
 }
 
@@ -110,6 +116,7 @@ func (tv *trackView) update() {
 	}
 	tv.ruler.Refresh()
 	tv.grid.Refresh()
+	tv.hbar.Refresh()
 	tv.updatePlayhead()
 }
 
@@ -117,6 +124,15 @@ func (tv *trackView) refreshLanes() {
 	for _, r := range tv.rows {
 		r.lane.Refresh()
 	}
+}
+
+// redraw repaints everything that depends on the visible time window.
+func (tv *trackView) redraw() {
+	tv.refreshLanes()
+	tv.ruler.Refresh()
+	tv.grid.Refresh()
+	tv.hbar.Refresh()
+	tv.head.Refresh()
 }
 
 func (tv *trackView) updatePlayhead() {
@@ -133,9 +149,11 @@ func (tv *trackView) updatePlayhead() {
 type trackRow struct {
 	tv               *trackView
 	id               string
-	name, info       *canvas.Text
+	name             *nameLabel
+	info             *canvas.Text
 	bg, accent       *canvas.Rectangle
 	mute, solo, lock *toggle
+	del              *toggle
 	lane             *lane
 	obj              fyne.CanvasObject
 }
@@ -143,20 +161,21 @@ type trackRow struct {
 func newTrackRow(tv *trackView, id string) *trackRow {
 	r := &trackRow{tv: tv, id: id}
 	s := tv.pg.s
-	r.name = canvas.NewText("", studiotheme.Text)
-	r.name.TextSize = 13
-	r.name.TextStyle = fyne.TextStyle{Bold: true}
+	r.name = newNameLabel(13, fyne.TextAlignLeading, func() { s.SelectTrack(id) },
+		func(name string) { tv.pg.renameTrack(id, name) })
+	r.name.fullName = func() string { return tv.pg.track(id).Name }
 	r.info = canvas.NewText("", studiotheme.Muted)
 	r.info.TextSize = 11
 	r.mute = newToggle("M", studiotheme.Steel, func() { tv.pg.toggleMute(id) })
 	r.solo = newToggle("S", amber, func() { tv.pg.toggleSolo(id) })
 	r.lock = newIconToggle(lockOff, lockOn, studiotheme.Steel, func() { tv.pg.toggleLock(id) })
+	r.del = newIconToggle(trashIcon, trashIcon, studiotheme.Steel, func() { tv.pg.removeTrack(id) })
 	r.bg = canvas.NewRectangle(studiotheme.Panel)
 	r.accent = canvas.NewRectangle(studiotheme.Steel)
 	r.accent.SetMinSize(fyne.NewSize(3, 0))
 
 	text := container.New(layout.NewCustomPaddedLayout(0, 0, 0, 0), container.NewVBox(r.name, r.info))
-	toggles := container.NewHBox(r.mute, r.solo, r.lock)
+	toggles := container.NewHBox(r.mute, r.solo, r.lock, layout.NewSpacer(), r.del)
 	inner := container.NewBorder(text, toggles, nil, nil)
 	vline := canvas.NewRectangle(studiotheme.Border)
 	vline.SetMinSize(fyne.NewSize(1, 0))
@@ -176,7 +195,7 @@ func (r *trackRow) update() {
 	if t == nil {
 		return
 	}
-	r.name.Text = fitText(t.Name, 13, r.name.TextStyle, headerW-24)
+	r.name.SetText(fitText(t.Name, 13, fyne.TextStyle{Bold: true}, headerW-24))
 	clips := "Keine Clips"
 	switch n := len(t.Clips); n {
 	case 0:
@@ -189,12 +208,16 @@ func (r *trackRow) update() {
 	r.mute.SetOn(t.Muted)
 	r.solo.SetOn(t.Solo)
 	r.lock.SetOn(t.Locked)
+	if len(t.Clips) == 0 && !t.Locked {
+		r.del.Show() // only empty tracks can be deleted here
+	} else {
+		r.del.Hide()
+	}
 	if s.SelectedTrack == r.id {
 		r.accent.FillColor, r.bg.FillColor = studiotheme.Steel, studiotheme.Raised
 	} else {
 		r.accent.FillColor, r.bg.FillColor = color.Transparent, studiotheme.Panel
 	}
-	r.name.Refresh()
 	r.info.Refresh()
 	r.accent.Refresh()
 	r.bg.Refresh()
@@ -230,7 +253,8 @@ func (l *lane) CreateRenderer() fyne.WidgetRenderer {
 	return newDrawnRenderer(l, fyne.NewSize(80, rowH), l.build)
 }
 
-// Tapped selects the clip under the pointer, or seeks there if the lane is empty.
+// Tapped selects the clip under the pointer (Ctrl+click adds or removes it), or seeks
+// there if the lane is empty.
 func (l *lane) Tapped(e *fyne.PointEvent) {
 	pg := l.row.tv.pg
 	t, _ := pg.s.Project.Track(l.row.id)
@@ -239,12 +263,25 @@ func (l *lane) Tapped(e *fyne.PointEvent) {
 	}
 	f := pg.frameAt(e.Position.X, l.Size().Width)
 	if ci := t.ClipAt(f); ci >= 0 {
-		pg.s.SelectClip(t.Clips[ci].ID)
+		if pg.ctrlHeld() {
+			pg.s.ToggleClip(t.Clips[ci].ID)
+		} else {
+			pg.s.SelectClip(t.Clips[ci].ID)
+		}
 		return
 	}
-	pg.s.SelectClip("")
-	pg.s.SelectTrack(t.ID)
+	if !pg.ctrlHeld() {
+		pg.s.SelectClip("")
+		pg.s.SelectTrack(t.ID)
+	}
 	pg.s.Seek(f)
+}
+
+// Scrolled zooms (Ctrl) or pans (Shift, horizontal wheel); plain wheel scrolls the tracks.
+func (l *lane) Scrolled(e *fyne.ScrollEvent) {
+	if !l.row.tv.pg.wheel(e, e.Position.X) {
+		l.row.tv.scroll.Scrolled(e)
+	}
 }
 
 func (l *lane) build(size fyne.Size) []fyne.CanvasObject {
@@ -262,7 +299,12 @@ func (l *lane) build(size fyne.Size) []fyne.CanvasObject {
 		if x0 >= size.Width {
 			break
 		}
-		w := max(x1-x0, 3)
+		if x1 <= 0 {
+			continue
+		}
+		// draw only the visible part: lanes are not clipped against the track headers
+		v0, v1 := max(x0, 0), min(x1, size.Width)
+		w := max(v1-v0, 3)
 		base := c.Color.NRGBA()
 		base.A = 0xFF
 		if !on {
@@ -270,37 +312,47 @@ func (l *lane) build(size fyne.Size) []fyne.CanvasObject {
 		}
 		body := canvas.NewRectangle(mix(studiotheme.Lane, base, 0.3))
 		strip := canvas.NewRectangle(mix(studiotheme.Lane, base, 0.85))
-		objs = append(objs, place(body, x0, top, w, h), place(strip, x0, top, w, stripH))
+		objs = append(objs, place(body, v0, top, w, h), place(strip, v0, top, w, stripH))
 
 		waveTop := top + stripH
 		entry, m := pg.waveFor(c)
-		wave := canvas.NewRaster(waveRaster(c, entry, p, m, mix(base, color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}, 0.45)))
-		objs = append(objs, place(wave, x0+1, waveTop+2, max(w-2, 1), h-stripH-4))
+		// clip-relative frames shown between v0 and v1
+		a, b := 0.0, float64(c.Length)
+		if x1 > x0 {
+			a = float64(c.Length) * float64((v0-x0)/(x1-x0))
+			b = float64(c.Length) * float64((v1-x0)/(x1-x0))
+		}
+		wave := canvas.NewRaster(waveRaster(c, entry, p, m, mix(base, color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}, 0.45), a, b))
+		objs = append(objs, place(wave, v0+1, waveTop+2, max(w-2, 1), h-stripH-4))
 		if m == nil && c.MediaID != "" && w > 60 {
 			miss := canvas.NewText(fitText("Medium fehlt", 11, fyne.TextStyle{}, w-12), studiotheme.Muted)
 			miss.TextSize = 11
-			objs = append(objs, place(miss, x0+6, waveTop+4, w-12, 14))
+			objs = append(objs, place(miss, v0+6, waveTop+4, w-12, 14))
 		}
 
 		if label := fitText(c.Name, 11, fyne.TextStyle{}, w-10); label != "" {
 			name := canvas.NewText(label, studiotheme.Text)
 			name.TextSize = 11
-			objs = append(objs, place(name, x0+5, top+1, w-10, stripH-2))
+			objs = append(objs, place(name, v0+5, top+1, w-10, stripH-2))
 		}
 		frame := canvas.NewRectangle(color.Transparent)
 		frame.StrokeWidth = 1
 		frame.StrokeColor = mix(base, color.NRGBA{A: 0xFF}, 0.35)
-		if pg.s.SelectedClip == c.ID {
+		if pg.s.IsSelected(c.ID) {
 			frame.StrokeWidth = 2
 			frame.StrokeColor = studiotheme.Steel
+			if c.ID != pg.s.SelectedClip {
+				frame.StrokeColor = mix(studiotheme.Steel, studiotheme.Lane, 0.3)
+			}
 		}
-		objs = append(objs, place(frame, x0, top, w, h))
+		objs = append(objs, place(frame, v0, top, w, h))
 	}
 	return objs
 }
 
-// waveRaster draws the clip's source range of the media waveform, shaped by fades and gain.
-func waveRaster(c model.Clip, e *waveEntry, p *model.Project, m *model.MediaItem, col color.NRGBA) func(w, h int) image.Image {
+// waveRaster draws clip-relative frames [a, b) of the clip's source waveform, shaped by
+// fades and gain.
+func waveRaster(c model.Clip, e *waveEntry, p *model.Project, m *model.MediaItem, col color.NRGBA, a, b float64) func(w, h int) image.Image {
 	var peaks []float32
 	if e != nil {
 		peaks = e.peaks
@@ -322,14 +374,14 @@ func waveRaster(c model.Clip, e *waveEntry, p *model.Project, m *model.MediaItem
 		}
 		mid := float64(h-1) / 2
 		for x := range w {
-			t0 := float64(x) / float64(w) * float64(c.Length)
-			t1 := float64(x+1) / float64(w) * float64(c.Length)
+			t0 := a + float64(x)/float64(w)*(b-a)
+			t1 := a + float64(x+1)/float64(w)*(b-a)
 			g := c.FadeFactor(c.Start + int(t0))
 			img.SetNRGBA(x, int(mid), centre)
 			if peaks != nil {
-				a := float64(peakIn(peaks, (float64(c.SourceIn)+t0)/float64(mf), (float64(c.SourceIn)+t1)/float64(mf)))
-				a = math.Min(1, a*g*gain)
-				y0, y1 := int(math.Round(mid-a*mid)), int(math.Round(mid+a*mid))
+				amp := float64(peakIn(peaks, (float64(c.SourceIn)+t0)/float64(mf), (float64(c.SourceIn)+t1)/float64(mf)))
+				amp = math.Min(1, amp*g*gain)
+				y0, y1 := int(math.Round(mid-amp*mid)), int(math.Round(mid+amp*mid))
 				for y := y0; y <= y1; y++ {
 					img.SetNRGBA(x, y, col)
 				}
@@ -396,32 +448,54 @@ func (r *ruler) Tapped(e *fyne.PointEvent) { r.pg.s.Seek(r.pg.frameAt(e.Position
 func (r *ruler) Dragged(e *fyne.DragEvent) { r.pg.s.Seek(r.pg.frameAt(e.Position.X, r.Size().Width)) }
 func (r *ruler) DragEnd()                  {}
 
+// Scrolled pans the lanes, Ctrl zooms around the pointer.
+func (r *ruler) Scrolled(e *fyne.ScrollEvent) {
+	if !r.pg.wheel(e, e.Position.X) {
+		r.pg.scrollLanes(-e.Scrolled.DY * 3)
+	}
+}
+
+// visibleTicks returns the first labelled tick frame at or before the window, the tick
+// step and the last visible frame.
+func visibleTicks(pg *Page, w float32, minPx float32) (first, step, last int) {
+	span := pg.span()
+	vis := int(math.Ceil(pg.view.visible(span)))
+	step = tickStep(vis, w, pg.s.FPS(), minPx)
+	first = int(pg.view.start) / step * step
+	last = int(pg.view.start) + vis + 1
+	return first, step, last
+}
+
 func (r *ruler) build(size fyne.Size) []fyne.CanvasObject {
 	pg := r.pg
 	s := pg.s
 	objs := []fyne.CanvasObject{place(canvas.NewRectangle(studiotheme.Panel), 0, 0, size.Width, size.Height)}
 	if s.HasRange() {
-		x0, x1 := pg.xOf(s.In, size.Width), pg.xOf(s.Out, size.Width)
+		x0, x1 := max(pg.xOf(s.In, size.Width), 0), min(pg.xOf(s.Out, size.Width), size.Width)
 		band := canvas.NewRectangle(color.NRGBA{studiotheme.Steel.R, studiotheme.Steel.G, studiotheme.Steel.B, 0x38})
 		edge := canvas.NewRectangle(studiotheme.Steel)
 		objs = append(objs, place(band, x0, 0, x1-x0, size.Height), place(edge, x0, size.Height-3, x1-x0, 3))
 	}
 	fps := s.FPS()
-	span := pg.span()
-	step := tickStep(span, size.Width, fps, 104)
+	first, step, last := visibleTicks(pg, size.Width, 104)
 	minor := step / 5
 	if minor < 1 || step%5 != 0 {
 		minor = max(step/2, 1)
 	}
-	for f := 0; f <= span; f += minor {
+	for f := first; f <= last; f += minor {
 		x := pg.xOf(f, size.Width)
 		if x > size.Width {
 			break
 		}
+		if x < 0 {
+			continue
+		}
 		if f%step == 0 {
 			objs = append(objs, place(canvas.NewRectangle(studiotheme.Muted), x, size.Height-9, 1, 9))
 			lbl := kit.MonoText(model.Timecode(f, fps), studiotheme.Muted, 10)
-			objs = append(objs, place(lbl, x+4, 3, 90, 13))
+			if x+4+80 <= size.Width {
+				objs = append(objs, place(lbl, x+4, 3, 90, 13))
+			}
 		} else {
 			objs = append(objs, place(canvas.NewRectangle(studiotheme.Faint), x, size.Height-5, 1, 5))
 		}
@@ -443,12 +517,13 @@ func newGridView(pg *Page) *gridView {
 
 func (g *gridView) CreateRenderer() fyne.WidgetRenderer {
 	return newDrawnRenderer(g, fyne.NewSize(0, 0), func(size fyne.Size) []fyne.CanvasObject {
-		span := g.pg.span()
-		step := tickStep(span, size.Width, g.pg.s.FPS(), 104)
+		first, step, last := visibleTicks(g.pg, size.Width, 104)
 		line := color.NRGBA{0xFF, 0xFF, 0xFF, 0x0A}
 		var objs []fyne.CanvasObject
-		for f := step; f <= span; f += step {
-			objs = append(objs, place(canvas.NewRectangle(line), g.pg.xOf(f, size.Width), 0, 1, size.Height))
+		for f := first; f <= last; f += step {
+			if x := g.pg.xOf(f, size.Width); x > 0 && x <= size.Width {
+				objs = append(objs, place(canvas.NewRectangle(line), x, 0, 1, size.Height))
+			}
 		}
 		return objs
 	})
@@ -470,7 +545,7 @@ func (h *playhead) CreateRenderer() fyne.WidgetRenderer {
 	return newDrawnRenderer(h, fyne.NewSize(0, 0), func(size fyne.Size) []fyne.CanvasObject {
 		w := size.Width - headerW
 		x := headerW + h.pg.xOf(h.pg.s.Playhead, w)
-		if w <= 0 || x > size.Width {
+		if w <= 0 || x > size.Width || x < headerW {
 			return nil
 		}
 		line := canvas.NewRectangle(studiotheme.Tally)
