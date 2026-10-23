@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/workgate"
 )
 
 const (
@@ -22,6 +23,12 @@ const (
 // most two processes per cache; results are cached by media, time rounded to 0.1 s and
 // size. Audio returns its waveform thumbnail.
 func (c *Cache) Poster(m model.MediaItem, sec float64, w, h int) (image.Image, error) {
+	return c.PosterP(m, sec, w, h, workgate.PrioVisible)
+}
+
+// PosterP is Poster with the work-gate priority of the request: PrioVisible for posters
+// on screen, PrioBackground for the rest. Neither runs while the user plays.
+func (c *Cache) PosterP(m model.MediaItem, sec float64, w, h int, prio workgate.Prio) (image.Image, error) {
 	if w <= 0 || h <= 0 {
 		return nil, errors.New("Vorschaugröße ist ungültig")
 	}
@@ -42,8 +49,8 @@ func (c *Cache) Poster(m model.MediaItem, sec float64, w, h int) (image.Image, e
 		if v, ok := c.posters.get(key); ok {
 			return v, nil
 		}
-		v, err := c.inSlot(c.posterSlots, m.ID, posterTimeout, func(ctx context.Context) (any, error) {
-			return c.grab(ctx, m, float64(q)/posterQuantum, w, h)
+		v, err := c.inSlotP(prio, c.posterSlots, m.ID, posterTimeout, func(ctx context.Context) (any, error) {
+			return c.grab(withPrio(ctx, prio), m, float64(q)/posterQuantum, w, h)
 		})
 		if err != nil {
 			return nil, err
@@ -75,9 +82,13 @@ func posterSlot(m model.MediaItem, sec float64) int {
 // grab decodes the single frame at t; near the end of a file, where ffmpeg may find no
 // frame at t, it steps back.
 func (c *Cache) grab(ctx context.Context, m model.MediaItem, t float64, w, h int) (image.Image, error) {
-	img, err := decodeOne(ctx, m, posterArgs(m.Path, t, w, h), w, h)
+	prio := prioOf(ctx, workgate.PrioVisible)
+	dec := func(t float64) (*image.RGBA, error) {
+		return decodeOneG(ctx, c.gateOf(), prio, m, withThreads(posterArgs(m.Path, t, w, h), bgThreads), w, h)
+	}
+	img, err := dec(t)
 	for back := 0.5; err != nil && t > 0 && ctx.Err() == nil && back <= 2; back *= 2 {
-		img, err = decodeOne(ctx, m, posterArgs(m.Path, max(t-back, 0), w, h), w, h)
+		img, err = dec(max(t-back, 0))
 	}
 	if err != nil {
 		if ctx.Err() == nil {

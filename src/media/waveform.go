@@ -8,9 +8,9 @@ import (
 	"image"
 	"image/color"
 	"io"
-	"os/exec"
 
 	"framestudio-proto/src/model"
+	"framestudio-proto/src/workgate"
 )
 
 const (
@@ -20,20 +20,23 @@ const (
 )
 
 // readPeaks decodes the first audio stream as 8 kHz mono and returns its peak envelope.
-func readPeaks(ctx context.Context, bin string, m model.MediaItem) ([]float32, error) {
+func (c *Cache) readPeaks(ctx context.Context, bin string, m model.MediaItem) ([]float32, error) {
 	var stderr tailBuffer
-	cmd := exec.CommandContext(ctx, bin, "-nostdin", "-hide_banner", "-loglevel", "error",
+	prio := prioOf(ctx, workgate.PrioBackground)
+	cmd := c.gateOf().Command(ctx, prio, bin, "-nostdin", "-hide_banner", "-loglevel", "error",
 		"-i", m.Path, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", fmt.Sprint(waveRate), "-f", "s16le", "-")
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
+	var done func()
 	if err == nil {
-		err = cmd.Start()
+		done, err = workgate.StartCmd(c.gateOf(), cmd, prio)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Ton von „%s“ kann nicht gelesen werden: %v", m.Name, err)
 	}
 	peaks, readErr := envelope(stdout)
 	waitErr := cmd.Wait()
+	done()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("Wellenform von „%s“ abgebrochen: %w", m.Name, ctx.Err())
 	}

@@ -16,6 +16,7 @@ func TestShuttleNeverBlocks(t *testing.T) {
 	m := rateVideo(t, 25, 8)
 	c := NewCache()
 	defer c.Close()
+	c.SetShuttleMode("keyframes")
 	for _, rate := range []float64{8, -8} {
 		start := 0
 		if rate < 0 {
