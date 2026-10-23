@@ -431,7 +431,7 @@ func (r *tlRenderer) drawDrop(objs []fyne.CanvasObject, p *model.Project, g geom
 			continue
 		}
 		if _, ok := newRows[gh.newKind]; !ok {
-			h := rowHeight(gh.newKind)
+			h := r.t.rows.of(gh.newKind)
 			newRows[gh.newKind] = slot
 			strip := rect(alpha(studiotheme.Steel, 0x14), 0, slot, laneW, h-1)
 			strip.StrokeColor, strip.StrokeWidth = alpha(studiotheme.Steel, 0x60), 1
@@ -451,7 +451,7 @@ func (r *tlRenderer) drawDrop(objs []fyne.CanvasObject, p *model.Project, g geom
 				objs = r.drawClip(objs, p, g, gh.clip, rw.y-rulerH, rw.h, clipState{ghost: true})
 			}
 		case gh.track == -1:
-			objs = r.drawClip(objs, p, g, gh.clip, newRows[gh.newKind], rowHeight(gh.newKind), clipState{ghost: true})
+			objs = r.drawClip(objs, p, g, gh.clip, newRows[gh.newKind], r.t.rows.of(gh.newKind), clipState{ghost: true})
 		}
 	}
 	return objs
@@ -529,6 +529,8 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 		offline = a.offline
 		if !offline && ix1-ix0 >= 1 && bodyH > 4 {
 			switch {
+			case wave && r.t.noWaveforms, !wave && r.t.noFilmstrip:
+				// hidden in the settings: the clip body stays plain
 			case wave:
 				objs = append(objs, r.waveform(p, g, c, *m, a, ix0, ix1, bodyTop, bodyH-1))
 			case c.Kind == model.KindVideo && m.Duration > 0 && a.done && r.t.posters.src != nil:
@@ -771,7 +773,7 @@ func (r *tlRenderer) buildHeaders(p *model.Project, g geom) []fyne.CanvasObject 
 	}
 	if plan := r.t.drop; plan != nil && plan.newTrack {
 		y := g.tailY() - rulerH
-		h := rowHeight(plan.newKind)
+		h := r.t.rows.of(plan.newKind)
 		objs = append(objs, rect(alpha(studiotheme.Steel, 0x18), 0, y, headerW, h-1), rect(studiotheme.Steel, 0, y, 2, h-1))
 		ic := canvas.NewImageFromResource(icon("plus", studiotheme.Steel))
 		ic.FillMode = canvas.ImageFillContain

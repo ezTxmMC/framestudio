@@ -9,7 +9,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 
-	"framestudio-proto/src/model"
+	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 	"framestudio-proto/src/ui/timeline"
@@ -20,17 +20,20 @@ const minZoom, maxZoom = 1, 60
 
 // toolDefs are the timeline tools of the segmented group, in display order.
 var toolDefs = []struct {
-	tool timeline.Tool
-	icon fyne.Resource
-	tip  string
+	tool   timeline.Tool
+	id     string
+	icon   fyne.Resource
+	label  string
+	detail string
 }{
-	{timeline.ToolSelect, iconSelect, "Auswahl (A)"},
-	{timeline.ToolBlade, iconBlade, "Klinge (B)"},
-	{timeline.ToolRipple, iconRippleTrim, "Ripple-Trim (R): Kante ziehen verschiebt die folgenden Clips mit"},
-	{timeline.ToolRoll, iconRoll, "Rollen (N): Schnitt zwischen zwei Clips verschieben"},
+	{timeline.ToolSelect, "tool.select", iconSelect, "Auswahl", ""},
+	{timeline.ToolBlade, "tool.blade", iconBlade, "Klinge", ""},
+	{timeline.ToolRipple, "tool.ripple", iconRippleTrim, "Ripple-Trim", "Kante ziehen verschiebt die folgenden Clips mit"},
+	{timeline.ToolRoll, "tool.roll", iconRoll, "Rollen", "Schnitt zwischen zwei Clips verschieben"},
 }
 
 // toolbar sits in the timeline panel header: tools, edit commands, tracks, history, zoom.
+// Every button runs a command (Page.run), so menus, keys and buttons share one state.
 type toolbar struct {
 	pg      *Page
 	content fyne.CanvasObject
@@ -43,6 +46,16 @@ type toolbar struct {
 	undo, redo           *tip.Button
 	zoom                 *kit.Slider
 	syncing              bool
+
+	// tipped are the buttons whose tooltip names their command's current shortcut
+	tipped []tipped
+}
+
+// tipped is a button with a command tooltip: "label (key): detail".
+type tipped struct {
+	b             *tip.Button
+	id            string
+	label, detail string
 }
 
 // segment is a toggle button in a segmented group; the active one is backed in Steel.
@@ -94,32 +107,37 @@ func newToolbar(pg *Page) *toolbar {
 	b := &toolbar{pg: pg}
 	tips := tip.NewLayer(true)
 	b.tips = tips
-	btn := func(icon fyne.Resource, label string, tap func()) *tip.Button {
-		return tips.Button(themed(icon), label, tap)
+	cmd := func(icon fyne.Resource, id, label, detail string) *tip.Button {
+		btn := tips.Button(themed(icon), label, func() { pg.run(id) })
+		b.tipped = append(b.tipped, tipped{btn, id, label, detail})
+		return btn
+	}
+	seg := func(icon fyne.Resource, id, label, detail string) *segment {
+		s := newSegment(tips, icon, label, func() { pg.run(id) })
+		b.tipped = append(b.tipped, tipped{s.Button, id, label, detail})
+		return s
 	}
 	s := pg.ctx.Session
 	for _, d := range toolDefs {
-		t := d.tool
-		b.tools = append(b.tools, newSegment(tips, d.icon, d.tip, func() { pg.setTool(t) }))
+		b.tools = append(b.tools, seg(d.icon, d.id, d.label, d.detail))
 	}
-	b.bladeAll = newSegment(tips, iconBladeAll, "Alle Spuren: Klinge schneidet alle entsperrten Spuren", func() {
-		pg.setBladeAll(!pg.bladeAll)
-	})
-	b.split = btn(iconSplit, "Teilen am Playhead (S)", pg.split)
-	b.del = btn(theme.DeleteIcon(), "Auswahl löschen (Entf)", func() { pg.deleteSelected(false) })
-	b.ripple = btn(iconRipple, "Löschen und Lücke schließen", func() { pg.deleteSelected(true) })
-	marker := btn(iconMarker, "Marker setzen (M)", pg.addMarker)
-	in := btn(iconIn, "In-Punkt setzen (I)", pg.markIn)
-	out := btn(iconOut, "Out-Punkt setzen (O)", pg.markOut)
-	b.clearRange = btn(iconClearRange, "Bereich löschen: In und Out entfernen", s.ClearRange)
-	addV := btn(iconAddVideo, "Videospur hinzufügen", func() { pg.addTrack(model.TrackVideo) })
-	addA := btn(iconAddAudio, "Audiospur hinzufügen", func() { pg.addTrack(model.TrackAudio) })
-	b.delTrack = btn(iconRemoveTrack, "Ausgewählte Spur löschen", pg.removeSelectedTrack)
-	b.snap = newSegment(tips, iconSnap, "Einrasten", pg.toggleSnap)
-	b.undo = btn(theme.ContentUndoIcon(), "Rückgängig", s.Undo)
-	b.redo = btn(theme.ContentRedoIcon(), "Wiederholen", s.Redo)
-	zoomOut := btn(theme.ZoomOutIcon(), "Herauszoomen (−)", func() { pg.zoomBy(1 / 1.5) })
-	zoomIn := btn(theme.ZoomInIcon(), "Hineinzoomen (+)", func() { pg.zoomBy(1.5) })
+	b.bladeAll = seg(iconBladeAll, "timeline.bladeAll", "Alle Spuren", "Klinge schneidet alle entsperrten Spuren")
+	b.split = cmd(iconSplit, "clip.split", "Teilen am Playhead", "")
+	b.del = cmd(theme.DeleteIcon(), "edit.delete", "Auswahl löschen", "")
+	b.ripple = cmd(iconRipple, "edit.rippleDelete", "Löschen und Lücke schließen", "")
+	marker := cmd(iconMarker, "marker.add", "Marker setzen", "")
+	in := cmd(iconIn, "timeline.setIn", "In-Punkt setzen", "")
+	out := cmd(iconOut, "timeline.setOut", "Out-Punkt setzen", "")
+	b.clearRange = cmd(iconClearRange, "timeline.clearRange", "Bereich löschen", "In und Out entfernen")
+	addV := cmd(iconAddVideo, "timeline.addVideoTrack", "Videospur hinzufügen", "")
+	addA := cmd(iconAddAudio, "timeline.addAudioTrack", "Audiospur hinzufügen", "")
+	b.delTrack = cmd(iconRemoveTrack, "timeline.deleteTrack", "Ausgewählte Spur löschen", "")
+	b.snap = seg(iconSnap, "timeline.snapping", "Einrasten", "")
+	// undo and redo are the shell's commands; the page has no binding for them
+	b.undo = tips.Button(themed(theme.ContentUndoIcon()), "Rückgängig", s.Undo)
+	b.redo = tips.Button(themed(theme.ContentRedoIcon()), "Wiederholen", s.Redo)
+	zoomOut := cmd(theme.ZoomOutIcon(), "timeline.zoomOut", "Herauszoomen", "")
+	zoomIn := cmd(theme.ZoomInIcon(), "timeline.zoomIn", "Hineinzoomen", "")
 	b.zoom = kit.NewSlider(minZoom, maxZoom)
 	b.zoom.Step = 0.5
 	b.zoom.OnChanged = func(v float64) {
@@ -149,6 +167,34 @@ func divider() fyne.CanvasObject {
 	return container.NewCenter(line)
 }
 
+// tipText formats a command tooltip with the command's current shortcut.
+func (b *toolbar) tipText(t tipped) string {
+	s := t.label
+	if sc := command.Display(b.pg.reg.Shortcut(t.id)); sc != "" {
+		s += " (" + sc + ")"
+	}
+	if t.detail != "" {
+		s += ": " + t.detail
+	}
+	return s
+}
+
+// updateTips follows key map changes and the selection count in the delete tips.
+func (b *toolbar) updateTips() {
+	n := len(b.pg.selection())
+	for _, t := range b.tipped {
+		switch {
+		case t.b == b.del && n > 1:
+			t.label = plural(n, "Clip", "Clips") + " löschen"
+		case t.b == b.ripple && n > 1:
+			t.label = plural(n, "Clip", "Clips") + " löschen und Lücken schließen"
+		}
+		if s := b.tipText(t); t.b.Tip != s {
+			t.b.SetTip(s)
+		}
+	}
+}
+
 // update mirrors tool, snapping, selection, history and zoom state.
 func (b *toolbar) update() {
 	pg, s := b.pg, b.pg.ctx.Session
@@ -160,12 +206,6 @@ func (b *toolbar) update() {
 	n := len(pg.selection())
 	enable(b.del, n > 0)
 	enable(b.ripple, n > 0)
-	b.del.SetTip("Auswahl löschen (Entf)")
-	b.ripple.SetTip("Löschen und Lücke schließen")
-	if n > 1 {
-		b.del.SetTip(plural(n, "Clip", "Clips") + " löschen (Entf)")
-		b.ripple.SetTip(plural(n, "Clip", "Clips") + " löschen und Lücken schließen")
-	}
 	enable(b.clearRange, s.HasRange() || s.In > 0 || s.Out > 0)
 	enable(b.delTrack, s.SelectedTrack != "")
 	enable(b.split, s.Project.Duration() > 0)
@@ -173,6 +213,7 @@ func (b *toolbar) update() {
 	enable(b.redo, s.CanRedo())
 	b.undo.SetTip(withLabel("Rückgängig", s.UndoLabel()))
 	b.redo.SetTip(withLabel("Wiederholen", s.RedoLabel()))
+	b.updateTips()
 	if b.zoom.Value != float64(pg.zoom) {
 		b.syncing = true
 		b.zoom.SetValue(float64(pg.zoom))

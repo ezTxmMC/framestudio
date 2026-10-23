@@ -36,6 +36,9 @@ type Timeline struct {
 	// OnZoomChanged reports zoom changes the widget made itself (e.g. Ctrl+wheel), so
 	// toolbars can follow.
 	OnZoomChanged func(float32)
+	// ClipMenu, when set, returns extra entries for a clip's context menu (the edit page
+	// adds its commands: copy, paste, fades...). They follow the built-in entries.
+	ClipMenu func(c model.Clip) []*fyne.MenuItem
 
 	bladeAll bool
 
@@ -55,6 +58,14 @@ type Timeline struct {
 
 	// heights holds track heights the user dragged, by track ID (view state, not saved).
 	heights map[string]float32
+	// rows are the default lane heights (settings); see SetTrackHeights.
+	rows rowDefaults
+
+	// view options from the settings (see options.go)
+	noFilmstrip, noWaveforms bool
+	followMode               string
+	noRippleSync             bool
+	stillSecs                float64
 
 	win        fyne.Window
 	unregister func() // drop zone registration
@@ -80,7 +91,8 @@ type Timeline struct {
 
 // New creates the widget and subscribes to session changes. Call Close to unsubscribe.
 func New(s *session.Session, cache *media.Cache) *Timeline {
-	t := &Timeline{s: s, cache: cache, zoom: 1, snapping: true, snapAt: -1}
+	t := &Timeline{s: s, cache: cache, zoom: 1, snapping: true, snapAt: -1, rows: defaultRows,
+		followMode: FollowPage, stillSecs: stillSeconds}
 	var src mediaSource
 	if cache != nil {
 		src = cache
@@ -245,7 +257,7 @@ func (t *Timeline) MinSize() fyne.Size {
 // geom returns the geometry for the current size and view, clamping the view state.
 func (t *Timeline) geom() geom {
 	sz := t.Size()
-	g := layoutGeom(t.s.Project, sz.Width, sz.Height, t.zoom, t.offset, t.vscroll, t.heights)
+	g := layoutGeom(t.s.Project, sz.Width, sz.Height, t.zoom, t.offset, t.vscroll, t.heights, t.rows)
 	t.offset = g.offset
 	t.vscroll = g.vscroll()
 	return g
@@ -298,12 +310,22 @@ func (t *Timeline) forgetChangedMedia() {
 	t.known = known
 }
 
-// follow pages the view so the playhead stays visible. It reports whether the view moved.
+// follow pages the view so the playhead stays visible (FollowPage), keeps it in the
+// middle while playing (FollowSmooth) or leaves the view alone (FollowOff). It reports
+// whether the view moved.
 func (t *Timeline) follow() bool {
-	if t.scrubbing || t.zoom <= minZoom || t.Size().Width <= headerW {
+	if t.followMode == FollowOff || t.scrubbing || t.zoom <= minZoom || t.Size().Width <= headerW {
 		return false
 	}
 	g := t.geom()
+	if t.followMode == FollowSmooth && t.s.Playing {
+		off := g.clampOffset(t.s.Project, float64(t.s.Playhead)-g.visibleFrames()/2, t.zoom)
+		if math.Abs(off-t.offset) < 1e-9 {
+			return false
+		}
+		t.offset = off
+		return true
+	}
 	x := g.frameX(float64(t.s.Playhead))
 	if x >= headerW && x <= g.w-12 {
 		return false

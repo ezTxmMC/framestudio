@@ -18,11 +18,13 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/settings"
 	"framestudio-proto/src/ui/kit"
 	studiotheme "framestudio-proto/src/ui/theme"
 )
 
-// Preview size limit while playing; paused frames render at full widget resolution.
+// Preview size limit while playing in automatic quality without a configured maximum
+// height; paused frames render at full widget resolution.
 const playW, playH = 1280, 720
 
 // Preview size limit while shuttling (J/K/L at other than 1×).
@@ -54,6 +56,13 @@ type Viewer struct {
 	last   request
 	unsub  func()
 	post   func(func())
+
+	// preview quality (settings Playback.PreviewQuality / MaxPreviewH, see quality.go)
+	quality      string // QualityAuto, QualityFull, QualityHalf or QualityQuarter
+	override     string // SetQuality; "" follows the settings
+	maxH         int
+	safe         *safeArea
+	unsubSetting func()
 
 	// shared with the render goroutine
 	mu      sync.Mutex
@@ -95,10 +104,13 @@ func New(s *session.Session, r *render.Renderer) *Viewer {
 	v.snap = s.Project.Clone()
 	v.ratio = aspect(v.snap)
 	v.fill = canvas.NewRectangle(v.snap.Settings.Background.NRGBA())
-	v.pic = container.NewStack(v.fill, v.img,
+	v.safe = newSafeArea()
+	v.pic = container.NewStack(v.fill, v.img, v.safe.obj,
 		container.NewBorder(container.New(layout.NewCustomPaddedLayout(8, 0, 8, 0), v.badge), nil, nil, nil))
 	v.frame = container.New(kit.AspectLayout{Ratio: v.ratio}, v.pic)
 	v.unsub = s.Subscribe(v.changed)
+	v.applySettings(settings.Get())
+	v.unsubSetting = settings.Subscribe(v.applySettings)
 	v.ExtendBaseWidget(v)
 	return v
 }
@@ -144,6 +156,7 @@ func (v *Viewer) Close() {
 	}
 	v.closed = true
 	v.unsub()
+	v.unsubSetting()
 	close(v.quit)
 }
 
@@ -188,15 +201,28 @@ func (v *Viewer) renderSize() (int, int) {
 		k := min(1, maxW/w, maxH/h)
 		w, h = w*k, h*k
 	}
-	if v.s.Playing {
-		limit(playW, playH)
+	// the project resolution is the most a preview needs
+	limit(float64(v.snap.Settings.Width), float64(v.snap.Settings.Height))
+	switch q := v.Quality(); q {
+	case QualityHalf, QualityQuarter:
+		k := 0.5
+		if q == QualityQuarter {
+			k = 0.25
+		}
+		w, h = w*k, h*k
+	}
+	if v.s.Playing && v.Quality() != QualityFull {
+		if v.maxH > 0 {
+			limit(w, float64(v.maxH))
+		} else {
+			limit(playW, playH)
+		}
 		if v.s.Rate != 1 {
 			// Shuttling skips frames anyway; smaller frames keep up with fast and
 			// reverse playback (decoding backwards is expensive).
 			limit(shuttleW, shuttleH)
 		}
 	}
-	limit(float64(v.snap.Settings.Width), float64(v.snap.Settings.Height))
 	return max(1, int(w+0.5)), max(1, int(h+0.5))
 }
 

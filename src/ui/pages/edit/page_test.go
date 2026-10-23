@@ -14,6 +14,7 @@ import (
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/render"
 	"framestudio-proto/src/session"
+	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/kit"
 	"framestudio-proto/src/ui/page"
 	studiotheme "framestudio-proto/src/ui/theme"
@@ -45,6 +46,7 @@ func (q *queue) drain() {
 }
 
 type fixture struct {
+	reg  *command.Registry
 	pg   *Page
 	s    *session.Session
 	w    fyne.Window
@@ -58,6 +60,7 @@ func newFixture(t *testing.T, p *model.Project) *fixture {
 	app := test.NewTempApp(t)
 	kit.UseUIQueue(t)
 	app.Settings().SetTheme(studiotheme.New())
+	resetSettings(t)
 	f := &fixture{s: session.New(p), q: &queue{}}
 	cache := media.NewCache()
 	ctx := &page.Context{
@@ -65,10 +68,17 @@ func newFixture(t *testing.T, p *model.Project) *fixture {
 		Navigate: func(id string) { f.nav = id },
 		ShowErr:  func(err error) { f.errs = append(f.errs, err) },
 	}
+	// the registry as the shell sets it up: page commands in the page scope, playback
+	// commands global
+	f.reg = command.NewRegistry()
+	ctx.Commands = f.reg
 	f.pg = New(ctx).(*Page)
 	f.pg.post = f.q.post
 	f.w = test.NewTempWindow(t, f.pg.Content())
 	ctx.Window = f.w
+	f.reg.Bind(command.PageScope(page.Edit), f.pg.Commands()...)
+	f.reg.SetScopeActive(command.PageScope(page.Edit), true)
+	bindTransport(f.reg, f.s)
 	f.w.Resize(fyne.NewSize(1440, 860))
 	t.Cleanup(func() {
 		f.pg.Close()
@@ -321,7 +331,7 @@ func TestSplitAndDeleteShortcuts(t *testing.T) {
 
 func TestTransportShortcuts(t *testing.T) {
 	f := newFixture(t, basicProject())
-	key := func(n fyne.KeyName) { f.pg.TypedKey(&fyne.KeyEvent{Name: n}) }
+	key := func(n fyne.KeyName) { press(f, n) }
 	key(fyne.KeyDown)
 	if f.s.Playhead != 25 {
 		t.Fatalf("next edit: %d", f.s.Playhead)

@@ -58,11 +58,21 @@ func displayOrder(p *model.Project) []int {
 	return append(out, p.TrackIndices(model.TrackAudio)...)
 }
 
-func rowHeight(k model.TrackKind) float32 {
+// rowDefaults are the lane heights of tracks the user did not resize (settings
+// Timeline.VideoTrackH / AudioTrackH).
+type rowDefaults struct{ video, audio float32 }
+
+var defaultRows = rowDefaults{videoRowH, audioRowH}
+
+func (d rowDefaults) of(k model.TrackKind) float32 {
+	h := d.video
 	if k == model.TrackAudio {
-		return audioRowH
+		h = d.audio
 	}
-	return videoRowH
+	if h <= 0 {
+		return defaultRows.of(k)
+	}
+	return max(minRowH, min(h, maxRowH))
 }
 
 // fitFrames is the number of frames visible at zoom 1: the whole program plus some air,
@@ -73,21 +83,21 @@ func fitFrames(p *model.Project) float64 {
 }
 
 // trackHeight is a track's lane height: the user's choice from heights, else the default.
-func trackHeight(tr *model.Track, heights map[string]float32) float32 {
+func trackHeight(tr *model.Track, heights map[string]float32, d rowDefaults) float32 {
 	if h, ok := heights[tr.ID]; ok {
 		return max(minRowH, min(h, maxRowH))
 	}
-	return rowHeight(tr.Kind)
+	return d.of(tr.Kind)
 }
 
 // newGeom computes the geometry for a widget of size w x h with default track heights.
 // offset and vscroll are clamped.
 func newGeom(p *model.Project, w, h, zoom float32, offset float64, vscroll float32) geom {
-	return layoutGeom(p, w, h, zoom, offset, vscroll, nil)
+	return layoutGeom(p, w, h, zoom, offset, vscroll, nil, defaultRows)
 }
 
 // layoutGeom is newGeom with per-track heights (track ID -> height).
-func layoutGeom(p *model.Project, w, h, zoom float32, offset float64, vscroll float32, heights map[string]float32) geom {
+func layoutGeom(p *model.Project, w, h, zoom float32, offset float64, vscroll float32, heights map[string]float32, d rowDefaults) geom {
 	g := geom{w: w, h: h}
 	laneW := float64(max(w-headerW, 1))
 	g.ppf = laneW / fitFrames(p) * float64(clampZoom(zoom))
@@ -95,12 +105,12 @@ func layoutGeom(p *model.Project, w, h, zoom float32, offset float64, vscroll fl
 
 	order := displayOrder(p)
 	for _, ti := range order {
-		g.content += trackHeight(&p.Tracks[ti], heights)
+		g.content += trackHeight(&p.Tracks[ti], heights, d)
 	}
 	vscroll = max(0, min(vscroll, g.maxScroll()))
 	y := rulerH - vscroll
 	for _, ti := range order {
-		rh := trackHeight(&p.Tracks[ti], heights)
+		rh := trackHeight(&p.Tracks[ti], heights, d)
 		g.rows = append(g.rows, row{track: ti, y: y, h: rh})
 		y += rh
 	}
@@ -474,7 +484,7 @@ func abs(n int) int {
 func (t *Timeline) ContentHeight() float32 {
 	h := rulerH + tailH
 	for i := range t.s.Project.Tracks {
-		h += trackHeight(&t.s.Project.Tracks[i], t.heights)
+		h += trackHeight(&t.s.Project.Tracks[i], t.heights, t.rows)
 	}
 	return h
 }
