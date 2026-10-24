@@ -126,6 +126,45 @@ func (p *Project) PlaceClip(trackID string, c Clip) error {
 
 // MoveClip moves a clip to another start frame and optionally another track (overwrite).
 func (p *Project) MoveClip(clipID, toTrackID string, start int) error {
+	if group := p.ExplicitGroup(clipID); len(group) > 1 {
+		c, ti, _ := p.Clip(clipID)
+		dst, di := p.Track(toTrackID)
+		if dst == nil {
+			return ErrNotFound
+		}
+		if !dst.Kind.Accepts(c.Kind) {
+			return ErrWrongTrack
+		}
+		lanes := p.TrackIndices(dst.Kind)
+		from, to := 0, 0
+		for lane, index := range lanes {
+			if index == ti {
+				from = lane
+			}
+			if index == di {
+				to = lane
+			}
+		}
+		var same, other []string
+		for _, id := range group {
+			_, track, _ := p.Clip(id)
+			if p.Tracks[track].Kind == dst.Kind {
+				same = append(same, id)
+			} else {
+				other = append(other, id)
+			}
+		}
+		work := p.Clone()
+		delta := max(0, start) - c.Start
+		if err := work.MoveClips(same, delta, to-from); err != nil {
+			return err
+		}
+		if err := work.MoveClips(other, delta, 0); err != nil {
+			return err
+		}
+		*p = *work
+		return nil
+	}
 	c, ti, ci := p.Clip(clipID)
 	if c == nil {
 		return ErrNotFound
@@ -155,7 +194,7 @@ func (p *Project) MoveClip(clipID, toTrackID string, start int) error {
 
 // TrimClip sets new start and length. Moving the start shifts SourceIn so the
 // content stays anchored to the timeline. Media-backed clips cannot extend past their source.
-func (p *Project) TrimClip(clipID string, start, length int) error {
+func (p *Project) trimClip(clipID string, start, length int) error {
 	c, ti, ci := p.Clip(clipID)
 	if c == nil {
 		return ErrNotFound
@@ -227,7 +266,7 @@ func splitAt(c Clip, f int) (left, right Clip) {
 }
 
 // SplitClip cuts the clip at timeline frame f and returns the ID of the right part.
-func (p *Project) SplitClip(clipID string, f int) (string, error) {
+func (p *Project) splitClip(clipID string, f int) (string, error) {
 	c, ti, ci := p.Clip(clipID)
 	if c == nil {
 		return "", ErrNotFound
@@ -262,7 +301,7 @@ func (p *Project) SplitAll(f int) {
 // DeleteClip removes a clip. With ripple, later clips on every unlocked track close the
 // gap (see DeleteClips).
 func (p *Project) DeleteClip(clipID string, ripple bool) error {
-	return p.DeleteClips([]string{clipID}, ripple)
+	return p.DeleteClips(p.ExplicitGroup(clipID), ripple)
 }
 
 // UpdateClip replaces a clip's editable properties. Start, Length and Kind are kept;
@@ -276,6 +315,7 @@ func (p *Project) UpdateClip(c Clip) error {
 		return ErrLocked
 	}
 	c.Start, c.Length, c.Kind, c.SourceIn, c.MediaID = cur.Start, cur.Length, cur.Kind, cur.SourceIn, cur.MediaID
+	c.LinkID, c.Unlinked, c.AudioStream = cur.LinkID, cur.Unlinked, cur.AudioStream
 	*cur = c
 	return nil
 }
@@ -445,6 +485,7 @@ func (p *Project) MoveClips(ids []string, dFrames, dTrack int) error {
 // ripple delete in Premiere or Resolve). If another track has a clip in a gap that the
 // later clips would run into, a *RippleBlockedError is returned and nothing changes.
 func (p *Project) DeleteClips(ids []string, ripple bool) error {
+	ids = p.ExpandLinks(ids)
 	type span struct{ from, to int }
 	var spans []span
 	del := map[string]bool{}

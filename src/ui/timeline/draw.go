@@ -572,6 +572,9 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 	}
 	if m != nil && !offline {
 		wave := c.Kind == model.KindAudio
+		item := *m
+		item.AudioStream = c.AudioStream
+		m = &item
 		a := r.t.ld.snapshot(r.t.ld.get(*m, wave, waveBuckets(p, *m)))
 		offline = a.offline
 		if !offline && ix1-ix0 >= 1 && bodyH > 4 {
@@ -611,7 +614,11 @@ func (r *tlRenderer) drawClip(objs []fyne.CanvasObject, p *model.Project, g geom
 			nameW = avail - dw - 8
 			objs = append(objs, r.text(dur, alpha(white, 0xB0), 9.5, mono, tx+avail-dw, top+2))
 		}
-		if name := r.fit(c.Name, 11.5, fyne.TextStyle{}, nameW); name != "" {
+		label := c.Name
+		if c.LinkID != "" {
+			label = "↔ " + label
+		}
+		if name := r.fit(label, 11.5, fyne.TextStyle{}, nameW); name != "" {
 			objs = append(objs, r.text(name, white, 11.5, fyne.TextStyle{}, tx, top+0.5))
 		}
 	}

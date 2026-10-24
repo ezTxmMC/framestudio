@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"fmt"
 	"math"
 
 	"framestudio-proto/src/model"
@@ -75,17 +76,23 @@ func BuildPlan(p *model.Project, source func(m model.MediaItem) (Source, error))
 			if !ok || m.Path == "" || (m.Kind != model.KindAudio && !(m.Kind == model.KindVideo && m.HasAudio)) {
 				continue
 			}
-			src, seen := sources[m.ID]
+			item := *m
+			item.AudioStream = c.AudioStream
+			sourceID := m.ID
+			if c.AudioStream > 0 {
+				sourceID = fmt.Sprintf("%s/audio:%d", m.ID, c.AudioStream)
+			}
+			src, seen := sources[sourceID]
 			if !seen && source != nil {
 				var err error
-				src, err = source(*m)
+				src, err = source(item)
 				if err == ErrNoFFmpeg && pl.Err == nil {
 					pl.Err = err
 				}
 				if pcm, ok := src.(*PCM); ok && pcm != nil {
-					pl.keys[m.ID] = pcm.key
+					pl.keys[sourceID] = pcm.key
 				}
-				sources[m.ID] = src
+				sources[sourceID] = src
 			}
 			tp.Clips = append(tp.Clips, clipPlan(c, t.Volume*c.Volume, fps, src))
 		}

@@ -489,7 +489,7 @@ func (in *clipEditor) compositeSection(c *model.Clip) fyne.CanvasObject {
 
 func (in *clipEditor) audioSection() fyne.CanvasObject {
 	val := readout()
-	vol := in.slider(-60, 12, 0.5, func(db float64) {
+	vol := in.slider(-60, 60, 0.5, func(db float64) {
 		in.set("volume", "Lautstärke ändern", true, func(c *model.Clip) { c.Volume = fromDB(db) })
 	})
 	in.onSync(func() {
@@ -637,7 +637,7 @@ func toDB(gain float64) float64 {
 	if gain <= 0.001 {
 		return -60
 	}
-	return math.Max(-60, math.Min(12, 20*math.Log10(gain)))
+	return math.Max(-60, math.Min(60, 20*math.Log10(gain)))
 }
 
 func fromDB(db float64) float64 {

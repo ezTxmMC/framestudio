@@ -350,6 +350,7 @@ func (sh *Shell) bindProjectScope(p *project) {
 		return
 	}
 	sh.reg.SetScopeActive(projectScope, true)
+	sh.reg.Bind(projectScope, command.AudioBindings(p.sess, sh.showErr)...)
 	sh.reg.Bind(projectScope, mediapage.GlobalCommands(p.ctx)...)
 	sh.reg.Bind(projectScope, deliverpage.GlobalCommands(p.ctx)...)
 }

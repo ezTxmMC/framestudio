@@ -23,6 +23,7 @@ const thumbW, thumbH = 160, 90
 type assetKey struct {
 	id, path string
 	wave     bool
+	stream   int
 }
 
 // asset is the loaded state of one media item for one purpose (filmstrip or waveform).
@@ -69,7 +70,7 @@ func (l *loader) isClosed() bool {
 
 // get returns the asset for m, starting a load if needed. The result may not be done yet.
 func (l *loader) get(m model.MediaItem, wave bool, buckets int) *asset {
-	k := assetKey{m.ID, m.Path, wave}
+	k := assetKey{m.ID, m.Path, wave, m.AudioStream}
 	l.mu.Lock()
 	a, ok := l.items[k]
 	if ok && a.done && a.offline && time.Since(a.checked) >= offlineRecheck {

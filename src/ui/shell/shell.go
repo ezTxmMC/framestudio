@@ -214,18 +214,23 @@ type Shell struct {
 	npd *newProject        // the open "Neues Projekt" dialog (tests drive it)
 	psd *projectSettingsUI // the open "Projekteinstellungen" dialog
 
-	chromeOn      bool              // the main window shows the custom title bar (chrome.go)
-	retryDecorate bool              // decorate failed once: ask again after the start
-	undecorated   bool              // the system title bar was taken off the native window
-	chrome        *winchrome.Chrome // title bar and frame while chromeOn
-	unwatch       func()            // stops the window state watch
-	root          *fyne.Container
-	frame         *fyne.Container // menu bar, tabs, page content and page bar
-	content       *fyne.Container
-	bars          *bars
-	mgr           *manager
-	toast         *toaster
-	showManager   bool
+	chromeOn         bool              // the main window shows the custom title bar (chrome.go)
+	retryDecorate    bool              // decorate failed once: ask again after the start
+	undecorated      bool              // the system title bar was taken off the native window
+	chrome           *winchrome.Chrome // title bar and frame while chromeOn
+	unwatch          func()            // stops the window state watch
+	root             *fyne.Container
+	frame            *fyne.Container // menu bar, tabs, page content and page bar
+	content          *fyne.Container
+	workspaceBody    *fyne.Container
+	mainDockSplit    *container.Split
+	mainDockVertical bool
+	mainDockContent  fyne.CanvasObject
+	dockedPanels     []string
+	bars             *bars
+	mgr              *manager
+	toast            *toaster
+	showManager      bool
 
 	// Commands, keys and menus (commands.go, keys.go).
 	reg            *command.Registry
@@ -297,7 +302,8 @@ func New(a fyne.App, w fyne.Window) *Shell {
 	sh.toast = newToaster()
 	sh.bars = newBars(sh)
 	sh.content = container.NewStack()
-	sh.frame = container.NewBorder(sh.bars.top, sh.bars.bottom, nil, nil, sh.content)
+	sh.workspaceBody = container.NewStack(sh.content)
+	sh.frame = container.NewBorder(sh.bars.top, sh.bars.bottom, nil, nil, sh.workspaceBody)
 	sh.mgr = newManager(sh)
 	sh.root = container.NewStack()
 	w.SetPadded(false)
@@ -538,6 +544,9 @@ func (sh *Shell) showPage(p *project, id string) {
 	sh.showPageContent(p)
 	sh.showWorkspace()
 	sh.refreshChrome()
+	if sh.ws != nil {
+		sh.ws.SwitchWorkspace(id)
+	}
 }
 
 // showPageID switches the active project to page id.
@@ -564,6 +573,9 @@ func (sh *Shell) ensurePage(p *project, id string) page.Page {
 	pg := d.New(p.ctx)
 	p.pages[id] = pg
 	p.contents[id] = pg.Content()
+	if docked, ok := pg.(interface{ SetDockedPanels([]string) }); ok {
+		docked.SetDockedPanels(sh.dockedPanels)
+	}
 	if t, ok := pg.(toastUser); ok {
 		t.SetToast(sh.notify)
 	}

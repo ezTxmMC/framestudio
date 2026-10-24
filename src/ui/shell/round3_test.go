@@ -109,7 +109,8 @@ func TestPageScopeFollowsPageAndTab(t *testing.T) {
 	if runs["B/edit"] != 1 || runs["A/edit"] != 1 {
 		t.Fatalf("tab switch did not rebind: %v", runs)
 	}
-	// Keys dispatch through the page scope too (the page declines S here).
+	// Keys dispatch through the page scope too (the page declines this custom S binding).
+	sh.reg.SetShortcut("clip.split", "S")
 	sh.active.pages[page.Edit].(*cmdPage).handle = false
 	sh.typedKey(&fyne.KeyEvent{Name: fyne.KeyS})
 	if runs["B/edit"] != 2 {

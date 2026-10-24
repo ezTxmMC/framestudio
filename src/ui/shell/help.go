@@ -42,7 +42,7 @@ type shortcutGroup struct {
 var extraShortcuts = shortcutGroup{"Maus und Alternativen", []shortcut{
 	{"Strg+Klick", "Clip zur Auswahl hinzufügen oder entfernen"},
 	{"Umschalt+Klick", "Auswahl bis zum Clip erweitern"},
-	{"Strg+Mausrad", "Timeline zoomen"},
+	{"Alt+Mausrad", "Timeline zoomen"},
 	{"Ziehen", "Medien aus der Bibliothek in die Timeline ziehen"},
 	{"Eingabe", "Ausgewähltes Medium am Abspielkopf einfügen (Schnitt)"},
 	{"Rücktaste", "Ausgewählte Clips löschen (wie Entf)"},

@@ -52,6 +52,7 @@ type settingsForm struct {
 	evenNote          *widget.Label
 	ext               *canvas.Text
 	format            *kit.Select
+	encoder           *kit.Select
 	res               *kit.Select
 	resolutions       []resolution
 	customRow         fyne.CanvasObject
@@ -108,6 +109,9 @@ func newSettingsForm(pg *Page) *settingsForm {
 	}
 	f.format = kit.NewSelect(labels, func(string) { f.formatChanged() })
 
+	f.encoder = kit.NewSelect([]string{"Software", "Automatisch", "VAAPI", "NVIDIA NVENC", "Intel QSV"}, nil)
+	f.encoder.SetSelectedIndex(0)
+	f.encoder.OnChanged = func(string) { f.changed() }
 	f.res = kit.NewSelect(nil, func(string) { f.resChanged() })
 	pr := proj.Settings
 	f.size = kit.NewResolutionPicker(pr.Width, pr.Height, f.changed)
@@ -160,6 +164,7 @@ func newSettingsForm(pg *Page) *settingsForm {
 	sizeRow := container.New(labelledColumns{ratio: 0.54},
 		stacked("Auflösung", f.res), stacked("Qualität", f.quality.content))
 	advanced := container.NewVBox(
+		formRow("Encoder", f.encoder),
 		formRow("Bereich", f.rng),
 		formRow("", f.rangeInfo),
 		formRow("", f.audio),
@@ -204,6 +209,8 @@ func (f *settingsForm) applyPreset(i int) {
 	o := f.presets[i].Options
 	f.updating = true
 	f.format.SetSelectedIndex(formatIndex(o.Format))
+	encIndex := map[string]int{"software": 0, "auto": 1, "vaapi": 2, "nvenc": 3, "qsv": 4}[o.Encoder]
+	f.encoder.SetSelectedIndex(encIndex)
 	f.selectSize(o.Width, o.Height)
 	f.rate.Set(o.FPS, false)
 	f.quality.Set(string(o.Quality))
@@ -378,6 +385,9 @@ func (f *settingsForm) advancedSummary() string {
 	if f.audio.Checked {
 		audio = "mit Audio"
 	}
+	if export.IsMP4(f.currentFormat()) {
+		return rng + " · " + audio + " · " + f.encoder.Selected
+	}
 	return rng + " · " + audio
 }
 
@@ -400,6 +410,11 @@ func formatIndex(ft export.Format) int {
 
 // formatChanged adapts dependent controls: extension, size and audio availability.
 func (f *settingsForm) formatChanged() {
+	if export.IsMP4(f.currentFormat()) {
+		f.encoder.Enable()
+	} else {
+		f.encoder.Disable()
+	}
 	if f.updating {
 		return
 	}
@@ -524,13 +539,16 @@ func (f *settingsForm) changed() {
 	}
 }
 
-func audioApplies(ft export.Format) bool { return ft == export.FormatMP4 || ft == export.FormatWebM }
+func audioApplies(ft export.Format) bool { return export.IsMP4(ft) || ft == export.FormatWebM }
 
 // options reads the form. Errors describe unreadable input; Validate checks the rest.
 func (f *settingsForm) options() (export.Options, error) {
 	s := f.pg.ctx.Session
 	ft := f.currentFormat()
 	o := export.Options{Format: ft, Quality: export.Quality(f.quality.value)}
+	if export.IsMP4(ft) {
+		o.Encoder = []string{"software", "auto", "vaapi", "nvenc", "qsv"}[max(0, f.encoder.SelectedIndex())]
+	}
 	name := strings.TrimSpace(f.name.Text)
 	name = strings.TrimSuffix(name, export.Extension(ft))
 	if name == "" {

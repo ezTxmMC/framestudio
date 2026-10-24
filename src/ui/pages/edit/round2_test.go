@@ -201,10 +201,10 @@ func TestDeleteSelectionAndShortcuts(t *testing.T) {
 	f := newFixture(t, multiProject())
 	f.pg.Activate()
 	f.s.SelectClips([]string{clipNamed(t, f.s.Project, "Ton 1").ID, clipNamed(t, f.s.Project, "Titel").ID})
-	if f.pg.bar.del.Disabled() || f.pg.bar.del.Tip != "2 Clips löschen (Entf)" {
+	if f.pg.bar.del.Disabled() || f.pg.bar.del.Tip != "2 Clips löschen (Rück)" {
 		t.Fatalf("delete button %v %q", f.pg.bar.del.Disabled(), f.pg.bar.del.Tip)
 	}
-	if !press(f, fyne.KeyDelete) {
+	if !press(f, fyne.KeyBackspace) {
 		t.Fatal("Delete not handled")
 	}
 	if len(f.s.Project.Tracks[1].Clips) != 0 || len(f.s.Project.Tracks[2].Clips) != 1 {

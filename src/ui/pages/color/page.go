@@ -29,8 +29,10 @@ import (
 // Page is the Resolve-style colour page: viewer and scopes on top, the clip strip in the
 // middle and the primary grading controls at the bottom.
 type Page struct {
-	ctx *page.Context
-	s   *session.Session
+	dockedScopes          bool
+	undockedScopesVisible bool
+	ctx                   *page.Context
+	s                     *session.Session
 
 	// async runs background work; tests replace it with a synchronous call.
 	async func(func())

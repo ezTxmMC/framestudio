@@ -430,7 +430,7 @@ func sizeText(o export.Options, format string) string {
 
 // videoSummary / audioSummary describe the encoded streams of an export.
 func videoSummary(o export.Options, fps model.Rate) string {
-	codec := map[export.Format]string{export.FormatMP4: "H.264", export.FormatWebM: "VP9",
+	codec := map[export.Format]string{export.FormatMP4: "H.264", export.FormatHEVC: "HEVC", export.FormatAV1: "AV1", export.FormatWebM: "VP9",
 		export.FormatGIF: "GIF", export.FormatPNG: "PNG"}[o.Format]
 	if codec == "" {
 		return "–"
@@ -443,7 +443,7 @@ func audioSummary(o export.Options) string {
 		return "–"
 	}
 	switch o.Format {
-	case export.FormatMP4:
+	case export.FormatMP4, export.FormatHEVC, export.FormatAV1:
 		return "AAC 192 kb/s · 48 kHz Stereo"
 	case export.FormatWebM:
 		return "Opus 160 kb/s · 48 kHz Stereo"

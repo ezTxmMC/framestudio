@@ -58,9 +58,10 @@ var MenuBar = []Menu{
 		Cmd("app.keymap"), Cmd("app.settings"),
 	}},
 	{Title: "Clip", Items: []Item{
-		Cmd("clip.split"), Cmd("clip.splitAll"), Cmd("clip.rename"), Sep(),
+		Cmd("clip.split"), Cmd("clip.splitAll"), Cmd("clip.link"), Cmd("clip.unlink"), Sep(), Cmd("clip.rename"), Sep(),
 		Sub("Clipfarbe", Cmd("clip.color.0"), Cmd("clip.color.1"), Cmd("clip.color.2"), Cmd("clip.color.3"),
 			Cmd("clip.color.4"), Cmd("clip.color.5"), Cmd("clip.color.6")),
+		Sub("Lautstärke", Cmd("audio.clipGainUp"), Cmd("audio.clipGainDown"), Cmd("audio.clipGainReset"), Sep(), Cmd("audio.trackGainUp"), Cmd("audio.trackGainDown"), Cmd("audio.trackGainReset"), Cmd("audio.trackMute"), Cmd("audio.trackSolo")), Sep(),
 		Sub("Blenden", Cmd("clip.fadeIn"), Cmd("clip.fadeOut"), Cmd("clip.removeFades")),
 		Sub("Anpassen", Cmd("clip.fit.contain"), Cmd("clip.fit.cover"), Cmd("clip.fit.stretch"), Sep(), Cmd("clip.resetOpacity")),
 		Sub("Farbkorrektur", Cmd("grade.copy"), Cmd("grade.paste"), Cmd("grade.applySelection"), Cmd("grade.applyAll"), Sep(), Cmd("grade.reset")),

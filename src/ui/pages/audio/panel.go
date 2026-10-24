@@ -77,7 +77,7 @@ func (mp *mixerPanel) Close() { mp.p.Close() }
 // hinzufügen" act on the audio lanes.
 func (p *Page) Commands() []command.Binding {
 	p.Content()
-	return []command.Binding{
+	return append(command.AudioBindings(p.s, p.ctx.ShowErr), []command.Binding{
 		{ID: "play.toggle", Run: p.togglePreview},
 		{ID: "audio.preview", Icon: theme.MediaPlayIcon(), Run: p.togglePreview,
 			Checked: func() bool { return p.prev.Busy() },
@@ -86,7 +86,7 @@ func (p *Page) Commands() []command.Binding {
 		{ID: "timeline.zoomIn", Icon: theme.ZoomInIcon(), Run: func() { p.setZoom(p.view.zoom*1.5, -1) }},
 		{ID: "timeline.zoomOut", Icon: theme.ZoomOutIcon(), Run: func() { p.setZoom(p.view.zoom/1.5, -1) }},
 		{ID: "timeline.zoomFit", Icon: theme.ZoomFitIcon(), Run: func() { p.setZoom(1, -1) }},
-	}
+	}...)
 }
 
 // togglePreview starts Vorhören, or stops it (and playback) when something sounds.
@@ -112,7 +112,7 @@ func (p *Page) LayoutState() layout.Page {
 	if !p.clipBox.Visible() {
 		hidden[areaClip] = true
 	}
-	if !p.mixerBox.Visible() {
+	if (!p.dockedMixer && !p.mixerBox.Visible()) || (p.dockedMixer && !p.undockedMixerVisible) {
 		hidden[areaMixer] = true
 	}
 	if len(hidden) > 0 {
@@ -155,6 +155,10 @@ func (p *Page) SetAreaVisible(area string, on bool) {
 	case areaClip:
 		o = p.clipBox
 	case areaMixer:
+		if p.dockedMixer {
+			p.undockedMixerVisible = on
+			on = false
+		}
 		o = p.mixerBox
 	default:
 		return
@@ -174,4 +178,27 @@ func (p *Page) SetAreaVisible(area string, on bool) {
 	}
 	p.bottom.Refresh()
 	p.main.Refresh()
+}
+
+func (p *Page) SetDockedPanels(ids []string) {
+	if p.mixerOnly || p.mixerBox == nil {
+		return
+	}
+	want := false
+	for _, id := range ids {
+		if id == page.PanelMixer {
+			want = true
+		}
+	}
+	if want == p.dockedMixer {
+		return
+	}
+	if want {
+		p.undockedMixerVisible = p.mixerBox.Visible()
+		p.dockedMixer = true
+		p.SetAreaVisible(areaMixer, p.undockedMixerVisible)
+	} else {
+		p.dockedMixer = false
+		p.SetAreaVisible(areaMixer, p.undockedMixerVisible)
+	}
 }

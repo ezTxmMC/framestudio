@@ -122,6 +122,7 @@ func (p *Page) paste() {
 	err := p.edit(label, func(pr *model.Project) error {
 		ids, end = ids[:0], at
 		mediaID := adoptMedia(pr, cb.media)
+		groups := map[string]string{}
 		conv := func(f int) int { return f }
 		if cb.fps.Num > 0 && !cb.fps.Equal(pr.Rate()) {
 			conv = func(f int) int { return model.ConvertFrames(f, cb.fps, pr.Rate()) }
@@ -145,6 +146,7 @@ func (p *Page) paste() {
 			}
 			c := e.clip
 			c.ID = model.NewID()
+			c.LinkID = copyLink(c.LinkID, groups)
 			c.Start = at + conv(e.offset)
 			c.Length = max(1, conv(c.Length))
 			c.SourceIn = conv(c.SourceIn)
@@ -224,6 +226,7 @@ func (p *Page) duplicate() {
 			c     model.Clip
 		}
 		var list []place
+		groups := map[string]string{}
 		for _, id := range ids {
 			c, ti, _ := pr.Clip(id)
 			if c == nil {
@@ -231,6 +234,7 @@ func (p *Page) duplicate() {
 			}
 			d := *c
 			d.ID = model.NewID()
+			d.LinkID = copyLink(d.LinkID, groups)
 			d.Start += shift
 			list = append(list, place{pr.Tracks[ti].ID, d})
 		}
@@ -246,4 +250,14 @@ func (p *Page) duplicate() {
 		s.SelectClips(out)
 		s.Seek(end)
 	}
+}
+
+func copyLink(id string, groups map[string]string) string {
+	if id == "" {
+		return ""
+	}
+	if groups[id] == "" {
+		groups[id] = model.NewID()
+	}
+	return groups[id]
 }

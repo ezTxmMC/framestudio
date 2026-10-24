@@ -192,7 +192,7 @@ func (m *multiEditor) opacitySection() fyne.CanvasObject {
 
 func (m *multiEditor) volumeSection() fyne.CanvasObject {
 	val := readout()
-	sl := m.slider(-60, 12, 0.5, func(db float64) {
+	sl := m.slider(-60, 60, 0.5, func(db float64) {
 		m.apply("volume", "Lautstärke ändern", true, audioClip, func(c *model.Clip) { c.Volume = fromDB(db) })
 	})
 	m.onSync(func() {

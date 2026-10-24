@@ -5,6 +5,7 @@ import (
 
 	"framestudio-proto/src/ui/command"
 	"framestudio-proto/src/ui/layout"
+	"framestudio-proto/src/ui/page"
 )
 
 // Layout IDs of the colour page (layout.Page).
@@ -79,7 +80,7 @@ func (p *Page) LayoutState() layout.Page {
 		Extra:  map[string]string{extraScope: p.sv.kind.id()},
 	}
 	hidden := map[string]bool{}
-	if !p.sv.object.Visible() {
+	if (!p.dockedScopes && !p.sv.object.Visible()) || (p.dockedScopes && !p.undockedScopesVisible) {
 		hidden[areaScopes] = true
 	}
 	if !p.stripPanel.Visible() {
@@ -121,6 +122,10 @@ func (p *Page) SetAreaVisible(area string, on bool) {
 	}
 	switch area {
 	case areaScopes:
+		if p.dockedScopes {
+			p.undockedScopesVisible = on
+			on = false
+		}
 		setShown(p.sv.object, on)
 		p.top.Refresh()
 	case areaStrip:
@@ -139,5 +144,28 @@ func setShown(o interface {
 		o.Show()
 	case !on && o.Visible():
 		o.Hide()
+	}
+}
+
+func (p *Page) SetDockedPanels(ids []string) {
+	if p.content == nil || p.sv == nil {
+		return
+	}
+	want := false
+	for _, id := range ids {
+		if id == page.PanelScopes {
+			want = true
+		}
+	}
+	if want == p.dockedScopes {
+		return
+	}
+	if want {
+		p.undockedScopesVisible = p.sv.object.Visible()
+		p.dockedScopes = true
+		p.SetAreaVisible(areaScopes, p.undockedScopesVisible)
+	} else {
+		p.dockedScopes = false
+		p.SetAreaVisible(areaScopes, p.undockedScopesVisible)
 	}
 }

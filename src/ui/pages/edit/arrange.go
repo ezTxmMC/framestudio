@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"framestudio-proto/src/ui/page"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
@@ -35,12 +36,12 @@ func (p *Page) arrange() {
 	row := func(center fyne.CanvasObject) fyne.CanvasObject {
 		out := center
 		p.rsplit, p.hsplit = nil, nil
-		if !p.hidden[areaInspector] {
+		if !p.areaHidden(areaInspector) {
 			p.rsplit = container.NewHSplit(center, p.areas[areaInspector])
 			p.rsplit.Offset = p.offsets[splitInspector]
 			out = p.rsplit
 		}
-		if !p.hidden[areaLibrary] {
+		if !p.areaHidden(areaLibrary) {
 			p.hsplit = container.NewHSplit(p.areas[areaLibrary], out)
 			p.hsplit.Offset = p.offsets[splitLibrary]
 			out = p.hsplit
@@ -49,7 +50,13 @@ func (p *Page) arrange() {
 	}
 	p.vsplit = nil
 	var tree fyne.CanvasObject
-	if p.hidden[areaViewer] {
+	if p.areaHidden(areaTimeline) {
+		center := fyne.CanvasObject(container.NewStack())
+		if !p.areaHidden(areaViewer) {
+			center = p.areas[areaViewer]
+		}
+		tree = row(center)
+	} else if p.areaHidden(areaViewer) {
 		tree = row(p.areas[areaTimeline])
 	} else {
 		p.vsplit = container.NewVSplit(row(p.areas[areaViewer]), p.areas[areaTimeline])
@@ -242,4 +249,34 @@ func (l *fitTimeline) MinSize(objs []fyne.CanvasObject) fyne.Size {
 		return fyne.Size{}
 	}
 	return objs[0].MinSize()
+}
+
+func (p *Page) areaHidden(area string) bool { return p.hidden[area] || p.docked[area] }
+
+// SetDockedPanels removes the original view while its panel lives in a dock.
+// Stored user visibility stays separate, so returning a panel restores the page.
+func (p *Page) SetDockedPanels(ids []string) {
+	next := map[string]bool{}
+	for _, id := range ids {
+		switch id {
+		case page.PanelProgram:
+			next[areaViewer] = true
+		case page.PanelTimeline:
+			next[areaTimeline] = true
+		case page.PanelInspector:
+			next[areaInspector] = true
+		case page.PanelLibrary:
+			next[areaLibrary] = true
+		}
+	}
+	changed := len(next) != len(p.docked)
+	for id := range next {
+		if !p.docked[id] {
+			changed = true
+		}
+	}
+	p.docked = next
+	if changed {
+		p.arrange()
+	}
 }

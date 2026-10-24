@@ -54,7 +54,9 @@ func NewPanel(ctx *page.Context, id string) *Panel {
 		content = container.NewStack(bg, p.viewer)
 	case page.PanelTimeline:
 		p.buildTimeline()
-		content = kit.Panel("Timeline", p.bar.content, p.timelineHost)
+		toolbar := container.NewHScroll(p.bar.content)
+		toolbar.SetMinSize(fyne.NewSize(0, p.bar.content.MinSize().Height))
+		content = container.NewBorder(toolbar, nil, nil, nil, p.timelineHost)
 	case page.PanelInspector:
 		p.buildInspector()
 		content = kit.Panel("Inspector", container.NewHBox(p.insp.kind, fixed(6, 0)), p.insp.content)

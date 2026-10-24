@@ -764,13 +764,13 @@ func TestScrollIndicatorDrag(t *testing.T) {
 	}
 }
 
-func TestCtrlWheelZoomsAtPointer(t *testing.T) {
+func TestAltWheelZoomsAtPointer(t *testing.T) {
 	f := setup(t, 1000, 300)
 	var reported []float32
 	f.tl.OnZoomChanged = func(z float32) { reported = append(reported, z) }
 	px := float32(600)
 	frame := f.tl.geom().xFrame(px)
-	f.tl.MouseMoved(&desktop.MouseEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(px, 100)}, Modifier: fyne.KeyModifierControl})
+	f.tl.MouseMoved(&desktop.MouseEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(px, 100)}, Modifier: fyne.KeyModifierAlt})
 	f.tl.Scrolled(&fyne.ScrollEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(px, 100)}, Scrolled: fyne.NewDelta(0, 40)})
 	if f.tl.Zoom() <= 1 || len(reported) != 1 || reported[0] != f.tl.Zoom() {
 		t.Fatalf("zoom %v, reported %v", f.tl.Zoom(), reported)

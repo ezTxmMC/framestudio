@@ -50,12 +50,16 @@ type Manager struct {
 	host Host
 	disp Display
 
-	name   string          // name of the current layout
-	unused map[string]bool // monitors the user does not want to use
-	wins   []*detached     // open detached windows, in opening order
-	closed bool
-	dlg    *monitorDialog
-	unsub  func() // settings subscription (custom title bar follows the settings)
+	workspace        string
+	workspaceWindows map[string][]layout.Window
+	switching        bool
+	waiting          map[string]layout.Window
+	name             string          // name of the current layout
+	unused           map[string]bool // monitors the user does not want to use
+	wins             []*detached     // open detached windows, in opening order
+	closed           bool
+	dlg              *monitorDialog
+	unsub            func() // settings subscription (custom title bar follows the settings)
 
 	// mods reports the modifiers held with the current key event (desktop driver).
 	mods func() fyne.KeyModifier
@@ -70,7 +74,7 @@ func New(h Host) *Manager { return NewWithDisplay(h, System{}) }
 
 // NewWithDisplay returns a manager with a custom display backend (tests).
 func NewWithDisplay(h Host, d Display) *Manager {
-	m := &Manager{host: h, disp: d, name: "Standard", unused: map[string]bool{}, mods: heldModifiers}
+	m := &Manager{workspace: h.ActivePage(), workspaceWindows: map[string][]layout.Window{}, waiting: map[string]layout.Window{}, host: h, disp: d, name: "Standard", unused: map[string]bool{}, mods: heldModifiers}
 	m.after = func(d time.Duration, f func()) func() {
 		t := time.AfterFunc(d, f)
 		return func() { t.Stop() }
@@ -103,7 +107,7 @@ func NewWithDisplay(h Host, d Display) *Manager {
 // was one (window.close).
 func (m *Manager) CloseFocused() bool {
 	for _, d := range m.wins {
-		if !d.closing && winchrome.Sys.State(d.win).Focused {
+		if !d.inMain && !d.closing && winchrome.Sys.State(d.win).Focused {
 			d.close()
 			m.refresh()
 			return true
@@ -154,7 +158,7 @@ func (m *Manager) Bindings() []command.Binding {
 // feed fullscreen, other panels maximized; with a single monitor as a normal window.
 func (m *Manager) ToggleDetached(id string) {
 	if d := m.find(id); d != nil {
-		d.close()
+		d.removePanel(id)
 		return
 	}
 	mon := m.bestOther()
@@ -218,10 +222,26 @@ func (m *Manager) Current() layout.Layout {
 	l.Windows = append(l.Windows, main)
 	for _, d := range m.wins {
 		mon, r, mode := m.windowState(d.win, d.monitor)
-		if d.fallbackFrom != "" && !m.available(d.fallbackFrom) {
+		if !m.grouping() && d.fallbackFrom != "" && !m.available(d.fallbackFrom) {
 			mon, mode = d.fallbackFrom, d.wantMode // keep the intent until the monitor returns
 		}
-		l.Windows = append(l.Windows, layout.Window{ID: d.id, Panel: d.id, Monitor: mon, Mode: mode, Rect: r})
+		for _, id := range d.panelIDs() {
+			w := layout.Window{ID: id, Panel: id, Monitor: mon, Mode: mode, Rect: r, Dock: d.dockMode, DockOffsets: d.captureDock()}
+			if wanted, ok := m.waiting[id]; ok {
+				w.Monitor, w.Mode, w.Rect = wanted.Monitor, wanted.Mode, wanted.Rect
+			}
+			l.Windows = append(l.Windows, w)
+		}
+	}
+	if !m.grouping() {
+		return l
+	}
+	l.Workspaces = map[string][]layout.Window{}
+	for id, windows := range m.workspaceWindows {
+		l.Workspaces[id] = append([]layout.Window(nil), windows...)
+	}
+	if m.workspace != "" {
+		l.Workspaces[m.workspace] = append([]layout.Window(nil), l.Windows[1:]...)
 	}
 	return l
 }
@@ -282,11 +302,38 @@ func (m *Manager) open(id, monitor, mode string, r layout.Rect, fallbackFrom str
 		return nil
 	}
 	d := m.find(id)
+	if m.grouping() && d != nil && d.inMain && monitor == m.mainMonitor() {
+		d.monitor = monitor
+	}
+	if m.grouping() && d != nil && (d.monitor != monitor || d.inMain != (monitor == m.mainMonitor() || monitor == "")) {
+		d.removePanel(id)
+		d = nil
+	}
+	if m.grouping() && d == nil {
+		for _, candidate := range m.wins {
+			if candidate.monitor == monitor && !candidate.closing && candidate.inMain == (monitor == m.mainMonitor() || monitor == "") {
+				d = candidate
+				d.addPanel(info)
+				break
+			}
+		}
+	}
 	if d == nil {
-		d = newDetached(m, info)
+		main := false
+		if m.grouping() {
+			main = monitor == m.mainMonitor() || monitor == ""
+		}
+		d = newDetached(m, info, main)
 		m.wins = append(m.wins, d)
-		d.win.Show()
+		if !d.inMain {
+			d.win.Show()
+		}
 		d.decorate() // the system title bar goes once the native window exists
+	}
+	if m.grouping() && fallbackFrom != "" {
+		m.waiting[id] = layout.Window{ID: id, Panel: id, Monitor: fallbackFrom, Mode: mode, Rect: r}
+	} else {
+		delete(m.waiting, id)
 	}
 	d.fallbackFrom = fallbackFrom
 	if fallbackFrom != "" {
@@ -302,6 +349,12 @@ func (m *Manager) open(id, monitor, mode string, r layout.Rect, fallbackFrom str
 // placeDetached puts d on monitor in mode; windowed without a rect it gets a default
 // size centred on the monitor.
 func (m *Manager) placeDetached(d *detached, monitor, mode string, r layout.Rect) {
+	if d.inMain {
+		d.monitor = monitor
+		d.mode = layout.ModeWindow
+		d.rect = r
+		return
+	}
 	if r.W <= 0 || r.H <= 0 {
 		r = m.defaultRect(monitor, len(m.wins)-1)
 	}
@@ -363,6 +416,15 @@ func (m *Manager) Apply(l layout.Layout) {
 	if m.closed {
 		return
 	}
+	if !m.switching {
+		m.workspaceWindows = map[string][]layout.Window{}
+		for id, windows := range l.Workspaces {
+			m.workspaceWindows[id] = append([]layout.Window(nil), windows...)
+		}
+		if l.ActivePage != "" {
+			m.workspace = l.ActivePage
+		}
+	}
 	m.unused = map[string]bool{}
 	if ws, ok := l.Pages[workspaceKey]; ok {
 		for _, id := range strings.Split(ws.Extra["unused"], ",") {
@@ -402,8 +464,10 @@ func (m *Manager) Apply(l layout.Layout) {
 		}
 	}
 	for _, d := range append([]*detached(nil), m.wins...) {
-		if !want[d.id] {
-			d.close()
+		for _, id := range d.panelIDs() {
+			if !want[id] {
+				d.removePanel(id)
+			}
 		}
 	}
 	n := 0
@@ -426,7 +490,24 @@ func (m *Manager) Apply(l layout.Layout) {
 				}
 			}
 		}
-		m.open(w.Panel, mon, w.Mode, r, from)
+		d := m.open(w.Panel, mon, w.Mode, r, from)
+		if d != nil {
+			if w.Dock != "" {
+				d.dockMode = w.Dock
+			}
+			if w.DockOffsets != nil {
+				d.dockOffsets = w.DockOffsets
+				d.dockSplits = nil
+			}
+			d.refreshDock()
+			if d.inMain {
+				if h, ok := m.host.(MainDockSizer); ok {
+					if off := w.DockOffsets["$main"]; off > 0 && off < 1 {
+						h.SetMainDockOffset(off)
+					}
+				}
+			}
+		}
 		n++
 	}
 
@@ -497,7 +578,7 @@ func (m *Manager) CloseDetached() {
 func (m *Manager) Windows() []string {
 	var ids []string
 	for _, d := range m.wins {
-		ids = append(ids, d.id)
+		ids = append(ids, d.panelIDs()...)
 	}
 	return ids
 }
@@ -555,7 +636,7 @@ func (m *Manager) shutdown(live bool) {
 
 func (m *Manager) find(id string) *detached {
 	for _, d := range m.wins {
-		if d.id == id {
+		if d.hasPanel(id) {
 			return d
 		}
 	}
@@ -574,6 +655,9 @@ func (m *Manager) remove(d *detached) {
 
 // refresh tells menus and the monitor dialog that windows or monitors changed.
 func (m *Manager) refresh() {
+	if h, ok := m.host.(interface{ SetDockedPanels([]string) }); ok {
+		h.SetDockedPanels(m.Windows())
+	}
 	if m.dlg != nil {
 		m.dlg.refresh()
 	}
@@ -583,6 +667,9 @@ func (m *Manager) refresh() {
 }
 
 func (m *Manager) activeChanged() {
+	if m.grouping() {
+		m.SwitchWorkspace(m.host.ActivePage())
+	}
 	if m.closed {
 		return
 	}
@@ -594,6 +681,13 @@ func (m *Manager) activeChanged() {
 // monitorsChanged handles hot-plug: windows on a vanished monitor go windowed onto the
 // main window's monitor; when it comes back they return in their original mode.
 func (m *Manager) monitorsChanged() {
+	if m.grouping() && !m.closed {
+		l := m.Current()
+		m.switching = true
+		m.Apply(l)
+		m.switching = false
+		return
+	}
 	if m.closed {
 		return
 	}
@@ -718,3 +812,26 @@ func plainErr(err error) string {
 
 // uiDo runs f on the UI thread (used by timers).
 func uiDo(f func()) { kit.Do(f) }
+
+// SwitchWorkspace remembers each page's panel arrangement independently. Page split
+// positions are already saved by Host.PageLayouts; this adds monitor and dock layouts.
+func (m *Manager) SwitchWorkspace(id string) {
+	if m.closed || m.switching || id == "" || id == m.workspace {
+		return
+	}
+	current := m.Current()
+	if m.workspace != "" {
+		m.workspaceWindows[m.workspace] = append([]layout.Window(nil), current.Windows[1:]...)
+	}
+	m.workspace = id
+	current.ActivePage = id
+	current.Pages = map[string]layout.Page{}
+	if state, ok := m.Current().Pages[workspaceKey]; ok {
+		current.Pages[workspaceKey] = state
+	}
+	current.Windows = current.Windows[:1]
+	current.Windows = append(current.Windows, m.workspaceWindows[id]...)
+	m.switching = true
+	m.Apply(current)
+	m.switching = false
+}

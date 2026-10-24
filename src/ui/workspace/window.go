@@ -28,10 +28,17 @@ const cursorIdle = 2 * time.Second
 
 // detached is one panel in its own window.
 type detached struct {
-	m    *Manager
-	id   string
-	info page.PanelInfo
-	win  fyne.Window
+	inMain      bool
+	members     []*dockMember
+	dockArea    *fyne.Container
+	dockMode    string
+	dockSplits  map[string]*container.Split
+	dockOffsets map[string]float64
+	activeID    string
+	m           *Manager
+	id          string
+	info        page.PanelInfo
+	win         fyne.Window
 
 	panel page.Panel
 	ctx   *page.Context // the host context the panel was built for
@@ -73,16 +80,29 @@ type detached struct {
 	unsub     func()
 }
 
-func newDetached(m *Manager, info page.PanelInfo) *detached {
+func newDetached(m *Manager, info page.PanelInfo, main ...bool) *detached {
 	d := &detached{m: m, id: info.ID, info: info, shortcuts: map[string]*desktop.CustomShortcut{}, handlers: map[string]func(fyne.Shortcut){}}
-	d.win = m.host.App().NewWindow(info.Title + " — Frame Studio")
-	if info.Icon != nil {
+	d.inMain = len(main) > 0 && main[0]
+	if d.inMain {
+		d.win = m.host.MainWindow()
+	} else {
+		d.win = m.host.App().NewWindow(info.Title + " — Frame Studio")
+	}
+	d.dockMode = "tabs"
+	d.dockOffsets = map[string]float64{}
+	if info.Icon != nil && !d.inMain {
 		d.win.SetIcon(info.Icon)
 	}
-	d.win.SetPadded(false)
+	if !d.inMain {
+		d.win.SetPadded(false)
+	}
 	d.custom = winchrome.Wanted(settings.Get().Display)
 	d.buildChrome()
 	d.arrange()
+	if d.inMain {
+		d.rebuild()
+		return d
+	}
 	winchrome.OnClose(d.win, d.close)
 	winchrome.OnFullscreen(d.win, d.setFullscreen)
 	d.rebuild()
@@ -97,7 +117,9 @@ func newDetached(m *Manager, info page.PanelInfo) *detached {
 	return d
 }
 
-func (d *detached) cleanFeed() bool { return d.id == page.PanelCleanFeed }
+func (d *detached) cleanFeed() bool {
+	return d.id == page.PanelCleanFeed && len(d.members) == 0 && !d.inMain
+}
 
 // buildChrome creates the widgets of the header (icon, title, place, buttons) and the
 // body stack; arrange puts them into the system header or the custom title bar.
@@ -117,7 +139,7 @@ func (d *detached) buildChrome() {
 	d.fsButton = newBarButton("Vollbild", theme.ViewFullScreenIcon(), d.toggleFullscreen)
 	d.monButton = newBarButton("Auf Monitor", theme.MenuDropDownIcon(), func() { d.showMonitorMenu(d.monButton) })
 	d.monButton.trailingIcon = true
-	d.backBtn = newBarButton("Zurück ins Hauptfenster", theme.LogoutIcon(), d.close)
+	d.backBtn = newBarButton("Panel schließen", theme.LogoutIcon(), func() { d.removePanel(d.activePanel()) })
 
 	d.body = container.NewStack()
 	backdrop := canvas.NewRectangle(studiotheme.Gap)
@@ -126,7 +148,8 @@ func (d *detached) buildChrome() {
 	}
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(panelMinSize(d.id))
-	stack := container.NewStack(backdrop, floor, d.body)
+	d.dockArea = container.NewStack(d.body)
+	stack := container.NewStack(backdrop, floor, d.dockArea)
 	if d.cleanFeed() {
 		d.idle = newIdleArea(d)
 		stack.Add(d.idle)
@@ -153,6 +176,12 @@ func (d *detached) systemHeader() *fyne.Container {
 // resize frame, or the system header; a fullscreen clean feed shows neither (no bar, no
 // frame, no resize grips).
 func (d *detached) arrange() {
+	if d.inMain {
+		if h, ok := d.m.host.(MainDockHost); ok {
+			h.SetMainDock(d.dockArea)
+		}
+		return
+	}
 	bare := d.custom && d.cleanFeed() && d.win.FullScreen()
 	key := fmt.Sprint(d.custom, bare)
 	if key == d.arranged {
@@ -188,6 +217,9 @@ func (d *detached) arrange() {
 // back; call it once the window is shown. If the window system refuses, the window keeps
 // its system title bar and the header.
 func (d *detached) decorate() {
+	if d.inMain {
+		return
+	}
 	if d.custom {
 		if err := winchrome.Undecorate(d.win); err != nil {
 			d.custom = false
@@ -226,7 +258,7 @@ func (d *detached) stateChanged(s chrome.State) {
 
 // applyChrome follows Display.CustomChrome and Display.WindowButtons live.
 func (d *detached) applyChrome(s settings.Display) {
-	if d.closing || d.done {
+	if d.closing || d.done || d.inMain {
 		return
 	}
 	if want := winchrome.Wanted(s); want != d.custom {
@@ -290,6 +322,8 @@ func (d *detached) rebuild() {
 	}
 	d.body.Objects = []fyne.CanvasObject{content}
 	d.body.Refresh()
+	d.rebuildMembers()
+	d.refreshDock()
 }
 
 func (d *detached) emptyState(title, hint string) fyne.CanvasObject {
@@ -309,6 +343,12 @@ func (d *detached) emptyState(title, hint string) fyne.CanvasObject {
 
 // updateHeader shows where the window is and hides the header of a fullscreen clean feed.
 func (d *detached) updateHeader() {
+	if d.cleanFeed() {
+		d.refreshDock()
+	}
+	if d.inMain {
+		return
+	}
 	full := d.win.FullScreen()
 	where := "Fenster"
 	if mon, ok := d.m.monitor(d.monitor); ok {
@@ -370,6 +410,10 @@ func (d *detached) setFullscreen(on bool) {
 
 // moveTo puts the window on monitor id, keeping fullscreen; windowed panels maximize.
 func (d *detached) moveTo(id string) {
+	if d.m.grouping() {
+		d.m.Detach(d.activePanel(), id, false)
+		return
+	}
 	mode := fslayout.ModeMaximized
 	if d.win.FullScreen() {
 		mode = fslayout.ModeFullscreen
@@ -403,7 +447,9 @@ func (d *detached) close() {
 		return
 	}
 	d.closing = true
-	d.win.Close()
+	if !d.inMain {
+		d.win.Close()
+	}
 	d.closed() // the test driver does not always call OnClosed
 }
 
@@ -413,6 +459,17 @@ func (d *detached) closed() {
 		return
 	}
 	d.done, d.closing = true, true
+	for _, member := range d.members {
+		if member.panel != nil {
+			member.panel.Close()
+		}
+	}
+	d.members = nil
+	if d.inMain {
+		if h, ok := d.m.host.(MainDockHost); ok {
+			h.SetMainDock(nil)
+		}
+	}
 	if d.unsub != nil {
 		d.unsub()
 		d.unsub = nil
@@ -433,8 +490,10 @@ func (d *detached) closed() {
 		d.chrome.Close()
 		d.chrome = nil
 	}
-	winchrome.Forget(d.win)
-	d.m.disp.Forget(d.win)
+	if !d.inMain {
+		winchrome.Forget(d.win)
+		d.m.disp.Forget(d.win)
+	}
 	d.m.remove(d)
 }
 
@@ -460,7 +519,7 @@ func (d *detached) typedKey(k *fyne.KeyEvent) {
 			return
 		}
 	}
-	if d.panel != nil && d.panel.TypedKey(k) {
+	if panel := d.activeContent(); panel != nil && panel.TypedKey(k) {
 		return
 	}
 	if k.Name == fyne.KeyEscape && d.win.FullScreen() {
@@ -476,7 +535,7 @@ func (d *detached) typedKey(k *fyne.KeyEvent) {
 // panel's own page apply (a detached timeline cuts with the edit page's commands while
 // the main window shows Farbe), not those of the page the main window shows.
 func (d *detached) regDispatch(reg *command.Registry, key fyne.KeyName, mods fyne.KeyModifier) bool {
-	if pg := page.PanelPage(d.id); pg != "" {
+	if pg := page.PanelPage(d.activePanel()); pg != "" {
 		return reg.DispatchAs(command.PageScope(pg), key, mods)
 	}
 	return reg.Dispatch(key, mods)
@@ -594,7 +653,7 @@ func (d *detached) dispatch(key fyne.KeyName, mods fyne.KeyModifier) bool {
 		d.toggleFullscreen()
 		return true
 	}
-	if sp, ok := d.panel.(page.ShortcutPanel); ok && sp.Shortcut(key, mods) {
+	if sp, ok := d.activeContent().(page.ShortcutPanel); ok && sp.Shortcut(key, mods) {
 		return true
 	}
 	return d.regDispatch(reg, key, mods)

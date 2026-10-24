@@ -247,6 +247,7 @@ func nvdecProbeArgs(sample string) []string {
 var sampleEncoders = []struct{ codec, encoder string }{
 	{"h264", "libx264"},
 	{"hevc", "libx265"},
+	{"av1", "libaom-av1"},
 }
 
 func (p *Prober) probeCodecs(ctx context.Context, decode func(sample string) []string) map[string]bool {
@@ -273,6 +274,9 @@ func (p *Prober) probeCodecs(ctx context.Context, decode func(sample string) []s
 				"testsrc2=s=256x144:d=1:r=25", "-c:v", se.encoder, "-pix_fmt", "yuv420p"}
 			if se.encoder == "libx265" {
 				args = append(args, "-x265-params", "log-level=error")
+			}
+			if se.encoder == "libaom-av1" {
+				args = append(args, "-cpu-used", "8", "-threads", "2")
 			}
 			args = append(args, sample+".tmp.mp4")
 			if _, err := p.run(ctx, args...); err != nil {

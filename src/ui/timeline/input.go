@@ -703,11 +703,11 @@ func (t *Timeline) DragEnd() {
 }
 
 // Scrolled pans the lanes horizontally; over the header column (or with Shift) it scrolls
-// the tracks vertically, and with Ctrl it zooms around the pointer.
+// the tracks vertically. Alt zooms at the pointer; Ctrl pans in time.
 func (t *Timeline) Scrolled(ev *fyne.ScrollEvent) {
 	g := t.geom()
 	mods := t.wheelMods()
-	if mods&(fyne.KeyModifierControl|fyne.KeyModifierSuper) != 0 {
+	if mods&fyne.KeyModifierAlt != 0 {
 		d := ev.Scrolled.DY
 		if d == 0 {
 			d = ev.Scrolled.DX
@@ -715,7 +715,7 @@ func (t *Timeline) Scrolled(ev *fyne.ScrollEvent) {
 		t.zoomAt(t.zoom*float32(math.Exp(float64(d)*0.02)), ev.Position.X)
 		return
 	}
-	if (ev.Position.X < headerW && ev.Position.Y >= rulerH) || mods&fyne.KeyModifierShift != 0 {
+	if mods&(fyne.KeyModifierControl|fyne.KeyModifierSuper) == 0 && ((ev.Position.X < headerW && ev.Position.Y >= rulerH) || mods&fyne.KeyModifierShift != 0) {
 		if g.maxScroll() <= 0 {
 			return
 		}

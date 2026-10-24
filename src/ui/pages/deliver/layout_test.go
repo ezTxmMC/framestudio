@@ -41,7 +41,7 @@ func TestAdvancedSectionCollapses(t *testing.T) {
 	if f.advanced.open || f.rng.Visible() && f.advanced.body.Visible() {
 		t.Fatal("Erweitert must start collapsed")
 	}
-	if f.advanced.summary.Text != "Gesamte Timeline · mit Audio" {
+	if f.advanced.summary.Text != "Gesamte Timeline · mit Audio · Software" {
 		t.Errorf("summary %q", f.advanced.summary.Text)
 	}
 	closed := f.formBox.MinSize().Height
@@ -50,7 +50,7 @@ func TestAdvancedSectionCollapses(t *testing.T) {
 		t.Fatal("tapping Erweitert should show range and audio")
 	}
 	f.audio.SetChecked(false)
-	if f.advanced.summary.Text != "Gesamte Timeline · ohne Audio" {
+	if f.advanced.summary.Text != "Gesamte Timeline · ohne Audio · Software" {
 		t.Errorf("summary after unchecking audio %q", f.advanced.summary.Text)
 	}
 	test.Tap(f.advanced)

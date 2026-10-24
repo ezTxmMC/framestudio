@@ -93,6 +93,7 @@ func (t *Timeline) CanEscape() bool {
 // were on, so the other tracks keep their timing. A clip in the way gives a
 // *model.RippleBlockedError; run it inside a session edit, which rolls back on error.
 func RippleDelete(p *model.Project, ids []string, sync bool) error {
+	ids = p.ExpandLinks(ids)
 	if sync {
 		return p.DeleteClips(ids, true)
 	}

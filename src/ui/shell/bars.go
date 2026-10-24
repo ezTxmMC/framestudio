@@ -23,7 +23,7 @@ import (
 
 const (
 	topBarHeight    = 32
-	pageBarHeight   = 52
+	pageBarHeight   = 34
 	statusBarHeight = 24
 )
 

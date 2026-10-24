@@ -177,7 +177,7 @@ func newPageButton(id, label string, res fyne.Resource, tap func()) *pageButton 
 		bg:     canvas.NewRectangle(color.Transparent),
 	}
 	b.icon.FillMode = canvas.ImageFillContain
-	b.icon.SetMinSize(fyne.NewSquareSize(20))
+	b.icon.SetMinSize(fyne.NewSquareSize(16))
 	b.marker.SetMinSize(fyne.NewSize(1, 2))
 	b.bg.CornerRadius = 3
 	b.ExtendBaseWidget(b)
@@ -216,12 +216,12 @@ func (b *pageButton) restyle() {
 
 func (b *pageButton) CreateRenderer() fyne.WidgetRenderer {
 	marker := container.New(layout.NewCustomPaddedLayout(0, 0, 18, 18), b.marker)
-	body := container.NewCenter(container.New(layout.NewCustomPaddedVBoxLayout(1), container.NewCenter(b.icon), container.NewCenter(b.label)))
+	body := container.NewCenter(container.NewHBox(container.NewCenter(b.icon), container.NewCenter(b.label)))
 	return widget.NewSimpleRenderer(container.NewStack(b.bg, container.NewBorder(marker, nil, nil, nil, body)))
 }
 
 func (b *pageButton) MinSize() fyne.Size {
-	return fyne.NewSize(78, b.BaseWidget.MinSize().Height)
+	return fyne.NewSize(92, b.BaseWidget.MinSize().Height)
 }
 
 func (b *pageButton) Tapped(*fyne.PointEvent)        { b.onTap() }

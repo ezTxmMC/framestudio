@@ -87,7 +87,7 @@ func BuildAudioMix(p *model.Project, from, to, firstInput int, available func(mo
 		// aresample pads a stream that starts late (and fills timestamp gaps) so sample
 		// n is time n/48000 of the file, as in the live engine's decoder; the sample-exact
 		// atrim below then cuts by time.
-		fmt.Fprintf(&b, "[%d:a:0]aresample=async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,", firstInput+i)
+		fmt.Fprintf(&b, "[%d:a:%d]aresample=async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,", firstInput+i, c.AudioStream)
 		fmt.Fprintf(&b, "atrim=start_sample=%d:end_sample=%d,asetpts=PTS-STARTPTS", src, src+n)
 		// Pad short sources so fades and offsets refer to the full clip length.
 		fmt.Fprintf(&b, ",apad=whole_len=%d", n)

@@ -47,6 +47,7 @@ type chunk [chunkFrames * Channels]int16
 type PCM struct {
 	key    string
 	path   string
+	stream int
 	chunks atomic.Pointer[[]*chunk]
 	frames atomic.Int64
 	done   chan struct{}
@@ -157,12 +158,21 @@ func NewCache(decode Decoder, stat Stat, budget int64) *Cache {
 
 // Get returns the PCM of the file at path, starting a background decode on first use.
 // It fails if the file cannot be read (missing, offline).
-func (c *Cache) Get(path string) (*PCM, error) {
+func (c *Cache) Get(path string) (*PCM, error) { return c.GetStream(path, 0) }
+
+// GetStream caches each audio stream independently.
+func (c *Cache) GetStream(path string, stream int) (*PCM, error) {
+	if stream < 0 {
+		return nil, fmt.Errorf("ungültige Audiospur")
+	}
 	size, mtime, err := c.stat(path)
 	if err != nil {
 		return nil, err
 	}
 	key := CacheKey(path, size, mtime)
+	if stream > 0 {
+		key += "\x00audio:" + strconv.Itoa(stream)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -173,6 +183,7 @@ func (c *Cache) Get(path string) (*PCM, error) {
 		return e.Value.(*PCM), nil
 	}
 	p := newPCM(key, path)
+	p.stream = stream
 	ctx, cancel := context.WithCancel(c.ctx)
 	p.cancel = cancel
 	c.items[key] = c.ll.PushFront(p)
@@ -323,7 +334,7 @@ func (c *Cache) run(ctx context.Context, p *PCM) {
 		p.err = ctx.Err()
 		return
 	}
-	r, err := c.decode(ctx, p.path)
+	r, err := c.decode(context.WithValue(ctx, audioStreamKey{}, p.stream), p.path)
 	if err != nil {
 		p.err = err
 		return
@@ -372,14 +383,17 @@ func (c *Cache) fill(ctx context.Context, p *PCM, r io.Reader) error {
 
 var lookPath = exec.LookPath
 
-// FFmpegDecoder decodes the first audio stream of path with ffmpeg.
+type audioStreamKey struct{}
+
+// FFmpegDecoder decodes the selected audio stream (default: first) with ffmpeg.
 func FFmpegDecoder(ctx context.Context, path string) (io.ReadCloser, error) {
 	ff, err := lookPath("ffmpeg")
 	if err != nil {
 		return nil, ErrNoFFmpeg
 	}
+	stream, _ := ctx.Value(audioStreamKey{}).(int)
 	cmd := exec.CommandContext(ctx, ff, "-nostdin", "-hide_banner", "-loglevel", "error",
-		"-i", path, "-map", "0:a:0", "-vn",
+		"-i", path, "-map", fmt.Sprintf("0:a:%d", stream), "-vn",
 		// Sample 0 is time 0 of the file, as for export's atrim and the picture: a stream
 		// that starts late (camera, OBS recordings) is padded with silence, and gaps in
 		// its timestamps are filled, so the samples line up with the timestamps.

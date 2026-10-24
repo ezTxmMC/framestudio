@@ -32,6 +32,7 @@ func TestSecondaryShortcutsInDetachedWindow(t *testing.T) {
 		return command.Binding{ID: id, Run: func() { ran = append(ran, id) }}
 	}
 	h.host.reg.Bind(command.Global, bind("edit.cut"), bind("edit.rippleDelete"), bind("edit.copy"), bind("edit.paste"))
+	h.host.reg.SetShortcut("edit.rippleDelete", "Shift+Delete")
 	h.host.reg.SetShortcut("edit.copy", "Ctrl+Insert")
 	h.host.reg.SetShortcut("edit.paste", "Shift+Insert")
 	h.m.Detach(page.PanelTimeline, "DP-3", false)

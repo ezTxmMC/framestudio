@@ -21,7 +21,7 @@ import (
 )
 
 func TestDBLinearMapping(t *testing.T) {
-	cases := []struct{ db, lin float64 }{{0, 1}, {-6, 0.501187}, {6, 1.995262}, {MaxDB, 3.981072}, {-20, 0.1}}
+	cases := []struct{ db, lin float64 }{{0, 1}, {-6, 0.501187}, {6, 1.995262}, {MaxDB, 1000}, {-20, 0.1}}
 	for _, c := range cases {
 		if got := DBToLinear(c.db); math.Abs(got-c.lin) > 1e-5 {
 			t.Errorf("DBToLinear(%v) = %v, want %v", c.db, got, c.lin)
@@ -33,10 +33,10 @@ func TestDBLinearMapping(t *testing.T) {
 	if DBToLinear(MinDB) != 0 || DBToLinear(-90) != 0 {
 		t.Error("bottom of the fader must be silence")
 	}
-	if LinearToDB(0) != MinDB || LinearToDB(1e-9) != MinDB || LinearToDB(100) != MaxDB {
+	if LinearToDB(0) != MinDB || LinearToDB(1e-9) != MinDB || LinearToDB(10000) != MaxDB {
 		t.Error("LinearToDB must clamp to the fader range")
 	}
-	if DBToLinear(40) != DBToLinear(MaxDB) {
+	if DBToLinear(90) != DBToLinear(MaxDB) {
 		t.Error("DBToLinear must clamp at MaxDB")
 	}
 }

@@ -34,13 +34,14 @@ var extKinds = map[string]model.ClipKind{
 	".bmp": model.KindImage, ".webp": model.KindImage, ".tif": model.KindImage, ".tiff": model.KindImage,
 	".mp4": model.KindVideo, ".mov": model.KindVideo, ".mkv": model.KindVideo, ".webm": model.KindVideo,
 	".avi": model.KindVideo, ".m4v": model.KindVideo,
+	".ts": model.KindVideo, ".mts": model.KindVideo, ".m2ts": model.KindVideo, ".mxf": model.KindVideo,
 	".wav": model.KindAudio, ".mp3": model.KindAudio, ".flac": model.KindAudio, ".ogg": model.KindAudio,
 	".m4a": model.KindAudio, ".aac": model.KindAudio, ".opus": model.KindAudio,
 }
 
 var extOrder = []string{
 	".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff",
-	".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v",
+	".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".ts", ".mts", ".m2ts", ".mxf",
 	".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus",
 }
 
@@ -162,6 +163,8 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 	if err := json.Unmarshal(data, &out); err != nil {
 		return fmt.Errorf("ffprobe lieferte unlesbare Daten: %v", err)
 	}
+	m.AudioStreams = 0
+	m.HasAudio = false
 	hasVideo := false
 	// The picture defines a video file's length: camera files often carry a few frames
 	// more sound than picture, and frames past the last image cannot be decoded.
@@ -169,6 +172,7 @@ func applyProbe(m *model.MediaItem, data []byte) error {
 	for _, s := range out.Streams {
 		switch s.CodecType {
 		case "audio":
+			m.AudioStreams++
 			m.HasAudio = true
 			audioDur = max(audioDur, streamDuration(s.Duration, s.Tags))
 		case "video":
@@ -277,4 +281,22 @@ func firstLine(stderr string, err error) string {
 		s = err.Error()
 	}
 	return s
+}
+
+// ResolveAudioStreams upgrades media from projects saved before stream counts were
+// recorded. Only insertion calls this; opening an old project does not probe files.
+// Missing/offline sources keep the legacy first-stream fallback.
+func ResolveAudioStreams(p *model.Project, m model.MediaItem) model.MediaItem {
+	if m.Kind != model.KindVideo || m.AudioStreams > 0 || m.Path == "" {
+		return m
+	}
+	probed, err := Probe(m.Path)
+	if err != nil {
+		return m
+	}
+	m.AudioStreams, m.HasAudio = probed.AudioStreams, probed.HasAudio
+	if stored, ok := p.MediaByID(m.ID); ok {
+		stored.AudioStreams, stored.HasAudio = m.AudioStreams, m.HasAudio
+	}
+	return m
 }

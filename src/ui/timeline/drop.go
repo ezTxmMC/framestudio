@@ -3,6 +3,7 @@ package timeline
 import (
 	"fyne.io/fyne/v2"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 	"framestudio-proto/src/ui/kit"
 )
@@ -190,7 +191,7 @@ func (t *Timeline) MediaDrop(ids []string, pos fyne.Position) bool {
 			if !ok {
 				continue
 			}
-			item := *m
+			item := media.ResolveAudioStreams(p, *m)
 			itemPref := pref
 			if plan.newTrack && !plan.newKind.Accepts(item.Kind) {
 				itemPref = "" // the new track is for the other kind

@@ -303,7 +303,7 @@ func TestMediaInsertion(t *testing.T) {
 func TestSplitAndDeleteShortcuts(t *testing.T) {
 	f := newFixture(t, basicProject())
 	f.s.Seek(50)
-	if !f.pg.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS}) {
+	if !f.pg.dispatch(fyne.KeyK, fyne.KeyModifierControl) {
 		t.Fatal("S not handled")
 	}
 	if len(f.s.Project.Tracks[0].Clips) != 2 || len(f.s.Project.Tracks[1].Clips) != 2 {
@@ -311,7 +311,7 @@ func TestSplitAndDeleteShortcuts(t *testing.T) {
 	}
 	f.s.Undo()
 	f.s.SelectClip(f.s.Project.Tracks[1].Clips[0].ID)
-	f.pg.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS})
+	f.pg.dispatch(fyne.KeyK, fyne.KeyModifierControl)
 	if len(f.s.Project.Tracks[0].Clips) != 1 || len(f.s.Project.Tracks[1].Clips) != 2 {
 		t.Fatal("split with selection must only cut the selected track")
 	}
@@ -323,7 +323,7 @@ func TestSplitAndDeleteShortcuts(t *testing.T) {
 		t.Fatal("Delete without selection must not be handled")
 	}
 	f.s.Seek(500)
-	f.pg.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS})
+	f.pg.dispatch(fyne.KeyK, fyne.KeyModifierControl)
 	if len(f.errs) != 1 {
 		t.Fatal("split outside clips should report an error")
 	}
@@ -449,7 +449,7 @@ func TestSplitFallsBackWhenSelectionIsElsewhere(t *testing.T) {
 	f := newFixture(t, p)
 	f.s.SelectClip(music.ID)
 	f.s.Seek(10) // inside the colour clip on V1, not under the music
-	f.pg.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS})
+	f.pg.dispatch(fyne.KeyK, fyne.KeyModifierControl)
 	if len(f.errs) > 0 {
 		t.Fatalf("split failed: %v", f.errs)
 	}

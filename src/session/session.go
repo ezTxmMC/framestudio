@@ -262,7 +262,7 @@ func (s *Session) rescaleTime(old model.Rate) {
 // changed, else 0.
 func (s *Session) fixSelection(before *model.Project) Change {
 	n0, clip0, track0, media0 := len(s.Selected), s.SelectedClip, s.SelectedTrack, s.SelectedMedia
-	s.Selected = s.selectable(s.Selected)
+	s.Selected = s.Project.ExpandLinks(s.selectable(s.Selected))
 	if s.SelectedClip != "" && !s.IsSelected(s.SelectedClip) {
 		s.SelectedClip = ""
 		if n := len(s.Selected); n > 0 {
@@ -355,7 +355,7 @@ func (s *Session) selectable(ids []string) []string {
 // SelectClips replaces the selection; the last ID becomes the primary clip. In a
 // selection of several clips, clips on locked tracks are left out.
 func (s *Session) SelectClips(ids []string) {
-	sel := s.selectable(ids)
+	sel := s.Project.ExpandLinks(s.selectable(ids))
 	primary := ""
 	if len(sel) > 0 {
 		primary = sel[len(sel)-1]
@@ -376,7 +376,7 @@ func (s *Session) ToggleClip(id string) {
 	if s.IsSelected(id) {
 		var rest []string
 		for _, x := range s.Selected {
-			if x != id {
+			if !containsClipID(s.Project.ExplicitGroup(id), x) {
 				rest = append(rest, x)
 			}
 		}
@@ -629,4 +629,13 @@ func (s *Session) PrevEdit() int {
 		}
 	}
 	return 0
+}
+
+func containsClipID(ids []string, id string) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
 }

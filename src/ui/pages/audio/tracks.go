@@ -277,7 +277,7 @@ func (l *lane) Tapped(e *fyne.PointEvent) {
 	pg.s.Seek(f)
 }
 
-// Scrolled zooms (Ctrl) or pans (Shift, horizontal wheel); plain wheel scrolls the tracks.
+// Scrolled zooms (Alt) or pans (Shift, horizontal wheel); plain wheel scrolls the tracks.
 func (l *lane) Scrolled(e *fyne.ScrollEvent) {
 	if !l.row.tv.pg.wheel(e, e.Position.X) {
 		l.row.tv.scroll.Scrolled(e)
@@ -448,7 +448,7 @@ func (r *ruler) Tapped(e *fyne.PointEvent) { r.pg.s.Seek(r.pg.frameAt(e.Position
 func (r *ruler) Dragged(e *fyne.DragEvent) { r.pg.s.Seek(r.pg.frameAt(e.Position.X, r.Size().Width)) }
 func (r *ruler) DragEnd()                  {}
 
-// Scrolled pans the lanes, Ctrl zooms around the pointer.
+// Scrolled pans the lanes, Alt zooms around the pointer.
 func (r *ruler) Scrolled(e *fyne.ScrollEvent) {
 	if !r.pg.wheel(e, e.Position.X) {
 		r.pg.scrollLanes(-e.Scrolled.DY * 3)

@@ -391,7 +391,7 @@ func (c *Cache) Waveform(m model.MediaItem, buckets int) ([]float32, error) {
 
 // peaks returns the cached full-resolution peak envelope of a file.
 func (c *Cache) peaks(m model.MediaItem) ([]float32, error) {
-	key := "wave|" + m.ID + "|" + m.Path
+	key := fmt.Sprintf("wave|%s|%s|%d", m.ID, m.Path, m.AudioStream)
 	if v, ok := c.waves.get(key); ok {
 		return v.([]float32), nil
 	}

@@ -11,7 +11,7 @@ import (
 // Fader range in decibels. MinDB and below is silence.
 const (
 	MinDB = -60.0
-	MaxDB = 12.0
+	MaxDB = 60.0
 )
 
 // DBToLinear converts a fader position in dB to the linear gain stored in the model.

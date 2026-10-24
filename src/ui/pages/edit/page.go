@@ -61,6 +61,7 @@ type Page struct {
 	progBody *fyne.Container              // holds progBox inside the program panel
 	progBox  fyne.CanvasObject            // viewer over transport
 	hidden   map[string]bool
+	docked   map[string]bool
 	offsets  map[string]float64 // split offsets while a split is not shown
 	fit      *fitTimeline
 	frame    *fyne.Container // root container; its object is the current arrangement
@@ -267,7 +268,7 @@ func (p *Page) setViewerActive() {
 		return
 	}
 	on := p.active || p.panel != ""
-	if p.panel == "" && p.hidden[areaViewer] && p.fs == nil {
+	if p.panel == "" && p.areaHidden(areaViewer) && p.fs == nil {
 		on = false
 	}
 	if on != p.viewer.Active() {
@@ -335,8 +336,6 @@ func (p *Page) TypedKey(k *fyne.KeyEvent) bool {
 	}
 	name := k.Name
 	switch name {
-	case fyne.KeyBackspace:
-		name = fyne.KeyDelete
 	case fyne.KeyEqual, fyne.KeyRightBracket: // "+" sits on "]" in German layouts
 		name = fyne.KeyPlus
 	case fyne.KeySlash: // "-" sits on "/" in German layouts
@@ -394,7 +393,7 @@ func (p *Page) setBladeAll(on bool) {
 	}
 }
 
-// zoomChanged follows zoom changes the timeline made itself (Ctrl+wheel, pinch).
+// zoomChanged follows zoom changes the timeline made itself (Alt+wheel, pinch).
 func (p *Page) zoomChanged(z float32) {
 	if z == p.zoom {
 		return

@@ -41,6 +41,21 @@ func (p *Page) bindings() []command.Binding {
 	fade := fmtSeconds(p.prefs.Timeline.FadeSeconds)
 
 	bs := []command.Binding{
+		{ID: "clip.link", Run: func() {
+			ids := p.selection()
+			p.edit("Clips verknüpfen", func(pr *model.Project) error { return pr.LinkClips(ids) })
+		}, Enabled: func() bool { return len(p.selection()) > 1 }},
+		{ID: "clip.unlink", Run: func() {
+			ids := p.selection()
+			p.edit("Verknüpfung lösen", func(pr *model.Project) error { return pr.UnlinkClips(ids) })
+		}, Enabled: func() bool {
+			for _, id := range p.selection() {
+				if len(s.Project.LinkedClips(id)) > 0 {
+					return true
+				}
+			}
+			return false
+		}},
 		{ID: "edit.cut", Run: p.cut, Enabled: hasSel},
 		{ID: "edit.copy", Run: p.copySelection, Enabled: hasSel},
 		{ID: "edit.paste", Run: p.paste, Enabled: clipboardFull},
@@ -137,7 +152,7 @@ func (p *Page) bindings() []command.Binding {
 			Run:     func() { p.updateSettings(func(s *settings.Settings) { s.Playback.Follow = mode }) },
 			Checked: func() bool { return followMode(p.prefs.Playback.Follow) == mode }})
 	}
-	return bs
+	return append(bs, command.AudioBindings(s, p.showErr)...)
 }
 
 func (p *Page) hideBinding(id, area, label string, enabled func() bool) command.Binding {
@@ -482,7 +497,7 @@ func (p *Page) showInPool() {
 func (p *Page) clipMenuItems(model.Clip) []*fyne.MenuItem {
 	var items []*fyne.MenuItem
 	for _, id := range []string{"edit.cut", "edit.copy", "edit.paste", "edit.duplicate", "",
-		"clip.rename", "clip.fadeIn", "clip.fadeOut", "clip.removeFades", "", "clip.showInPool"} {
+		"clip.link", "clip.unlink", "", "clip.rename", "clip.fadeIn", "clip.fadeOut", "clip.removeFades", "", "clip.showInPool"} {
 		if id == "" {
 			items = append(items, fyne.NewMenuItemSeparator())
 			continue

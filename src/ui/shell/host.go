@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 
 	wslayout "framestudio-proto/src/ui/layout"
 	"framestudio-proto/src/ui/page"
@@ -105,5 +106,64 @@ func (sh *Shell) ActivePage() string {
 func (sh *Shell) ShowPage(id string) {
 	if sh.active != nil {
 		sh.showPage(sh.active, id)
+	}
+}
+
+// SetMainDock installs panels in a resizable side area of the primary window.
+func (sh *Shell) SetMainDock(content fyne.CanvasObject) {
+	sh.mainDockContent = content
+	if sh.workspaceBody == nil {
+		return
+	}
+	offset := 0.7
+	if sh.mainDockSplit != nil {
+		offset = sh.mainDockSplit.Offset
+	}
+	if content == nil {
+		sh.workspaceBody.Objects = []fyne.CanvasObject{sh.content}
+		sh.mainDockSplit = nil
+	} else {
+		pageView := container.NewScroll(sh.content)
+		if sh.mainDockVertical {
+			sh.mainDockSplit = container.NewVSplit(pageView, content)
+		} else {
+			sh.mainDockSplit = container.NewHSplit(pageView, content)
+		}
+		sh.mainDockSplit.SetOffset(offset)
+		sh.workspaceBody.Objects = []fyne.CanvasObject{sh.mainDockSplit}
+	}
+	sh.workspaceBody.Refresh()
+}
+
+func (sh *Shell) MainDockOffset() float64 {
+	if sh.mainDockSplit != nil {
+		return sh.mainDockSplit.Offset
+	}
+	return 0.7
+}
+func (sh *Shell) SetMainDockOffset(offset float64) {
+	if sh.mainDockSplit != nil && offset > 0 && offset < 1 {
+		sh.mainDockSplit.SetOffset(offset)
+	}
+}
+
+func (sh *Shell) SetDockedPanels(ids []string) {
+	sh.dockedPanels = append([]string(nil), ids...)
+	for _, project := range sh.projects {
+		for _, pg := range project.pages {
+			if docked, ok := pg.(interface{ SetDockedPanels([]string) }); ok {
+				docked.SetDockedPanels(ids)
+			}
+		}
+	}
+}
+
+func (sh *Shell) SetMainDockVertical(vertical bool) {
+	if vertical == sh.mainDockVertical {
+		return
+	}
+	sh.mainDockVertical = vertical
+	if sh.mainDockContent != nil {
+		sh.SetMainDock(sh.mainDockContent)
 	}
 }

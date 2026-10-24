@@ -37,20 +37,22 @@ var Catalog = []Info{
 	{ID: "edit.copy", Label: "Kopieren", Category: "Bearbeiten", Shortcut: "Ctrl+C"},
 	{ID: "edit.paste", Label: "Einfügen (am Abspielkopf)", Category: "Bearbeiten", Shortcut: "Ctrl+V"},
 	{ID: "edit.duplicate", Label: "Duplizieren", Category: "Bearbeiten", Shortcut: "Ctrl+Shift+D"},
-	{ID: "edit.delete", Label: "Löschen", Category: "Bearbeiten", Shortcut: "Delete"},
-	{ID: "edit.rippleDelete", Label: "Löschen und Lücke schließen", Category: "Bearbeiten", Shortcut: "Shift+Delete"},
+	{ID: "edit.delete", Label: "Löschen", Category: "Bearbeiten", Shortcut: "Backspace"},
+	{ID: "edit.rippleDelete", Label: "Löschen und Lücke schließen", Category: "Bearbeiten", Shortcut: "Delete"},
 	{ID: "edit.selectAll", Label: "Alles auswählen", Category: "Bearbeiten", Shortcut: "Ctrl+A"},
 	{ID: "edit.deselect", Label: "Auswahl aufheben", Category: "Bearbeiten", Shortcut: "Escape"},
 	{ID: "edit.selectForward", Label: "Alle Clips ab Abspielkopf auswählen", Category: "Bearbeiten", Shortcut: "Ctrl+Shift+A"},
 	{ID: "edit.selectTrack", Label: "Alle Clips der Spur auswählen", Category: "Bearbeiten"},
-	{ID: "edit.selectLinked", Label: "Verknüpfte Clips auswählen", Category: "Bearbeiten", Shortcut: "Ctrl+L"},
+	{ID: "edit.selectLinked", Label: "Verknüpfte Clips auswählen", Category: "Bearbeiten", Shortcut: "Ctrl+Alt+Shift+L"},
 	// OWNER shell
 	{ID: "app.settings", Label: "Einstellungen…", Category: "Bearbeiten", Shortcut: "Ctrl+,"},
 	{ID: "app.keymap", Label: "Tastenkürzel anpassen…", Category: "Bearbeiten", Shortcut: "Ctrl+Alt+K"},
 	{ID: "app.palette", Label: "Befehlssuche…", Category: "Ansicht", Shortcut: "Ctrl+Shift+P"},
 
 	// Clip — OWNER edit page
-	{ID: "clip.split", Label: "Am Abspielkopf teilen", Category: "Clip", Shortcut: "S"},
+	{ID: "clip.link", Label: "Clips verknüpfen", Category: "Clip", Shortcut: "Ctrl+L"},
+	{ID: "clip.unlink", Label: "Verknüpfung lösen", Category: "Clip", Shortcut: "Ctrl+Shift+L"},
+	{ID: "clip.split", Label: "Am Abspielkopf teilen", Category: "Clip", Shortcut: "Ctrl+K"},
 	{ID: "clip.splitAll", Label: "Alle Spuren am Abspielkopf teilen", Category: "Clip", Shortcut: "Ctrl+Shift+K"},
 	{ID: "clip.rename", Label: "Umbenennen…", Category: "Clip", Shortcut: "F2"},
 	{ID: "clip.fadeIn", Label: "Einblenden (1 s)", Category: "Clip"},
@@ -107,6 +109,15 @@ var Catalog = []Info{
 	{ID: "timeline.showFilmstrip", Label: "Filmstreifen anzeigen", Category: "Timeline"},
 	{ID: "timeline.showWaveforms", Label: "Wellenformen anzeigen", Category: "Timeline"},
 
+	// Audio gain and mixer actions shared by edit and audio workspaces.
+	{ID: "audio.clipGainUp", Label: "Clip-Lautstärke +1 dB", Category: "Ton", Shortcut: "Alt+Up"},
+	{ID: "audio.clipGainDown", Label: "Clip-Lautstärke −1 dB", Category: "Ton", Shortcut: "Alt+Down"},
+	{ID: "audio.clipGainReset", Label: "Clip-Lautstärke auf 0 dB", Category: "Ton", Shortcut: "Alt+0"},
+	{ID: "audio.trackGainUp", Label: "Spur-Lautstärke +1 dB", Category: "Ton", Shortcut: "Ctrl+Shift+Up"},
+	{ID: "audio.trackGainDown", Label: "Spur-Lautstärke −1 dB", Category: "Ton", Shortcut: "Ctrl+Shift+Down"},
+	{ID: "audio.trackGainReset", Label: "Spur-Lautstärke auf 0 dB", Category: "Ton", Shortcut: "Ctrl+Shift+0"},
+	{ID: "audio.trackMute", Label: "Spur stummschalten", Category: "Ton", Shortcut: "Alt+Shift+M"},
+	{ID: "audio.trackSolo", Label: "Spur solo", Category: "Ton", Shortcut: "Alt+Shift+S"},
 	// Marker — OWNER edit page
 	{ID: "marker.add", Label: "Marker setzen", Category: "Marker", Shortcut: "M"},
 	{ID: "marker.edit", Label: "Marker bearbeiten…", Category: "Marker", Shortcut: "Ctrl+Alt+M"},
@@ -162,8 +173,8 @@ var Catalog = []Info{
 
 	// Arbeitsbereich — OWNER workspace
 	{ID: "workspace.monitors", Label: "Monitore und Fenster…", Category: "Arbeitsbereich", Shortcut: "Ctrl+Alt+W"},
-	{ID: "workspace.saveLayout", Label: "Layout speichern…", Category: "Arbeitsbereich"},
-	{ID: "workspace.manageLayouts", Label: "Layouts verwalten…", Category: "Arbeitsbereich"},
+	{ID: "workspace.saveLayout", Label: "Layout speichern…", Category: "Arbeitsbereich", Shortcut: "Ctrl+Alt+Shift+S"},
+	{ID: "workspace.manageLayouts", Label: "Layouts verwalten…", Category: "Arbeitsbereich", Shortcut: "Ctrl+Alt+Shift+W"},
 	{ID: "workspace.resetLayout", Label: "Layout zurücksetzen", Category: "Arbeitsbereich"},
 	{ID: "workspace.closeDetached", Label: "Alle gelösten Fenster schließen", Category: "Arbeitsbereich"},
 	{ID: "workspace.saveOnQuit", Label: "Layout beim Beenden speichern", Category: "Arbeitsbereich"},

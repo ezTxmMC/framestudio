@@ -1,5 +1,7 @@
 package model
 
+import "fmt"
+
 // LockedTracksError reports that every track of a kind is locked, so a new clip has
 // nowhere to go. It matches ErrLocked with errors.Is.
 type LockedTracksError struct {
@@ -40,7 +42,7 @@ func (p *Project) TargetTrack(k ClipKind, preferred string) (*Track, error) {
 
 // PlaceMedia overwrites media item m onto the timeline at frame at, on preferred or the
 // next fitting unlocked track (see TargetTrack). Stills get stillLen frames. A video with
-// sound also gets its sound as an audio clip on the track SoundTrack picks; if that is
+// sound gets one linked audio clip per source stream on separate tracks; if that is
 // impossible nothing is placed. It returns the ID of the picture (or audio) clip.
 func (p *Project) PlaceMedia(m MediaItem, at, stillLen int, preferred string) (string, error) {
 	return p.PlaceMediaTo(m, at, stillLen, preferred, preferred) // an audio track takes the sound
@@ -50,6 +52,15 @@ func (p *Project) PlaceMedia(m MediaItem, at, stillLen int, preferred string) (s
 // preferredAudio (for example the audio track under the pointer of a drop) wins when it is
 // an unlocked audio track. Otherwise SoundTrack decides.
 func (p *Project) PlaceMediaTo(m MediaItem, at, stillLen int, preferred, preferredAudio string) (string, error) {
+	work := p.Clone()
+	id, err := work.placeMediaTo(m, at, stillLen, preferred, preferredAudio)
+	if err == nil {
+		*p = *work
+	}
+	return id, err
+}
+
+func (p *Project) placeMediaTo(m MediaItem, at, stillLen int, preferred, preferredAudio string) (string, error) {
 	at = max(at, 0)
 	c := p.ClipFromMedia(m, at, stillLen)
 	if !m.Kind.IsVisual() {
@@ -76,24 +87,58 @@ func (p *Project) PlaceMediaTo(m MediaItem, at, stillLen int, preferred, preferr
 		return "", err
 	}
 	tid := t.ID // AddTrack below may move tracks in memory
-	soundAt := -3
-	if m.Kind == KindVideo && m.HasAudio {
+	count := m.AudioCount()
+	if m.Kind != KindVideo {
+		count = 0
+	}
+	// Reserve distinct destinations before placing clips. The caller commits the
+	// snapshot only after every source stream has been placed.
+	var soundIDs []string
+	for stream := 0; stream < count; stream++ {
 		_, pi := p.Track(tid)
-		if soundAt, err = p.SoundTrack(pi, preferredAudio, c.Start, c.End()); err != nil {
+		pref := ""
+		if stream == 0 {
+			pref = preferredAudio
+		}
+		si, err := p.SoundTrack(pi, pref, c.Start, c.End())
+		if err != nil {
 			return "", err
 		}
+		// A destination already reserved for another stream needs a fresh lane.
+		for _, used := range soundIDs {
+			if si >= 0 && p.Tracks[si].ID == used {
+				si = -1
+				for _, candidate := range p.TrackIndices(TrackAudio) {
+					tr := &p.Tracks[candidate]
+					reserved := false
+					for _, other := range soundIDs {
+						if other == tr.ID {
+							reserved = true
+							break
+						}
+					}
+					if !reserved && !tr.Locked && tr.free(c.Start, c.End()) {
+						si = candidate
+						break
+					}
+				}
+				break
+			}
+		}
+		soundIDs = append(soundIDs, p.ensureAudio(si))
 	}
-	var soundID string
-	if soundAt != -3 {
-		soundID = p.ensureAudio(soundAt)
+	if count > 0 {
+		c.LinkID = NewID()
 	}
 	if err := p.PlaceClip(tid, c); err != nil {
 		return "", err
 	}
-	if soundID != "" {
+	for stream, soundID := range soundIDs {
 		a := c
-		a.ID = NewID()
-		a.Kind = KindAudio
+		a.ID, a.Kind, a.AudioStream = NewID(), KindAudio, stream
+		if count > 1 {
+			a.Name = fmt.Sprintf("%s · Audio %d", m.Name, stream+1)
+		}
 		a.Color = RGBA{0x3D, 0x9A, 0x5B, 0xFF}
 		if err := p.PlaceClip(soundID, a); err != nil {
 			return "", err
@@ -189,20 +234,20 @@ func (p *Project) soundReplaceable(ai, picture, from, to int) bool {
 	return true
 }
 
-// LinkedClips returns the IDs of the clips on other tracks that form a pair with clip id:
-// the same media, start, length and source offset (the picture and sound of one video).
+// LinkedClips returns stored group partners. For older projects without stored
+// groups it recognizes picture/sound pairs by media and timing, unless unlinked.
 func (p *Project) LinkedClips(id string) []string {
 	c, ti, _ := p.Clip(id)
-	if c == nil || c.MediaID == "" {
+	if c == nil || c.Unlinked {
 		return nil
 	}
 	var out []string
 	for i, tr := range p.Tracks {
-		if i == ti {
+		if i == ti && c.LinkID == "" {
 			continue
 		}
 		for _, o := range tr.Clips {
-			if o.MediaID == c.MediaID && o.Start == c.Start && o.Length == c.Length && o.SourceIn == c.SourceIn {
+			if o.ID != id && !o.Unlinked && ((c.LinkID != "" && o.LinkID == c.LinkID) || (c.LinkID == "" && o.LinkID == "" && c.MediaID != "" && o.MediaID == c.MediaID && o.Start == c.Start && o.Length == c.Length && o.SourceIn == c.SourceIn)) {
 				out = append(out, o.ID)
 			}
 		}

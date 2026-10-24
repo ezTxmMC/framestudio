@@ -210,7 +210,7 @@ func TestViewportMath(t *testing.T) {
 	}
 }
 
-func TestCtrlWheelZoomsAndShiftWheelPans(t *testing.T) {
+func TestAltWheelZoomsAndShiftWheelPans(t *testing.T) {
 	h := newHarness(t, demoProject())
 	l := h.p.tracks.rows[audioTrack(h.s, 0).ID].lane
 	w := l.Size().Width
@@ -221,12 +221,12 @@ func TestCtrlWheelZoomsAndShiftWheelPans(t *testing.T) {
 	if h.p.view.zoom != 1 {
 		t.Fatal("plain wheel must not zoom")
 	}
-	h.mods = fyne.KeyModifierControl
+	h.mods = fyne.KeyModifierAlt
 	for range 4 {
 		l.Scrolled(&fyne.ScrollEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(w/2, 10)}, Scrolled: fyne.Delta{DY: 10}})
 	}
 	if h.p.view.zoom < 2 {
-		t.Fatalf("Ctrl+wheel must zoom in, zoom %v", h.p.view.zoom)
+		t.Fatalf("Alt+wheel must zoom in, zoom %v", h.p.view.zoom)
 	}
 	if got := h.p.frameAt(w/2, w); abs(got-anchor) > 2 {
 		t.Errorf("frame under the pointer moved from %d to %d", anchor, got)

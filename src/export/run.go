@@ -188,6 +188,9 @@ func videoArgs(o Options) []string {
 		}
 		return mid
 	}
+	if IsMP4(o.Format) {
+		return codecArgs(o)
+	}
 	switch o.Format {
 	case FormatMP4:
 		return append(fpsFilterArgs(o), "-c:v", "libx264", "-preset", "medium", "-crf", pick("18", "23", "28"),
@@ -218,7 +221,7 @@ func fpsFilterArgs(o Options) []string {
 
 func audioArgs(f Format) []string {
 	switch f {
-	case FormatMP4:
+	case FormatMP4, FormatHEVC, FormatAV1:
 		return []string{"-c:a", "aac", "-b:a", "192k"}
 	case FormatWebM:
 		return []string{"-c:a", "libopus", "-b:a", "160k"}
@@ -227,6 +230,19 @@ func audioArgs(f Format) []string {
 }
 
 func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Options, rep *reporter) error {
+	if IsMP4(o.Format) {
+		var err error
+		o, err = resolveEncoder(ctx, o)
+		if err != nil {
+			return err
+		}
+	}
+	if o.encoder != "" {
+		if rep.note != "" {
+			rep.note += " "
+		}
+		rep.note += "Encoder: " + o.encoder + "."
+	}
 	from, to := Range(p, o)
 	fps := p.Rate()
 	// target is the frame rate of the file. Frames are rendered at the project rate and
@@ -249,8 +265,8 @@ func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Optio
 	}
 	defer os.Remove(tmp) // no-op after the final rename
 
-	args := []string{"-f", "rawvideo", "-pix_fmt", "rgba", "-s", fmt.Sprintf("%dx%d", o.Width, o.Height),
-		"-r", renderRate.Fraction(), "-i", "-"}
+	args := append(encoderInput(o), []string{"-f", "rawvideo", "-pix_fmt", "rgba", "-s", fmt.Sprintf("%dx%d", o.Width, o.Height),
+		"-r", renderRate.Fraction(), "-i", "-"}...)
 	var mix AudioMix
 	hasAudio := false
 	if o.IncludeAudio && o.Format != FormatGIF {
@@ -264,7 +280,11 @@ func runVideo(ctx context.Context, p *model.Project, r *render.Renderer, o Optio
 		args = append(args, audioArgs(o.Format)...)
 	}
 	args = append(args, videoArgs(o)...)
-	args = append(args, "-f", string(o.Format), tmp)
+	muxer := string(o.Format)
+	if IsMP4(o.Format) {
+		muxer = "mp4"
+	}
+	args = append(args, "-f", muxer, tmp)
 
 	cmd, stderr := newCommand(ctx, args...)
 	stdin, err := cmd.StdinPipe()

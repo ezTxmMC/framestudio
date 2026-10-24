@@ -34,7 +34,7 @@ type Timeline struct {
 
 	// OnError reports rejected edits (locked track, wrong track kind...).
 	OnError func(error)
-	// OnZoomChanged reports zoom changes the widget made itself (e.g. Ctrl+wheel), so
+	// OnZoomChanged reports zoom changes the widget made itself (e.g. Alt+wheel), so
 	// toolbars can follow.
 	OnZoomChanged func(float32)
 	// ClipMenu, when set, returns extra entries for a clip's context menu (the edit page

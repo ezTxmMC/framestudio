@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"framestudio-proto/src/media"
 	"framestudio-proto/src/model"
 )
 
@@ -59,6 +60,7 @@ func generatorClip(id string, fps model.Rate, start int, sec float64) model.Clip
 // get stillSec seconds. The routine is shared with the media page (model.PlaceMedia).
 // Returns the main clip's ID.
 func insertMedia(p *model.Project, selectedTrack string, m model.MediaItem, start int, stillSec float64) (string, error) {
+	m = media.ResolveAudioStreams(p, m)
 	return p.PlaceMedia(m, start, secondsToFrames(stillSec, p.Rate()), selectedTrack)
 }
 

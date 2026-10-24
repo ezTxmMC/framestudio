@@ -87,8 +87,18 @@ func rippleTrimSync(p *model.Project, id string, left bool, delta int, sync bool
 	oldEnd := c.End()
 	ids := []string{id}
 	for _, l := range p.LinkedClips(id) {
-		if _, lt, _ := p.Clip(l); !p.Tracks[lt].Locked {
+		if _, lt, _ := p.Clip(l); p.Tracks[lt].Locked {
+			if c.LinkID != "" {
+				return model.ErrLocked
+			}
+		} else {
 			ids = append(ids, l)
+		}
+	}
+	for _, x := range ids {
+		l, h := rippleLimits(p, x, left)
+		if delta < l || delta > h {
+			return model.ErrInvalidEdit
 		}
 	}
 	for _, x := range ids {
@@ -157,6 +167,44 @@ func rollLimits(p *model.Project, aID, bID string) (lo, hi int) {
 // rollEdit moves the cut between the adjacent clips a and b to frame cut: a's end and b's
 // start move together, so the programme length stays the same.
 func rollEdit(p *model.Project, aID, bID string, cut int) error {
+	work := p.Clone()
+	a, _, _ := p.Clip(aID)
+	b, _, _ := p.Clip(bID)
+	if a == nil || b == nil {
+		return model.ErrNotFound
+	}
+	delta := cut - b.Start
+	left, right := p.ExplicitGroup(aID), p.ExplicitGroup(bID)
+	if len(left) == 1 && len(right) == 1 {
+		return rollSingle(p, aID, bID, cut)
+	}
+	used := map[string]bool{}
+	for _, id := range left {
+		x, ti, _ := work.Clip(id)
+		partner := ""
+		for _, r := range right {
+			if y, tj, _ := work.Clip(r); ti == tj && x.End() == y.Start {
+				partner = r
+				break
+			}
+		}
+		if partner == "" {
+			return model.ErrInvalidEdit
+		}
+		y, _, _ := work.Clip(partner)
+		if err := rollSingle(work, id, partner, y.Start+delta); err != nil {
+			return err
+		}
+		used[partner] = true
+	}
+	if len(used) != len(right) {
+		return model.ErrInvalidEdit
+	}
+	*p = *work
+	return nil
+}
+
+func rollSingle(p *model.Project, aID, bID string, cut int) error {
 	a, ta, _ := p.Clip(aID)
 	b, tb, _ := p.Clip(bID)
 	if a == nil || b == nil {

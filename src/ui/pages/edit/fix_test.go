@@ -22,7 +22,7 @@ func TestSplitOnLockedSelectionReportsLock(t *testing.T) {
 	_ = f.s.Edit("Spur sperren", func(p *model.Project) error { p.Tracks[0].Locked = true; return nil })
 	f.s.Seek(50)
 	undo := f.s.UndoLabel()
-	f.pg.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS})
+	f.pg.dispatch(fyne.KeyK, fyne.KeyModifierControl)
 	if len(f.s.Project.Tracks[1].Clips) != 1 || f.s.UndoLabel() != undo {
 		t.Fatalf("the title on V2 was cut (undo %q)", f.s.UndoLabel())
 	}

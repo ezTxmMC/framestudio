@@ -94,6 +94,24 @@ func newEditor(w fyne.Window, reg *command.Registry) *editor {
 	e.status = canvas.NewText("", warn)
 	e.status.TextSize = 11
 
+	var presetNames []string
+	for _, preset := range command.KeyPresets {
+		presetNames = append(presetNames, preset.Name)
+	}
+	presetSelect := widget.NewSelect(presetNames, nil)
+	presetSelect.PlaceHolder = "Tastatur-Preset…"
+	presetSelect.OnChanged = func(name string) {
+		for _, preset := range command.KeyPresets {
+			if preset.Name == name {
+				keys, _ := command.PresetKeymap(preset.ID)
+				e.reg.SetKeymap(keys)
+				e.pending, e.recording = nil, ""
+				e.persist()
+				e.rebuild()
+				break
+			}
+		}
+	}
 	toolbar := container.NewBorder(nil, nil, nil,
 		container.NewHBox(e.onlyChanged, e.resetAllBtn), e.search)
 
@@ -113,7 +131,7 @@ func newEditor(w fyne.Window, reg *command.Registry) *editor {
 		container.NewBorder(head, nil, nil, nil, e.scroll)))
 	footer := container.NewHBox(e.summary, layout.NewSpacer(), e.status)
 	e.content = container.NewBorder(
-		container.New(layout.NewCustomPaddedLayout(0, 6, 0, 0), toolbar),
+		container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel("Preset"), nil, presetSelect), container.New(layout.NewCustomPaddedLayout(0, 6, 0, 0), toolbar)),
 		container.New(layout.NewCustomPaddedLayout(6, 0, 2, 2), footer), nil, nil, table)
 	e.rebuild()
 	return e

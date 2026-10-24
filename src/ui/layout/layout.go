@@ -28,11 +28,13 @@ type Rect struct{ X, Y, W, H int }
 
 // Window is the main window (Panel == "") or a detached panel window.
 type Window struct {
-	ID      string `json:"id"`
-	Panel   string `json:"panel,omitempty"`   // page.Panel* ID; "" = main window
-	Monitor string `json:"monitor,omitempty"` // monitor name like "DP-2"; "" = let the system decide
-	Mode    string `json:"mode"`
-	Rect    Rect   `json:"rect"` // windowed geometry relative to the monitor's top-left
+	Dock        string             `json:"dock,omitempty"` // tabs, horizontal, vertical
+	DockOffsets map[string]float64 `json:"dockOffsets,omitempty"`
+	ID          string             `json:"id"`
+	Panel       string             `json:"panel,omitempty"`   // page.Panel* ID; "" = main window
+	Monitor     string             `json:"monitor,omitempty"` // monitor name like "DP-2"; "" = let the system decide
+	Mode        string             `json:"mode"`
+	Rect        Rect               `json:"rect"` // windowed geometry relative to the monitor's top-left
 }
 
 // Page is the layout of one workspace page.
@@ -43,11 +45,12 @@ type Page struct {
 }
 
 type Layout struct {
-	Version    int             `json:"version"`
-	Name       string          `json:"name"`
-	ActivePage string          `json:"activePage,omitempty"`
-	Windows    []Window        `json:"windows"`
-	Pages      map[string]Page `json:"pages"`
+	Version    int                 `json:"version"`
+	Name       string              `json:"name"`
+	ActivePage string              `json:"activePage,omitempty"`
+	Windows    []Window            `json:"windows"`
+	Pages      map[string]Page     `json:"pages"`
+	Workspaces map[string][]Window `json:"workspaces,omitempty"`
 }
 
 // Main returns the main window entry, adding a default one if missing.

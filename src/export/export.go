@@ -21,6 +21,8 @@ import (
 type Format string
 
 const (
+	FormatHEVC Format = "hevc"
+	FormatAV1  Format = "av1"
 	FormatMP4  Format = "mp4"  // H.264 + AAC
 	FormatWebM Format = "webm" // VP9 + Opus
 	FormatGIF  Format = "gif"
@@ -37,6 +39,9 @@ const (
 )
 
 type Options struct {
+	Encoder      string // auto (hardware then software), software, vaapi, nvenc, qsv
+	encoder      string // resolved ffmpeg encoder
+	device       string // VAAPI render node
 	Format       Format
 	Path         string // output file, or folder for FormatPNG
 	Width        int
@@ -105,6 +110,8 @@ func even(n int) int {
 // Extension returns the file extension (with dot) of a format; empty for PNG sequences.
 func Extension(f Format) string {
 	switch f {
+	case FormatHEVC, FormatAV1:
+		return ".mp4"
 	case FormatMP4, FormatWebM, FormatGIF, FormatWAV:
 		return "." + string(f)
 	}
@@ -114,6 +121,10 @@ func Extension(f Format) string {
 // Label is the short display name of a format.
 func Label(f Format) string {
 	switch f {
+	case FormatHEVC:
+		return "MP4 (HEVC / H.265)"
+	case FormatAV1:
+		return "MP4 (AV1)"
 	case FormatMP4:
 		return "MP4 (H.264)"
 	case FormatWebM:
@@ -130,7 +141,7 @@ func Label(f Format) string {
 
 // Formats lists all formats in display order.
 func Formats() []Format {
-	return []Format{FormatMP4, FormatWebM, FormatGIF, FormatPNG, FormatWAV}
+	return []Format{FormatMP4, FormatHEVC, FormatAV1, FormatWebM, FormatGIF, FormatPNG, FormatWAV}
 }
 
 type Progress struct {
@@ -215,7 +226,7 @@ func EvenNote(o Options) string {
 // EvenSize is the size Run really encodes: for MP4 and WebM both sides are rounded down to
 // even numbers (yuv420p needs them), other formats keep the size.
 func EvenSize(o Options) (w, h int) {
-	if o.Format == FormatMP4 || o.Format == FormatWebM {
+	if IsMP4(o.Format) || o.Format == FormatWebM {
 		return model.EvenSize(o.Width, o.Height)
 	}
 	return o.Width, o.Height
@@ -233,9 +244,14 @@ func Validate(p *model.Project, o Options) error {
 		return fmt.Errorf("Die Export-Bildrate muss zwischen %d und %d fps liegen. Wert anpassen oder leer lassen für die Projekt-Bildrate.", model.MinFPS, model.MaxFPS)
 	}
 	switch o.Format {
-	case FormatMP4, FormatWebM, FormatGIF, FormatPNG, FormatWAV:
+	case FormatMP4, FormatHEVC, FormatAV1, FormatWebM, FormatGIF, FormatPNG, FormatWAV:
 	default:
 		return fmt.Errorf("Unbekanntes Format %q. Wähle MP4, WebM, GIF, PNG-Sequenz oder WAV.", o.Format)
+	}
+	switch o.Encoder {
+	case "", "auto", "software", "vaapi", "nvenc", "qsv":
+	default:
+		return fmt.Errorf("Unbekannter Encoder %q", o.Encoder)
 	}
 	switch o.Quality {
 	case "", QualityHigh, QualityMedium, QualityLow:
@@ -395,3 +411,6 @@ func Run(ctx context.Context, p *model.Project, r *render.Renderer, o Options, p
 	}
 	return err
 }
+
+// IsMP4 reports the formats carried in MP4.
+func IsMP4(f Format) bool { return f == FormatMP4 || f == FormatHEVC || f == FormatAV1 }

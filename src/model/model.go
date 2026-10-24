@@ -90,20 +90,23 @@ const (
 )
 
 type Clip struct {
-	ID       string   `json:"id"`
-	Kind     ClipKind `json:"kind"`
-	Name     string   `json:"name"`
-	Start    int      `json:"start"`  // timeline frame where the clip begins
-	Length   int      `json:"length"` // frames, always >= 1
-	MediaID  string   `json:"mediaId,omitempty"`
-	SourceIn int      `json:"sourceIn,omitempty"` // first source frame used (video/audio)
-	Color    RGBA     `json:"color"`              // label colour; fill colour of color clips
-	Title    Title    `json:"title"`
-	Grade    Grade    `json:"grade"`
-	Opacity  float64  `json:"opacity"` // 0..1
-	Volume   float64  `json:"volume"`  // linear gain, 1 = unity
-	FadeIn   int      `json:"fadeIn,omitempty"`
-	FadeOut  int      `json:"fadeOut,omitempty"`
+	LinkID      string   `json:"linkId,omitempty"`      // persistent editing group
+	Unlinked    bool     `json:"unlinked,omitempty"`    // suppress legacy inferred links
+	AudioStream int      `json:"audioStream,omitempty"` // zero-based audio stream ordinal
+	ID          string   `json:"id"`
+	Kind        ClipKind `json:"kind"`
+	Name        string   `json:"name"`
+	Start       int      `json:"start"`  // timeline frame where the clip begins
+	Length      int      `json:"length"` // frames, always >= 1
+	MediaID     string   `json:"mediaId,omitempty"`
+	SourceIn    int      `json:"sourceIn,omitempty"` // first source frame used (video/audio)
+	Color       RGBA     `json:"color"`              // label colour; fill colour of color clips
+	Title       Title    `json:"title"`
+	Grade       Grade    `json:"grade"`
+	Opacity     float64  `json:"opacity"` // 0..1
+	Volume      float64  `json:"volume"`  // linear gain, 1 = unity
+	FadeIn      int      `json:"fadeIn,omitempty"`
+	FadeOut     int      `json:"fadeOut,omitempty"`
 	// FadeInFrom and FadeOutTo are the gain levels (0..1) where the fade ramps begin and end.
 	// They are non-zero only on the parts of a clip that was split inside a fade, so the
 	// curve stays continuous across the cut. FadeIn may then exceed Length (partial ramp).
@@ -164,15 +167,17 @@ func (t *Track) End() int {
 }
 
 type MediaItem struct {
-	ID       string        `json:"id"`
-	Name     string        `json:"name"`
-	Path     string        `json:"path"`
-	Kind     ClipKind      `json:"kind"` // image, video or audio
-	Width    int           `json:"width,omitempty"`
-	Height   int           `json:"height,omitempty"`
-	Duration time.Duration `json:"duration,omitempty"` // zero for stills
-	FPS      Rate          `json:"fps,omitzero"`       // source frame rate of videos
-	HasAudio bool          `json:"hasAudio,omitempty"`
+	AudioStreams int           `json:"audioStreams,omitempty"`
+	AudioStream  int           `json:"audioStream,omitempty"` // selected stream for decoding/waveforms
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	Path         string        `json:"path"`
+	Kind         ClipKind      `json:"kind"` // image, video or audio
+	Width        int           `json:"width,omitempty"`
+	Height       int           `json:"height,omitempty"`
+	Duration     time.Duration `json:"duration,omitempty"` // zero for stills
+	FPS          Rate          `json:"fps,omitzero"`       // source frame rate of videos
+	HasAudio     bool          `json:"hasAudio,omitempty"`
 }
 
 type Marker struct {

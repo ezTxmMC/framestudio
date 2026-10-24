@@ -81,7 +81,7 @@ func (m *Manager) monitorItems() []command.Item {
 		toggle := func(panel string) func() {
 			return func() {
 				if fullOn(panel) {
-					m.find(panel).close()
+					m.find(panel).removePanel(panel)
 					return
 				}
 				m.Detach(panel, id, true)
@@ -125,6 +125,9 @@ func (m *Manager) moveMain(id string) {
 		mode = layout.ModeFullscreen
 	}
 	m.place(w, id, mode, layout.Rect{})
+	if m.grouping() {
+		m.monitorsChanged()
+	}
 	m.refresh()
 }
 
@@ -137,6 +140,9 @@ func (m *Manager) windowItems() []command.Item {
 	for _, d := range m.wins {
 		d := d
 		label := d.info.Title
+		if len(d.members) > 0 {
+			label += fmt.Sprintf(" + %d Panels", len(d.members))
+		}
 		if mon, ok := m.monitor(d.monitor); ok {
 			label += " — " + mon.ID
 		}

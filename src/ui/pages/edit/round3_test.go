@@ -681,7 +681,7 @@ func TestTimelinePanelFollowsPage(t *testing.T) {
 	}
 	// keys in the panel window run edit commands on the shared session
 	f.s.Seek(50)
-	if !pn.TypedKey(&fyne.KeyEvent{Name: fyne.KeyS}) || len(f.s.Project.Tracks[0].Clips) != 2 {
+	if !pn.Shortcut(fyne.KeyK, fyne.KeyModifierControl) || len(f.s.Project.Tracks[0].Clips) != 2 {
 		t.Fatal("S in the panel should split")
 	}
 	// zoom is per timeline

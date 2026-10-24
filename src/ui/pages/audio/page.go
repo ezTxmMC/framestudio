@@ -62,7 +62,7 @@ type Page struct {
 	levels func(*session.Session) (liveaudio.Level, map[string]liveaudio.Level)
 	clock  func(tick func()) (stop func())
 	now    func() time.Time
-	// mods returns the keyboard modifiers held right now (Ctrl+click, Ctrl+wheel).
+	// mods returns the keyboard modifiers held right now (Ctrl+click, Alt+wheel).
 	mods func() fyne.KeyModifier
 
 	view      viewport
@@ -85,11 +85,13 @@ type Page struct {
 	closed  bool
 
 	// mixerOnly builds just the mixer (the detachable mixer panel, see panel.go).
-	mixerOnly bool
-	main      *container.Split // lanes / bottom row
-	bottom    *container.Split // clip | mixer
-	clipBox   fyne.CanvasObject
-	mixerBox  fyne.CanvasObject
+	mixerOnly            bool
+	dockedMixer          bool
+	undockedMixerVisible bool
+	main                 *container.Split // lanes / bottom row
+	bottom               *container.Split // clip | mixer
+	clipBox              fyne.CanvasObject
+	mixerBox             fyne.CanvasObject
 	// pending is a layout applied before Content was built.
 	pending *layout.Page
 }
@@ -375,14 +377,14 @@ func (p *Page) scrollLanes(dx float32) {
 	}
 }
 
-// wheel handles a scroll event over the lanes or the ruler: Ctrl zooms around the pointer,
+// wheel handles a scroll event over the lanes or the ruler: Alt zooms around the pointer,
 // Shift or a horizontal wheel pans; it reports false for plain vertical scrolling.
 func (p *Page) wheel(ev *fyne.ScrollEvent, x float32) bool {
 	switch {
-	case p.ctrlHeld():
+	case p.mods()&fyne.KeyModifierAlt != 0:
 		d := float64(ev.Scrolled.DY + ev.Scrolled.DX)
 		p.setZoom(p.view.zoom*math.Pow(1.25, d/10), x)
-	case p.shiftHeld():
+	case p.ctrlHeld() || p.shiftHeld():
 		p.scrollLanes(-(ev.Scrolled.DY + ev.Scrolled.DX) * 3)
 	case ev.Scrolled.DX != 0:
 		p.scrollLanes(-ev.Scrolled.DX * 3)
@@ -425,16 +427,20 @@ func (p *Page) waveFor(c model.Clip) (*waveEntry, *model.MediaItem) {
 	if !ok {
 		return nil, nil
 	}
-	if e := p.peaks[m.ID]; e != nil {
+	item := *m
+	item.AudioStream = c.AudioStream
+	m = &item
+	key := fmt.Sprintf("%s/audio:%d", m.ID, c.AudioStream)
+	if e := p.peaks[key]; e != nil {
 		return e, m
 	}
 	e := &waveEntry{loading: true}
-	p.peaks[m.ID] = e
+	p.peaks[key] = e
 	if p.waves == nil {
 		e.loading, e.err = false, errors.New("keine Medienanbindung")
 		return e, m
 	}
-	item, src := *m, p.waves
+	src := p.waves
 	buckets := min(max(int(item.Duration.Seconds()*100), 512), 40000)
 	p.spawn(func() {
 		peaks, err := src.Waveform(item, buckets)

@@ -24,7 +24,7 @@ func (c *Cache) readPeaks(ctx context.Context, bin string, m model.MediaItem) ([
 	var stderr tailBuffer
 	prio := prioOf(ctx, workgate.PrioBackground)
 	cmd := c.gateOf().Command(ctx, prio, bin, "-nostdin", "-hide_banner", "-loglevel", "error",
-		"-i", m.Path, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", fmt.Sprint(waveRate), "-f", "s16le", "-")
+		"-i", m.Path, "-map", fmt.Sprintf("0:a:%d", m.AudioStream), "-vn", "-ac", "1", "-ar", fmt.Sprint(waveRate), "-f", "s16le", "-")
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
 	var done func()

@@ -137,7 +137,7 @@ func TestHelpListsFinalKeyMap(t *testing.T) {
 	want := map[string]string{
 		"J": "Rückwärts", "K": "Stopp", "L": "Vorwärts", "R": "Ripple", "N": "Rollen",
 		"A": "Auswahlwerkzeug", "B": "Klinge", "Strg+A": "Alles auswählen", "Esc": "Auswahl aufheben",
-		"Strg+Mausrad": "zoomen", "Strg+Klick": "Auswahl", "Umschalt+Klick": "Auswahl",
+		"Alt+Mausrad": "zoomen", "Strg+Klick": "Auswahl", "Umschalt+Klick": "Auswahl",
 		"Ziehen": "Timeline", "Umschalt+3": "Farbe", "Strg+Umschalt+Z": "Wiederholen",
 		"Leertaste": "Abspielen", "Strg+Plus": "", "Plus": "Vergrößern", "Strg+Umschalt+,": "Projekteinstellungen",
 	}

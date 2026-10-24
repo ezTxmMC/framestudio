@@ -413,7 +413,7 @@ func (e *Engine) prepLoop() {
 }
 
 func (e *Engine) lookup(m model.MediaItem) (Source, error) {
-	pcm, err := e.cache.Get(m.Path)
+	pcm, err := e.cache.GetStream(m.Path, m.AudioStream)
 	if err != nil {
 		return nil, err // offline: plays silence like export leaves it out
 	}

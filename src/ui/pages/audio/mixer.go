@@ -285,7 +285,7 @@ func newDBScale() *dBScale {
 	return d
 }
 
-var scaleMarks = []float64{12, 6, 0, -6, -12, -18, -24, -36, -48, -60}
+var scaleMarks = []float64{60, 48, 36, 24, 12, 0, -12, -24, -36, -48, -60}
 
 func (d *dBScale) CreateRenderer() fyne.WidgetRenderer {
 	return newDrawnRenderer(d, fyne.NewSize(scaleW, 120), func(size fyne.Size) []fyne.CanvasObject {

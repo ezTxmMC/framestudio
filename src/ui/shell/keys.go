@@ -163,6 +163,9 @@ func (sh *Shell) shortcutTyped(sc fyne.Shortcut) {
 
 // combo runs the command bound to key+mods, then the aliases, then the menu letters.
 func (sh *Shell) combo(k fyne.KeyName, m fyne.KeyModifier) bool {
+	if !sh.showManager && sh.ws != nil && sh.ws.DispatchMainDock(k, m) {
+		return true
+	}
 	if sh.dispatch(k, m) || sh.aliasKey(k, m) {
 		return true
 	}
@@ -269,6 +272,9 @@ func (sh *Shell) typedKey(k *fyne.KeyEvent) {
 		return
 	}
 	if mods == fyne.KeyModifierShift && isDigit(k.Name) && sh.dispatch(k.Name, mods) {
+		return
+	}
+	if sh.ws != nil && sh.ws.DispatchMainDock(k.Name, mods) {
 		return
 	}
 	if pg := p.pages[p.current]; pg != nil && pg.TypedKey(k) {
